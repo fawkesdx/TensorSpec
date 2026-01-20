@@ -11,7 +11,7 @@ The goal of this project is to provide a unified data structure for high-dimensi
 Move beyond technique-specific file formats. `TensorSpec` treats intensity data as N-dimensional tensors with associated coordinates:
 * **ARPES:** $(\theta, \phi, E)$ or $(k_x, k_y, E)$, $(E_{ph}, \phi, E)$ or $(k_z, k_y, E)$
 * **Nano-ARPES:** $(x, y, ARPES)$
-* **XAS/XMCD:** $(H_{field}, Energy)
+* **XAS/XMCD:** $(H_{field}, Energy)$
 * **Microscopy:** $(x, y, z)$
 
 ### 2. Visualization & Slicing (In Development)
