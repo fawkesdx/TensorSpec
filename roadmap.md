@@ -1,0 +1,61 @@
+# TensorSpec Roadmap
+
+Grand App
+- Crystal viewer Suite
+	- [x] File loader panel & "Draw" button.
+	- [ ] Define Miller indices for bounding the drawing. Define number of unit cells.
+	- [x] Draw atoms as spheres scaled to atomic radii.
+	- [x] Draw nearest-neighbor connecting sticks.
+	- [x] 3D Rotation and camera controls.
+	- [x] Interactive Mode: Toggle to view, select, and delete individual atoms/sticks.
+	- [x] PBR/Shiny visual styling (3ds Max style) with color controls.
+	- [ ] Draw polyhedra/planes connecting atoms instead of just sticks (deletable).
+	- [ ] CDW Mode: Define atom shifts (dx, dy, dz) and propagate simulated distortions.
+	- [ ] Brillouin Zone Engine: Bulk BZ, Cleaving surface BZ, kz slicing, and surface termination projections.
+- DFT suite
+	- [ ] drawing from the structure from crystal viewer suite, it takes the input to perform bulk band structure calculation
+	- [ ] tight binding capability
+	- [ ] k.p capability
+	- [ ] DFT capability
+		- [ ] PBE
+		- [ ] GGA
+		- [ ] HSE
+		- [ ] ???
+	- [ ] drawing from the structure from crystal suite, it creates the slab for slab calculation
+		- [ ] PBE
+		- [ ] GGA
+		- [ ] HSE
+		- ???
+	- [ ] drawing from the structure from crystal suite, it creates the semi infinite structure for green function calculation
+		- [ ] it can define which termination to stop so we know which band belongs to the surface
+- ARPES Suite
+	- [ ] data loader from various beamline
+		- [ ] MAESTRO
+		- [ ] i05 Diamond
+		- [ ] SIS SLS
+		- [ ] ADRESS SLS
+		- [ ]Lorea Alba
+		- [ ] Bloch MaxIV
+	- [ ] The data will store all of the information of the measurement incuding the meta data
+	- [ ] The data will stored in this manner (order doesnt matter): data.energy, data.slitangle, data.value, as the data from the analyzer by doing just a single shot of dispersion. then it can store data.motor1 where motor1 can mean anything like deflection angle for fermi map, or any angular motor like theta for theta maping fermi map. or motor X, Y from manipulator to scan the dispersion cut at different position. or piezo fine scan X, Y to scan dispersion cut at different piezo position. it can be different photon energy for kz dispersion measurement. it can also mean different photon polarization (1 = LH, 0 = LV, 0.5 = CP, -0.5 = CM). it can also store data.motor2 where it may contain the other variables from the same list as before. it can also store data.motor3 and so on depending on the kind of data as input.
+	- [ ] once the data is loaded, there is option to launch a general viewer where it will plot the data according to the kind of data
+		- [ ] it will display the data.energy, data.slitangle, data.value of the dispersion
+			- [ ] I want to have the option to toggle to plot the EDC and MDC on the right and lower panel
+			- [ ] I wantthe cross hair to have option to define delta x and delta y to integrate the EDC and MDC
+		- [ ] if it has data.motor1, then I want the middle panel to show the data.value along the data.slitangle (x axis), data.motor1 (y axis), then the lower panel show the dispersion of the data.slitangle (x axis), data.energy (y axis), the right panel will show the data.motor1 (x axis), data.energy (y axis).
+			- [ ] I want each panel to have crosshair that will dynamically update the display on the other panel
+			- [ ] I want the crosshair to also have option to define delta x and delta y so that the other panel can update the view accordingly
+		- [ ] if it also has data.motor2, then I want to be able to view all of the panel accordingly where each panel has crosshair and it has option to integrate too.
+
+- [ ] PEEM Suite
+	- [ ] loader of tif file stacks
+	- [ ] loader of sequences of series of tif files from a folder
+	- [ ] stack the CP and CM together or LH and LV together depending on the files
+	- [ ] once stacked, built a drift correction options
+	- [ ] separate those CP and CM or LH and LV
+	- [ ] make the background subtraction button to be applied to all
+	- [ ] perform sum rule analysis if it is CP and CM data
+- [ ] XAS Suite
+- [ ] Transport Suite
+- 
+
