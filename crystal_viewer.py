@@ -476,13 +476,16 @@ class TensorSpecApp(QMainWindow):
     # ================= C O L O R   &   U I   L O G I C =================
     def build_dynamic_color_panel(self, elements):
         """Builds VESTA-style color pickers based on the elements in the CIF"""
-        # Clear existing dynamic color buttons (skip row 0 which is the combo box)
+        # Clear ALL widgets from the layout EXCEPT the persistent combo_style dropdown
         for i in reversed(range(self.colors_layout.count())):
             item = self.colors_layout.itemAt(i)
-            if item.widget() and item.widget() != self.combo_style and not isinstance(item.widget(), QLabel):
-                item.widget().setParent(None)
+            widget = item.widget()
+            if widget:
+                if widget == self.combo_style:
+                    continue # Save the dropdown box
+                widget.setParent(None) # Nuke everything else (including old labels!)
                 
-        # Re-add label for combo style just in case
+        # Re-add the clean label for the combo box on row 0
         self.colors_layout.addWidget(QLabel("Connections:"), 0, 0)
         self.colors_layout.addWidget(self.combo_style, 0, 1)
 
@@ -1270,7 +1273,7 @@ print("Crystal imported successfully to Blender!")
         elif num_bonds > 5000: res = 8
         else: res = 20 if getattr(self, 'chk_shiny', None) and self.chk_shiny.isChecked() else 8
         
-        source_cylinder = pv.Cylinder(center=(0, 0, 0), direction=(0, 0, 1), 
+        source_cylinder = pv.Cylinder(center=(0, 0, 0), direction=(1, 0, 0), 
                                       radius=cyl_radius, height=1.0, resolution=res)
         
         # Instantly stamp out all cylinders natively on the GPU core
@@ -1775,22 +1778,38 @@ print("Crystal imported successfully to Blender!")
             return Structure(lat, [metal, chalc, chalc], coords)
             
         elif "(1T')" in template_name:
-            # Explicit arrays prevent crashes on complex materials like TaIrTe4
-            params = {
-                "WTe2 (1T')": (3.47, 6.32, ["W", "W", "Te", "Te", "Te", "Te"]),
-                "MoTe2 (1T')": (3.45, 6.30, ["Mo", "Mo", "Te", "Te", "Te", "Te"]),
-                "TaIrTe4 (1T')": (3.77, 12.4, ["Ta", "Ir", "Te", "Te", "Te", "Te"]),
-                "NbIrTe4 (1T')": (3.78, 12.4, ["Nb", "Ir", "Te", "Te", "Te", "Te"])
-            }
-            a, b, species = params.get(template_name, (3.47, 6.32, ["W", "W", "Te", "Te", "Te", "Te"]))
-            lat = Lattice.orthorhombic(a, b, c_vac)
-            z_frac = 1.75 / c_vac
-            coords = [
-                [0.0, 0.25, 0.5], [0.5, 0.75, 0.5], 
-                [0.5, 0.15, 0.5 + z_frac], [0.0, 0.85, 0.5 + z_frac],
-                [0.0, 0.35, 0.5 - z_frac], [0.5, 0.65, 0.5 - z_frac]
-            ]
-            return Structure(lat, species, coords)
+            if "TaIrTe4" in template_name or "NbIrTe4" in template_name:
+                # These materials have a DOUBLED unit cell along the b-axis (12 atoms)
+                is_ta = "TaIrTe4" in template_name
+                lat = Lattice.orthorhombic(3.77 if is_ta else 3.78, 12.4, c_vac)
+                m1 = "Ta" if is_ta else "Nb"
+                species = [m1, "Ir", m1, "Ir"] + ["Te"] * 8
+                z_frac = 1.75 / c_vac
+                coords = [
+                    # Metals (y is halved compared to WTe2, then duplicated at +0.5)
+                    [0.0, 0.125, 0.5], [0.5, 0.375, 0.5], 
+                    [0.0, 0.625, 0.5], [0.5, 0.875, 0.5],
+                    # Top Te
+                    [0.5, 0.075, 0.5 + z_frac], [0.0, 0.425, 0.5 + z_frac],
+                    [0.5, 0.575, 0.5 + z_frac], [0.0, 0.925, 0.5 + z_frac],
+                    # Bottom Te
+                    [0.0, 0.175, 0.5 - z_frac], [0.5, 0.325, 0.5 - z_frac],
+                    [0.0, 0.675, 0.5 - z_frac], [0.5, 0.825, 0.5 - z_frac]
+                ]
+                return Structure(lat, species, coords)
+            else:
+                # Standard 1T' (WTe2, MoTe2) with single unit cell (6 atoms)
+                is_w = "WTe2" in template_name
+                lat = Lattice.orthorhombic(3.47 if is_w else 3.45, 6.32 if is_w else 6.30, c_vac)
+                m = "W" if is_w else "Mo"
+                species = [m, m, "Te", "Te", "Te", "Te"]
+                z_frac = 1.75 / c_vac
+                coords = [
+                    [0.0, 0.25, 0.5], [0.5, 0.75, 0.5], 
+                    [0.5, 0.15, 0.5 + z_frac], [0.0, 0.85, 0.5 + z_frac],
+                    [0.0, 0.35, 0.5 - z_frac], [0.5, 0.65, 0.5 - z_frac]
+                ]
+                return Structure(lat, species, coords)
 
         elif template_name == "Phosphorene":
             lat = Lattice.orthorhombic(3.31, 4.38, c_vac)
