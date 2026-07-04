@@ -24,7 +24,9 @@ pv.global_theme.anti_aliasing = "fxaa"
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                                QHBoxLayout, QPushButton, QFileDialog, QLabel, 
                                QSpinBox, QDoubleSpinBox, QComboBox, QColorDialog,
-                               QStackedWidget, QTabWidget, QCheckBox, QGroupBox, QGridLayout, QSlider, QFrame, QSplitter)
+                               QStackedWidget, QTabWidget, QCheckBox, QGroupBox, 
+                               QGridLayout, QSlider, QFrame, QSplitter, QInputDialog, QMessageBox)
+import json
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QSurfaceFormat # <--- NEW IMPORT
 import vtk # <--- NEW IMPORT
@@ -48,7 +50,12 @@ from pymatgen.analysis.local_env import CrystalNN
 # Default Fallback Colors
 CPK_COLORS = {
     "H": "#FFFFFF", "C": "#333333", "N": "#2233FF", "O": "#FF2200",
-    "V": "#999999", "Te": "#FF8C00", "Fe": "#E06633", "Cu": "#C88033"
+    "V": "#999999", "Te": "#FF8C00", "Fe": "#E06633", "Cu": "#C88033",
+    "Ta": "#B041FF", # Purple
+    "Ir": "#0080FF", # Blue
+    "Nb": "#7A378B",
+    "W":  "#4682B4",
+    "Mo": "#5F9EA0"
 }
 
 class StackLayerWidget(QFrame):
@@ -56,7 +63,8 @@ class StackLayerWidget(QFrame):
         super().__init__()
         self.struct = struct
         self.setFrameShape(QFrame.StyledPanel)
-        self.setStyleSheet("QFrame { background-color: #2b2b36; border-radius: 5px; padding: 5px; margin-bottom: 5px; }")
+        # --- FIX: Changed to a light gray with a subtle border to match the native UI ---
+        self.setStyleSheet("QFrame { background-color: #f0f0f0; border: 1px solid #cccccc; border-radius: 5px; padding: 5px; margin-bottom: 5px; }")
         
         layout = QHBoxLayout(self)
         layout.setContentsMargins(5, 5, 5, 5)
@@ -93,12 +101,20 @@ class StackLayerWidget(QFrame):
         self.btn_up.setFixedWidth(25)
         self.btn_down = QPushButton("▼")
         self.btn_down.setFixedWidth(25)
+        
+        # --- NEW: Save Template Button ---
+        self.btn_save_tpl = QPushButton("💾")
+        self.btn_save_tpl.setStyleSheet("background-color: #5cb85c; color: white;")
+        self.btn_save_tpl.setFixedWidth(25)
+        self.btn_save_tpl.setToolTip("Save this layer to your permanent Templates database")
+        
         self.btn_delete = QPushButton("X")
         self.btn_delete.setStyleSheet("background-color: #d9534f; color: white;")
         self.btn_delete.setFixedWidth(25)
         
         layout.addWidget(self.btn_up)
         layout.addWidget(self.btn_down)
+        layout.addWidget(self.btn_save_tpl)
         layout.addWidget(self.btn_delete)
 
 class TensorSpecApp(QMainWindow):
@@ -142,8 +158,26 @@ class TensorSpecApp(QMainWindow):
         self.ui_panel.addWidget(self.combo_backend)
 
         # --- Supercell & Scaling Group ---
+        from PySide6.QtWidgets import QRadioButton, QButtonGroup
         group_geom = QGroupBox("Geometry & Scaling")
         geom_layout = QVBoxLayout(group_geom)
+        
+        # Supercell Basis Toggle
+        self.radio_conv = QRadioButton("Conventional Basis")
+        self.radio_prim = QRadioButton("Primitive Basis")
+        self.radio_conv.setChecked(True) # Default to Conventional
+        
+        self.basis_group = QButtonGroup()
+        self.basis_group.addButton(self.radio_conv)
+        self.basis_group.addButton(self.radio_prim)
+        
+        # Auto-redraw when the basis is switched
+        self.radio_conv.toggled.connect(self.draw_structure)
+        
+        basis_layout = QHBoxLayout()
+        basis_layout.addWidget(self.radio_conv)
+        basis_layout.addWidget(self.radio_prim)
+        geom_layout.addLayout(basis_layout)
         
         geom_layout.addWidget(QLabel("Supercell (X, Y, Z):"))
         self.spin_x = QSpinBox(); self.spin_x.setValue(1); self.spin_x.setMinimum(1)
@@ -298,6 +332,11 @@ class TensorSpecApp(QMainWindow):
         self.chk_show_primitive.stateChanged.connect(self.update_lattice_boxes)
         self.ui_panel.addWidget(self.chk_show_primitive)
 
+        # --- NEW: Symmetry & Volume Info Label ---
+        self.lbl_sym_info = QLabel("Space Group: N/A | Vol Ratio: N/A")
+        self.lbl_sym_info.setStyleSheet("color: #aaaaaa; font-style: italic; margin-bottom: 5px;")
+        self.ui_panel.addWidget(self.lbl_sym_info)
+
         self.ui_panel.addWidget(self.group_render)
 
         # --- Action Buttons ---
@@ -311,13 +350,20 @@ class TensorSpecApp(QMainWindow):
         self.btn_save.setStyleSheet("background-color: #28a745; font-weight: bold; color: white; padding: 5px;")
         self.ui_panel.addWidget(self.btn_save)
 
-        # --- NEW: 3ds Max Export Button ---
+        # --- NEW: Export Element Toggles ---
+        self.group_export = QGroupBox("Export Elements")
+        exp_layout = QHBoxLayout(self.group_export)
+        self.chk_exp_atoms = QCheckBox("Atoms/Bonds"); self.chk_exp_atoms.setChecked(True)
+        self.chk_exp_cell = QCheckBox("Unit Cell"); self.chk_exp_cell.setChecked(True)
+        self.chk_exp_bz = QCheckBox("Brillouin Zone"); self.chk_exp_bz.setChecked(True)
+        exp_layout.addWidget(self.chk_exp_atoms); exp_layout.addWidget(self.chk_exp_cell); exp_layout.addWidget(self.chk_exp_bz)
+        self.ui_panel.addWidget(self.group_export)
+
         self.btn_export_max = QPushButton("Export to 3ds Max")
         self.btn_export_max.setStyleSheet("background-color: #0F6A8B; color: white; font-weight: bold; padding: 5px;")
         self.btn_export_max.clicked.connect(self.export_3dsmax_script)
         self.ui_panel.addWidget(self.btn_export_max)
 
-        # --- NEW: Blender Export Button ---
         self.btn_export_blend = QPushButton("Export to Blender")
         self.btn_export_blend.setStyleSheet("background-color: #E87D0D; color: white; font-weight: bold; padding: 5px;")
         self.btn_export_blend.clicked.connect(self.export_blender_script)
@@ -381,10 +427,63 @@ class TensorSpecApp(QMainWindow):
         
         self.stack_layers = [] # Internal list to track loaded layers
         
-        self.btn_add_layer = QPushButton("+ Add Layer from CIF")
-        self.btn_add_layer.setStyleSheet("background-color: #5bc0de; color: black; font-weight: bold; padding: 5px;")
-        self.btn_add_layer.clicked.connect(self.add_stack_layer)
+       # --- 1. Load Custom 2D CIF ---
+        self.btn_add_layer = QPushButton("📂 Load 2D Monolayer CIF")
+        self.btn_add_layer.setStyleSheet("background-color: #5cb85c; color: white; font-weight: bold; padding: 5px;")
+        self.btn_add_layer.clicked.connect(self.load_cif_layer)
         tab3_layout.addWidget(self.btn_add_layer)
+
+        # --- 2. Shared Template Generator Box ---
+        template_group = QGroupBox("2D Material Templates")
+        template_layout = QVBoxLayout(template_group)
+        
+        template_layout.addWidget(QLabel("Select Template Base:"))
+        self.combo_template = QComboBox()
+        
+        # Build the unified database list here!
+        base_templates = [
+            "Graphene (Monolayer)", "Graphene (AB Bilayer)", "Graphene (AA Bilayer)", "Graphene (ABA Trilayer)",
+            "Graphene (ABC 3-Layer)", "Graphene (ABCA 4-Layer)", "Graphene (ABCAB 5-Layer)", "Graphene (ABCABC 6-Layer)", "Graphene (ABCABCA 7-Layer)",
+            "h-BN", "MoS2", "WSe2", "TaIrTe4 (1T')", "NbIrTe4 (1T')"
+        ]
+        
+        # Load any saved custom templates automatically
+        if os.path.exists("user_templates.json"):
+            try:
+                with open("user_templates.json", "r") as f:
+                    custom_templates = json.load(f)
+                    base_templates.extend(list(custom_templates.keys()))
+            except Exception as e:
+                print(f"Error loading custom templates: {e}")
+                
+        self.combo_template.addItems(base_templates)
+        template_layout.addWidget(self.combo_template)
+        
+        self.btn_add_template = QPushButton("📝 Generate from Template")
+        self.btn_add_template.setStyleSheet("background-color: #5bc0de; color: black; font-weight: bold; padding: 5px;")
+        self.btn_add_template.clicked.connect(self.generate_layer_from_dropdown)
+        template_layout.addWidget(self.btn_add_template)
+        
+        tab3_layout.addWidget(template_group)
+
+        # --- Exfoliation Control Box ---
+        exfoliate_group = QGroupBox("Monolayer Exfoliator Controls")
+        exfoliate_layout = QVBoxLayout(exfoliate_group)
+
+        exfoliate_layout.addWidget(QLabel("Cleavage / Cut Engine Mode:"))
+        self.combo_exfoliate_mode = QComboBox()
+        self.combo_exfoliate_mode.addItems([
+            "Automatic van der Waals Gap Detection",
+            "Manual [h k l] Miller Index Cleavage"
+        ])
+        exfoliate_layout.addWidget(self.combo_exfoliate_mode)
+
+        self.btn_extract_bulk = QPushButton("✂️ Extract Monolayer from Bulk CIF")
+        self.btn_extract_bulk.setStyleSheet("background-color: #f0ad4e; color: black; font-weight: bold; padding: 5px;")
+        self.btn_extract_bulk.clicked.connect(self.extract_monolayer_from_bulk)
+        exfoliate_layout.addWidget(self.btn_extract_bulk)
+
+        tab3_layout.addWidget(exfoliate_group)
 
         # Scroll area for dynamic layers
         from PySide6.QtWidgets import QScrollArea
@@ -415,13 +514,38 @@ class TensorSpecApp(QMainWindow):
         # ADD TAB 3 FIRST
         self.tabs.addTab(self.tab3, "3. Stack & Twist")
 
-        # --- TAB 4: BRILLOUIN ZONE (Placeholder) ---
+        # --- TAB 4: BRILLOUIN ZONE ---
         self.tab4 = QWidget()
         tab4_layout = QVBoxLayout(self.tab4)
-        tab4_layout.addWidget(QLabel("Wigner-Seitz cells and surface projections will go here."))
+        
+        tab4_layout.addWidget(QLabel("<b>Brillouin Zone (Reciprocal Space)</b>"))
+        lbl_bz_desc = QLabel("The 1st BZ is mathematically defined as the Wigner-Seitz cell of the <i>primitive</i> reciprocal lattice.")
+        lbl_bz_desc.setWordWrap(True)
+        tab4_layout.addWidget(lbl_bz_desc)
+
+        bz_group = QGroupBox("BZ Visualization")
+        bz_layout = QVBoxLayout(bz_group)
+
+        # Scale slider since reciprocal space (1/Å) is a different scale than real space (Å)
+        scale_layout = QHBoxLayout()
+        scale_layout.addWidget(QLabel("Visual Scale Multiplier:"))
+        self.spin_bz_scale = QDoubleSpinBox()
+        self.spin_bz_scale.setRange(0.1, 50.0); self.spin_bz_scale.setValue(8.0); self.spin_bz_scale.setSingleStep(0.5)
+        scale_layout.addWidget(self.spin_bz_scale)
+        bz_layout.addLayout(scale_layout)
+
+        self.chk_bz_solid = QCheckBox("Draw Solid Faces")
+        self.chk_bz_solid.setChecked(True)
+        bz_layout.addWidget(self.chk_bz_solid)
+
+        self.btn_draw_bz = QPushButton("Draw 1st Brillouin Zone")
+        self.btn_draw_bz.setStyleSheet("background-color: #8A2BE2; color: white; font-weight: bold; padding: 8px;")
+        self.btn_draw_bz.clicked.connect(self.draw_brillouin_zone)
+        bz_layout.addWidget(self.btn_draw_bz)
+
+        tab4_layout.addWidget(bz_group)
         tab4_layout.addStretch()
         
-        # ADD TAB 4 SECOND
         self.tabs.addTab(self.tab4, "4. Brillouin Zone")
 
 
@@ -485,12 +609,17 @@ class TensorSpecApp(QMainWindow):
                     continue # Save the dropdown box
                 widget.setParent(None) # Nuke everything else (including old labels!)
                 
-        # Re-add the clean label for the combo box on row 0
+        # Re-add label for combo style just in case
         self.colors_layout.addWidget(QLabel("Connections:"), 0, 0)
         self.colors_layout.addWidget(self.combo_style, 0, 1)
 
         row = 1
-        self.active_colors = {"Bonds": "#d3d3d3"} # Reset and initialize bonds
+        
+        # --- FIX: Do not wipe the memory bank! Just ensure Bonds exist. ---
+        if not hasattr(self, 'active_colors'):
+            self.active_colors = {}
+        if "Bonds" not in self.active_colors:
+            self.active_colors["Bonds"] = "#d3d3d3"
 
         for el in elements:
             if el == "Bonds": continue
@@ -499,12 +628,7 @@ class TensorSpecApp(QMainWindow):
             base_element = el.split('_')[0] if '_' in el else el
             default_color = CPK_COLORS.get(base_element, "#008080")
             
-            # If Layer 2, subtly alter the default color slightly so they don't look identical initially
-            if "_L2" in el and base_element in CPK_COLORS:
-                # Let's make Layer 2 automatically a distinct deep slate blue if it's Carbon
-                if base_element == "C": default_color = "#5bc0de" 
-                else: default_color = "#ffc107" # Amber/Gold fallback for distinguishing layer 2
-            
+            # --- FIX: Keep true element colors regardless of what layer they are in ---
             current_color = self.active_colors.get(el, default_color)
             self.active_colors[el] = current_color
             
@@ -552,6 +676,31 @@ class TensorSpecApp(QMainWindow):
                     unique_elements = sorted(list(set([site.specie.symbol for site in self.current_structure])))
                     self.build_dynamic_color_panel(unique_elements)
 
+                    # --- NEW: Calculate and display symmetry volume ratio ---
+                    try:
+                        import numpy as np
+                        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+                        sga = SpacegroupAnalyzer(self.current_structure)
+                        
+                        # Get standard space group symbol
+                        spg_symbol = sga.get_space_group_symbol()
+                        
+                        # Calculate Conventional Volume
+                        conv_vol = self.current_structure.lattice.volume
+                        
+                        # Calculate Primitive Volume directly from the transformation matrix
+                        P = sga.get_conventional_to_primitive_transformation_matrix()
+                        prim_matrix = np.dot(P, self.current_structure.lattice.matrix)
+                        prim_vol = abs(np.linalg.det(prim_matrix))
+                        
+                        # The ratio should always be a clean integer (e.g., 1x, 2x, 3x, 4x)
+                        ratio = int(round(conv_vol / prim_vol))
+                        
+                        self.lbl_sym_info.setText(f"Space Group: {spg_symbol}  |  V_conv = {ratio} × V_prim")
+                    except Exception as e:
+                        self.lbl_sym_info.setText("Space Group: Parsing Error")
+                    # --------------------------------------------------------
+
                     # Populate CDW target selection dropdown dynamically
                     self.combo_cdw_element.clear()
                     self.combo_cdw_element.addItem("All Elements")
@@ -570,14 +719,46 @@ class TensorSpecApp(QMainWindow):
                 # PyVista: Force VTK to render a massive 4K off-screen buffer (3840 x 2160)
                 # Note: You can change this to [7680, 4320] if you need native 8K resolution!
                 self.plotter.screenshot(fname, transparent_background=True, window_size=[3840, 2160])
+    
+    def get_universal_primitive_matrix(self, structure):
+        """Universally calculates the primitive lattice matrix without Cartesian rotation."""
+        import numpy as np
+        try:
+            from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+            sga = SpacegroupAnalyzer(structure)
+            centering = sga.get_space_group_symbol()[0].upper()
+            
+            # Universal Transformation Matrices for all 3D Bravais Lattices
+            if centering == 'F': P = np.array([[0.0, 0.5, 0.5], [0.5, 0.0, 0.5], [0.5, 0.5, 0.0]])
+            elif centering == 'I': P = np.array([[-0.5, 0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, -0.5]])
+            elif centering == 'A': P = np.array([[1.0, 0.0, 0.0], [0.0, 0.5, -0.5], [0.0, 0.5, 0.5]])
+            elif centering == 'B': P = np.array([[0.5, 0.0, -0.5], [0.0, 1.0, 0.0], [0.5, 0.0, 0.5]])
+            elif centering == 'C': P = np.array([[0.5, 0.5, 0.0], [-0.5, 0.5, 0.0], [0.0, 0.0, 1.0]])
+            elif centering == 'R': P = np.array([[2/3, 1/3, 1/3], [-1/3, 1/3, 1/3], [-1/3, -2/3, 1/3]])
+            else: P = np.eye(3) # 'P' or fallback
+            
+            return np.dot(P, structure.lattice.matrix)
+        except Exception:
+            return structure.lattice.matrix
 
     def draw_structure(self, *args):
         if self.current_structure is None: return
         backend = self.combo_backend.currentIndex()
         
-        # 1. Start Fresh ONLY if the "Draw Structure" button is clicked, or if no supercell exists
-        if self.sender() == getattr(self, 'btn_draw', None) or not hasattr(self, 'active_supercell'):
-            self.active_supercell = self.current_structure * (self.spin_x.value(), self.spin_y.value(), self.spin_z.value())
+        # 1. Start Fresh ONLY if the "Draw Structure" button is clicked, basis changed, or no supercell exists
+        if self.sender() in [getattr(self, 'btn_draw', None), getattr(self, 'radio_conv', None)] or not hasattr(self, 'active_supercell'):
+            base_struct = self.current_structure
+            
+            # Convert to primitive BEFORE multiplying if the Primitive radio button is active
+            if hasattr(self, 'radio_prim') and self.radio_prim.isChecked():
+                try:
+                    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+                    sga = SpacegroupAnalyzer(self.current_structure)
+                    base_struct = sga.find_primitive()
+                except Exception:
+                    pass # Fallback to conventional if mathematical parsing fails
+                    
+            self.active_supercell = base_struct * (self.spin_x.value(), self.spin_y.value(), self.spin_z.value())
             self.base_cart_coords = self.active_supercell.cart_coords.copy()
             self.base_frac_coords = self.active_supercell.frac_coords.copy()
             self.erased_atoms = set()
@@ -706,7 +887,6 @@ class TensorSpecApp(QMainWindow):
             self.chk_edit_mode.setChecked(False) # This auto-triggers toggle_edit_mode
 
     def export_3dsmax_script(self, *args):
-        """Generates a pymxs Python script to recreate the exact trimmed crystal in 3ds Max."""
         if not hasattr(self, 'active_supercell'):
             print("Please draw a structure first!")
             return
@@ -714,75 +894,70 @@ class TensorSpecApp(QMainWindow):
         file_path, _ = QFileDialog.getSaveFileName(self, "Export 3ds Max Script", "", "Python Files (*.py)")
         if not file_path: return
 
-        # 1. Gather valid atoms (ignoring erased ones)
-        atoms_data = []
-        scale_mod = self.spin_radius.value()
-        for i, site in enumerate(self.active_supercell):
-            if i in getattr(self, 'erased_atoms', set()): continue
-            radius = float((site.specie.atomic_radius if site.specie.atomic_radius else 1.0) * scale_mod)
-            color = self.active_colors.get(site.specie.symbol, "#008080")
-            coords = site.coords
-            atoms_data.append((float(coords[0]), float(coords[1]), float(coords[2]), radius, color))
+        atoms_data, bonds_data, lattice_data = [], [], []
 
-        # 2. Gather valid bonds (ignoring erased ones)
-        bonds_data = []
-        if self.combo_style.currentIndex() == 0:  # If bonds are active
-            cyl_radius = float(self.spin_bond_thick.value())
-            bond_color = self.active_colors.get("Bonds", "#FFFFFF")
-            coords = self.active_supercell.cart_coords
-            radii = np.array([s.specie.atomic_radius if s.specie.atomic_radius else 1.2 for s in self.active_supercell])
-            thresh = self.spin_bond_thresh.value()
-            dist_mat = np.linalg.norm(coords[:, np.newaxis, :] - coords[np.newaxis, :, :], axis=-1)
-            threshold_mat = (radii[:, np.newaxis] + radii[np.newaxis, :]) * thresh
-            valid_pairs = np.triu((dist_mat > 0.5) & (dist_mat <= threshold_mat), k=1)
-            
-            for i, j in np.argwhere(valid_pairs):
-                if (i, j) in getattr(self, 'erased_bonds', set()) or \
-                   i in getattr(self, 'erased_atoms', set()) or j in getattr(self, 'erased_atoms', set()):
-                    continue
-                p1, p2 = coords[i], coords[j]
-                bonds_data.append((float(p1[0]), float(p1[1]), float(p1[2]), 
-                                   float(p2[0]), float(p2[1]), float(p2[2]), 
-                                   cyl_radius, bond_color))
+        # 1. Gather Atoms & Bonds
+        if self.chk_exp_atoms.isChecked():
+            scale_mod = self.spin_radius.value()
+            for i, site in enumerate(self.active_supercell):
+                if i in getattr(self, 'erased_atoms', set()): continue
+                radius = float((site.specie.atomic_radius if site.specie.atomic_radius else 1.0) * scale_mod)
+                color = self.active_colors.get(site.specie.symbol, "#008080")
+                atoms_data.append((float(site.coords[0]), float(site.coords[1]), float(site.coords[2]), radius, color))
 
-        # 3. Gather lattice boundaries
-        lattice_data = []
-        if self.current_structure is not None and (self.chk_show_conventional.isChecked() or self.chk_show_primitive.isChecked()):
+            if self.combo_style.currentIndex() == 0:
+                cyl_radius = float(self.spin_bond_thick.value())
+                bond_color = self.active_colors.get("Bonds", "#FFFFFF")
+                coords = self.active_supercell.cart_coords
+                radii = np.array([s.specie.atomic_radius if s.specie.atomic_radius else 1.2 for s in self.active_supercell])
+                thresh = self.spin_bond_thresh.value()
+                dist_mat = np.linalg.norm(coords[:, np.newaxis, :] - coords[np.newaxis, :, :], axis=-1)
+                threshold_mat = (radii[:, np.newaxis] + radii[np.newaxis, :]) * thresh
+                valid_pairs = np.triu((dist_mat > 0.5) & (dist_mat <= threshold_mat), k=1)
+                
+                for i, j in np.argwhere(valid_pairs):
+                    if (i, j) in getattr(self, 'erased_bonds', set()) or i in getattr(self, 'erased_atoms', set()) or j in getattr(self, 'erased_atoms', set()):
+                        continue
+                    bonds_data.append((float(coords[i][0]), float(coords[i][1]), float(coords[i][2]), float(coords[j][0]), float(coords[j][1]), float(coords[j][2]), cyl_radius, bond_color))
+
+        # 2. Gather Unit Cell
+        if self.chk_exp_cell.isChecked() and self.current_structure is not None:
             def get_edges(matrix, color):
                 a, b, c = matrix[0], matrix[1], matrix[2]
                 v = np.zeros((8, 3))
-                v[0] = [0, 0, 0]
                 v[1], v[2], v[3] = a, b, c
-                v[4], v[5], v[6] = a + b, a + c, b + c
-                v[7] = a + b + c
+                v[4], v[5], v[6], v[7] = a + b, a + c, b + c, a + b + c
                 edges = [(0, 1), (0, 2), (0, 3), (1, 4), (1, 5), (2, 4), (2, 6), (3, 5), (3, 6), (4, 7), (5, 7), (6, 7)]
-                for p1_idx, p2_idx in edges:
-                    p1, p2 = v[p1_idx], v[p2_idx]
-                    lattice_data.append((float(p1[0]), float(p1[1]), float(p1[2]), 
-                                         float(p2[0]), float(p2[1]), float(p2[2]), color))
+                for p1, p2 in edges:
+                    lattice_data.append((float(v[p1][0]), float(v[p1][1]), float(v[p1][2]), float(v[p2][0]), float(v[p2][1]), float(v[p2][2]), color))
 
             if self.chk_show_conventional.isChecked():
-                try:
-                    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-                    sga = SpacegroupAnalyzer(self.current_structure)
-                    conv_struct = sga.get_conventional_standard_structure()
-                    get_edges(conv_struct.lattice.matrix, "#FF5733")
-                except Exception:
-                    get_edges(self.current_structure.lattice.matrix, "#FF5733")
-
+                get_edges(self.current_structure.lattice.matrix, "#FF5733")
             if self.chk_show_primitive.isChecked():
-                try:
-                    prim_struct = self.current_structure.get_primitive_structure()
-                    get_edges(prim_struct.lattice.matrix, "#33FF57")
-                except Exception:
-                    get_edges(self.current_structure.lattice.matrix, "#33FF57")
+                prim_matrix = self.get_universal_primitive_matrix(self.current_structure)
+                get_edges(prim_matrix, "#33FF57")
 
-        # Format arrays with line breaks for clean reading
+        # 3. Gather Brillouin Zone Data
+        bz_solid_script = ""
+        if self.chk_exp_bz.isChecked() and hasattr(self, 'bz_export_edges'):
+            # Append wireframe cages
+            for p1, p2 in self.bz_export_edges:
+                lattice_data.append((float(p1[0]), float(p1[1]), float(p1[2]), float(p2[0]), float(p2[1]), float(p2[2]), "#FF00FF"))
+            
+            # Generate Solid Mesh if requested
+            if self.chk_bz_solid.isChecked() and hasattr(self, 'bz_hull_pts'):
+                verts_str = ", ".join([f"[{p[0]},{p[1]},{p[2]}]" for p in self.bz_hull_pts])
+                faces_str = ", ".join([f"[{f[0]+1},{f[1]+1},{f[2]+1}]" for f in self.bz_hull_simplices]) # MaxScript is 1-indexed!
+                bz_solid_script = f'''
+    bz_mesh = rt.mesh(vertices=rt.Array({verts_str}), faces=rt.Array({faces_str}))
+    bz_mesh.material = get_material("#FF00FF")
+    bz_mesh.material.opacity = 0.3
+    '''
+
         atoms_formatted = ",\n        ".join(str(a) for a in atoms_data)
         bonds_formatted = ",\n        ".join(str(b) for b in bonds_data)
         lattice_formatted = ",\n        ".join(str(l) for l in lattice_data)
 
-        # 4. Generate the actual 3ds Max Python script text
         script_content = f'''import pymxs
 rt = pymxs.runtime
 
@@ -798,16 +973,12 @@ def get_material(hex_color):
         mat.name = mat_name
         r, g, b = hex_to_color(hex_color)
         mat.Base_Color = rt.Color(r, g, b)
-        mat.roughness = 0.1 # Shiny finish
+        mat.roughness = 0.1
     return mat
 
 with pymxs.undo(True, 'Create Crystal'):
-    # --- ATOMS (Instanced for Memory/Poly optimization) ---
-    atoms = [
-        {atoms_formatted}
-    ]
     base_atoms = {{}}
-    for ax, ay, az, rad, color in atoms:
+    for ax, ay, az, rad, color in [{atoms_formatted}]:
         key = (color, rad)
         if key not in base_atoms:
             sphere = rt.Sphere(radius=rad, segs=32)
@@ -818,49 +989,30 @@ with pymxs.undo(True, 'Create Crystal'):
             inst = rt.instance(base_atoms[key])
             inst.pos = rt.Point3(ax, ay, az)
 
-    # --- BONDS (Unique Objects to avoid scaling artifacts) ---
-    bonds = [
-        {bonds_formatted}
-    ]
-    for x1, y1, z1, x2, y2, z2, rad, color in bonds:
-        p1 = rt.Point3(x1, y1, z1)
-        p2 = rt.Point3(x2, y2, z2)
-        dist = rt.distance(p1, p2)
-        
-        cyl = rt.Cylinder(radius=rad, height=dist, sides=16)
+    for x1, y1, z1, x2, y2, z2, rad, color in [{bonds_formatted}]:
+        p1, p2 = rt.Point3(x1, y1, z1), rt.Point3(x2, y2, z2)
+        cyl = rt.Cylinder(radius=rad, height=rt.distance(p1, p2), sides=16)
         cyl.material = get_material(color)
         cyl.pos = p1
-        vec = p2 - p1
-        cyl.dir = rt.normalize(vec) 
+        cyl.dir = rt.normalize(p2 - p1)
 
-    # --- LATTICE BOUNDARIES (Unique Objects) ---
-    lattice_edges = [
-        {lattice_formatted}
-    ]
-    for x1, y1, z1, x2, y2, z2, color in lattice_edges:
-        p1 = rt.Point3(x1, y1, z1)
-        p2 = rt.Point3(x2, y2, z2)
-        dist = rt.distance(p1, p2)
-        
-        cyl = rt.Cylinder(radius=0.05, height=dist, sides=12)
+    for x1, y1, z1, x2, y2, z2, color in [{lattice_formatted}]:
+        p1, p2 = rt.Point3(x1, y1, z1), rt.Point3(x2, y2, z2)
+        cyl = rt.Cylinder(radius=0.03, height=rt.distance(p1, p2), sides=8)
         cyl.material = get_material(color)
         cyl.pos = p1
-        vec = p2 - p1
-        cyl.dir = rt.normalize(vec)
+        cyl.dir = rt.normalize(p2 - p1)
+    {bz_solid_script}
 
 rt.redrawViews()
-print("Crystal successfully imported!")
+print("Export successfully completed!")
 '''
-        
-        # 5. Save to file
         with open(file_path, 'w') as f:
             f.write(script_content)
-        
         print(f"3ds Max Script saved to {file_path}")
     
 
     def export_blender_script(self, *args):
-        """Generates a Blender Python script to recreate the exact crystal structure."""
         if not hasattr(self, 'active_supercell'):
             print("Please draw a structure first!")
             return
@@ -868,36 +1020,33 @@ print("Crystal successfully imported!")
         file_path, _ = QFileDialog.getSaveFileName(self, "Export Blender Script", "", "Python Files (*.py)")
         if not file_path: return
 
-        # 1. Gather Atoms
-        atoms_data = []
-        scale_mod = self.spin_radius.value()
-        for i, site in enumerate(self.active_supercell):
-            if i in getattr(self, 'erased_atoms', set()): continue
-            radius = float((site.specie.atomic_radius if site.specie.atomic_radius else 1.0) * scale_mod)
-            color = self.active_colors.get(site.specie.symbol, "#008080")
-            atoms_data.append((float(site.coords[0]), float(site.coords[1]), float(site.coords[2]), radius, color))
+        atoms_data, bonds_data, lattice_data = [], [], []
 
-        # 2. Gather Bonds
-        bonds_data = []
-        if self.combo_style.currentIndex() == 0:
-            cyl_radius = float(self.spin_bond_thick.value())
-            bond_color = self.active_colors.get("Bonds", "#FFFFFF")
-            coords = self.active_supercell.cart_coords
-            radii = np.array([s.specie.atomic_radius if s.specie.atomic_radius else 1.2 for s in self.active_supercell])
-            thresh = self.spin_bond_thresh.value()
-            dist_mat = np.linalg.norm(coords[:, np.newaxis, :] - coords[np.newaxis, :, :], axis=-1)
-            threshold_mat = (radii[:, np.newaxis] + radii[np.newaxis, :]) * thresh
-            valid_pairs = np.triu((dist_mat > 0.5) & (dist_mat <= threshold_mat), k=1)
-            
-            for i, j in np.argwhere(valid_pairs):
-                if (i, j) in getattr(self, 'erased_bonds', set()) or i in getattr(self, 'erased_atoms', set()) or j in getattr(self, 'erased_atoms', set()):
-                    continue
-                bonds_data.append((float(coords[i][0]), float(coords[i][1]), float(coords[i][2]), 
-                                   float(coords[j][0]), float(coords[j][1]), float(coords[j][2]), cyl_radius, bond_color))
+        # 1. Gather Atoms & Bonds
+        if self.chk_exp_atoms.isChecked():
+            scale_mod = self.spin_radius.value()
+            for i, site in enumerate(self.active_supercell):
+                if i in getattr(self, 'erased_atoms', set()): continue
+                radius = float((site.specie.atomic_radius if site.specie.atomic_radius else 1.0) * scale_mod)
+                color = self.active_colors.get(site.specie.symbol, "#008080")
+                atoms_data.append((float(site.coords[0]), float(site.coords[1]), float(site.coords[2]), radius, color))
 
-        # 3. Gather Lattice
-        lattice_data = []
-        if self.current_structure is not None and (self.chk_show_conventional.isChecked() or self.chk_show_primitive.isChecked()):
+            if self.combo_style.currentIndex() == 0:
+                cyl_radius = float(self.spin_bond_thick.value())
+                bond_color = self.active_colors.get("Bonds", "#FFFFFF")
+                coords = self.active_supercell.cart_coords
+                radii = np.array([s.specie.atomic_radius if s.specie.atomic_radius else 1.2 for s in self.active_supercell])
+                thresh = self.spin_bond_thresh.value()
+                dist_mat = np.linalg.norm(coords[:, np.newaxis, :] - coords[np.newaxis, :, :], axis=-1)
+                threshold_mat = (radii[:, np.newaxis] + radii[np.newaxis, :]) * thresh
+                valid_pairs = np.triu((dist_mat > 0.5) & (dist_mat <= threshold_mat), k=1)
+                for i, j in np.argwhere(valid_pairs):
+                    if (i, j) in getattr(self, 'erased_bonds', set()) or i in getattr(self, 'erased_atoms', set()) or j in getattr(self, 'erased_atoms', set()):
+                        continue
+                    bonds_data.append((float(coords[i][0]), float(coords[i][1]), float(coords[i][2]), float(coords[j][0]), float(coords[j][1]), float(coords[j][2]), cyl_radius, bond_color))
+
+        # 2. Gather Unit Cell
+        if self.chk_exp_cell.isChecked() and self.current_structure is not None:
             def get_edges(matrix, color):
                 a, b, c = matrix[0], matrix[1], matrix[2]
                 v = np.zeros((8, 3))
@@ -905,31 +1054,44 @@ print("Crystal successfully imported!")
                 v[4], v[5], v[6], v[7] = a + b, a + c, b + c, a + b + c
                 edges = [(0, 1), (0, 2), (0, 3), (1, 4), (1, 5), (2, 4), (2, 6), (3, 5), (3, 6), (4, 7), (5, 7), (6, 7)]
                 for p1, p2 in edges:
-                    lattice_data.append((float(v[p1][0]), float(v[p1][1]), float(v[p1][2]), 
-                                         float(v[p2][0]), float(v[p2][1]), float(v[p2][2]), color))
+                    lattice_data.append((float(v[p1][0]), float(v[p1][1]), float(v[p1][2]), float(v[p2][0]), float(v[p2][1]), float(v[p2][2]), color))
 
             if self.chk_show_conventional.isChecked():
-                try:
-                    sga = __import__('pymatgen.symmetry.analyzer').symmetry.analyzer.SpacegroupAnalyzer(self.current_structure)
-                    get_edges(sga.get_conventional_standard_structure().lattice.matrix, "#FF5733")
-                except Exception:
-                    get_edges(self.current_structure.lattice.matrix, "#FF5733")
+                get_edges(self.current_structure.lattice.matrix, "#FF5733")
             if self.chk_show_primitive.isChecked():
-                try:
-                    get_edges(self.current_structure.get_primitive_structure().lattice.matrix, "#33FF57")
-                except Exception:
-                    get_edges(self.current_structure.lattice.matrix, "#33FF57")
+                prim_matrix = self.get_universal_primitive_matrix(self.current_structure)
+                get_edges(prim_matrix, "#33FF57")
 
-        # Format strings
+        # 3. Gather Brillouin Zone
+        bz_solid_script = ""
+        if self.chk_exp_bz.isChecked() and hasattr(self, 'bz_export_edges'):
+            for p1, p2 in self.bz_export_edges:
+                lattice_data.append((float(p1[0]), float(p1[1]), float(p1[2]), float(p2[0]), float(p2[1]), float(p2[2]), "#FF00FF"))
+            
+            if self.chk_bz_solid.isChecked() and hasattr(self, 'bz_hull_pts'):
+                verts_str = ", ".join([f"({p[0]},{p[1]},{p[2]})" for p in self.bz_hull_pts])
+                faces_str = ", ".join([f"({f[0]},{f[1]},{f[2]})" for f in self.bz_hull_simplices])
+                bz_solid_script = f'''
+bz_mesh_data = bpy.data.meshes.new("BZ_Mesh")
+bz_mesh_data.from_pydata([{verts_str}], [], [{faces_str}])
+bz_mesh_data.update()
+bz_obj = bpy.data.objects.new("BrillouinZone", bz_mesh_data)
+crystal_coll.objects.link(bz_obj)
+
+bz_mat = get_material("#FF00FF")
+bz_mat.blend_method = 'BLEND'
+if bz_mat.node_tree.nodes.get("Principled BSDF"):
+    bz_mat.node_tree.nodes.get("Principled BSDF").inputs['Alpha'].default_value = 0.3
+bz_obj.data.materials.append(bz_mat)
+'''
+
         atoms_formatted = ",\n        ".join(str(a) for a in atoms_data)
         bonds_formatted = ",\n        ".join(str(b) for b in bonds_data)
         lattice_formatted = ",\n        ".join(str(l) for l in lattice_data)
 
-        # 4. Generate Blender Script
         script_content = f'''import bpy
 import mathutils
 
-# Create Crystal Collection
 coll_name = "TensorSpec_Crystal"
 if coll_name not in bpy.data.collections:
     crystal_coll = bpy.data.collections.new(coll_name)
@@ -960,64 +1122,41 @@ def create_base_sphere(name, radius, color):
     obj.data.materials.append(get_material(color))
     bpy.ops.object.shade_smooth()
     mesh = obj.data
-    bpy.data.objects.remove(obj) # Keep mesh data, delete placeholder
+    bpy.data.objects.remove(obj)
     return mesh
 
-# --- ATOMS (Linked Instances) ---
-atoms = [
-    {atoms_formatted}
-]
 base_meshes = {{}}
-for ax, ay, az, rad, color in atoms:
+for ax, ay, az, rad, color in [{atoms_formatted}]:
     key = (color, rad)
-    if key not in base_meshes:
-        base_meshes[key] = create_base_sphere("AtomMesh", rad, color)
-    
+    if key not in base_meshes: base_meshes[key] = create_base_sphere("AtomMesh", rad, color)
     obj = bpy.data.objects.new("Atom", base_meshes[key])
     obj.location = (ax, ay, az)
     crystal_coll.objects.link(obj)
 
-# --- Helper for Cylinders ---
 def create_cylinder_between_points(p1, p2, rad, color, verts):
     vec = p2 - p1
     dist = vec.length
     if dist == 0: return
-    
     bpy.ops.mesh.primitive_cylinder_add(radius=rad, depth=dist, vertices=verts)
     obj = bpy.context.active_object
     obj.data.materials.append(get_material(color))
     bpy.ops.object.shade_smooth()
-    
     obj.location = (p1 + p2) / 2
-    rot_quat = mathutils.Vector((0, 0, 1)).rotation_difference(vec)
-    obj.rotation_euler = rot_quat.to_euler()
-    
+    obj.rotation_euler = mathutils.Vector((0, 0, 1)).rotation_difference(vec).to_euler()
     bpy.context.collection.objects.unlink(obj)
     crystal_coll.objects.link(obj)
 
-# --- BONDS (Unique) ---
-bonds = [
-    {bonds_formatted}
-]
-for x1, y1, z1, x2, y2, z2, rad, color in bonds:
-    p1 = mathutils.Vector((x1, y1, z1))
-    p2 = mathutils.Vector((x2, y2, z2))
-    create_cylinder_between_points(p1, p2, rad, color, 16)
+for x1, y1, z1, x2, y2, z2, rad, color in [{bonds_formatted}]:
+    create_cylinder_between_points(mathutils.Vector((x1, y1, z1)), mathutils.Vector((x2, y2, z2)), rad, color, 16)
 
-# --- LATTICE BOUNDARIES (Unique) ---
-lattice = [
-    {lattice_formatted}
-]
-for x1, y1, z1, x2, y2, z2, color in lattice:
-    p1 = mathutils.Vector((x1, y1, z1))
-    p2 = mathutils.Vector((x2, y2, z2))
-    create_cylinder_between_points(p1, p2, 0.05, color, 12)
+for x1, y1, z1, x2, y2, z2, color in [{lattice_formatted}]:
+    create_cylinder_between_points(mathutils.Vector((x1, y1, z1)), mathutils.Vector((x2, y2, z2)), 0.03, color, 8)
 
-print("Crystal imported successfully to Blender!")
+{bz_solid_script}
+print("Crystal exported successfully!")
 '''
         with open(file_path, 'w') as f:
             f.write(script_content)
-        
         print(f"Blender Script saved to {file_path}")
 
     def on_pyvista_pick(self, mesh):
@@ -1284,7 +1423,7 @@ print("Crystal imported successfully to Blender!")
         actor._bond_pair = (-1, -1)
     
     def draw_pyvista_axes(self, *args):
-        """Draws or removes the a, b, c lattice vectors dynamically."""
+        """Draws conventional and/or primitive a, b, c lattice vectors dynamically."""
         if self.combo_backend.currentIndex() == 0 or self.current_structure is None: return
         
         import pyvista as pv
@@ -1296,97 +1435,163 @@ print("Crystal imported successfully to Blender!")
             self.plotter.remove_actor(actor)
         self.axis_actors.clear()
         
+        # Master kill switch
         if not self.chk_show_axes.isChecked():
             self.plotter.render()
             self.plotter.update()
             return
             
-        matrix = self.current_structure.lattice.matrix
         bounds = self.plotter.bounds
-        
-        # Calculate the diagonal size of the entire drawn crystal
         diag = np.linalg.norm([bounds[1]-bounds[0], bounds[3]-bounds[2], bounds[5]-bounds[4]])
         
-        # Spawn axes at the bottom-left-front corner of the bounds
-        origin = np.array([bounds[0], bounds[2], bounds[4]])
-        
         # Pull the origin away from the crystal slightly so it doesn't clip
-        origin = origin - (np.array([1, 1, 1]) * (diag * 0.05))
-        
-        colors = ["red", "green", "blue"]
-        labels = ["a", "b", "c"]
-        
-        # Make the arrows 20% the size of the whole crystal
+        origin = np.array([bounds[0], bounds[2], bounds[4]]) - (np.array([1, 1, 1]) * (diag * 0.05))
         arrow_scale = diag * 0.2 
-        
-        for vec, color, label in zip(matrix, colors, labels):
-            length = np.linalg.norm(vec)
-            if length == 0: continue
-            
-            direction = vec / length
-            
-            # Thinner shafts and tips so they don't look bulky
-            arrow = pv.Arrow(start=origin, direction=direction, scale=arrow_scale, 
-                             shaft_radius=0.015, tip_radius=0.04)
-            
-            arrow_actor = self.plotter.add_mesh(arrow, color=color, smooth_shading=True, pickable=False, render=False)
-            self.axis_actors.append(arrow_actor)
-            
-            label_pos = origin + direction * (arrow_scale * 1.15)
-            text_actor = self.plotter.add_point_labels([label_pos], [label], text_color=color, 
-                                          font_size=20, shape_opacity=0.0, show_points=False, render=False)
-            self.axis_actors.append(text_actor)
-            
+
+        def draw_matrix_arrows(matrix, colors, labels):
+            for vec, color, label in zip(matrix, colors, labels):
+                length = np.linalg.norm(vec)
+                if length == 0: continue
+                direction = vec / length
+                
+                arrow = pv.Arrow(start=origin, direction=direction, scale=arrow_scale, shaft_radius=0.015, tip_radius=0.04)
+                arrow_actor = self.plotter.add_mesh(arrow, color=color, smooth_shading=True, pickable=False, render=False)
+                self.axis_actors.append(arrow_actor)
+                
+                label_pos = origin + direction * (arrow_scale * 1.15)
+                text_actor = self.plotter.add_point_labels([label_pos], [label], text_color=color, font_size=20, shape_opacity=0.0, show_points=False, render=False)
+                self.axis_actors.append(text_actor)
+
+        # 1. Draw Conventional Axes (Standard Red, Green, Blue)
+        if hasattr(self, 'chk_show_conventional') and self.chk_show_conventional.isChecked():
+            draw_matrix_arrows(self.current_structure.lattice.matrix, ["red", "green", "blue"], ["a", "b", "c"])
+
+        # 2. Draw Primitive Axes (Distinct Light Red, Light Green, Light Blue)
+        if hasattr(self, 'chk_show_primitive') and self.chk_show_primitive.isChecked():
+            prim_matrix = self.get_universal_primitive_matrix(self.current_structure)
+            draw_matrix_arrows(prim_matrix, ["#ff6666", "#66ff66", "#6666ff"], ["a_prim", "b_prim", "c_prim"])
+
         self.plotter.render()
         self.plotter.update()
     
-    def update_lattice_boxes(self, *args):
-        """Draws or removes the unit cell wireframes independently without redrawing atoms."""
-        if self.combo_backend.currentIndex() == 0 or self.current_structure is None: return
+    def update_lattice_boxes(self):
+        # Clear old boxes safely
+        if hasattr(self, 'box_actors'):
+            for actor in self.box_actors:
+                self.plotter.remove_actor(actor)
+        self.box_actors = []
 
-        # 1. Clean up old wireframe actors
-        if not hasattr(self, 'lattice_actors'):
-            self.lattice_actors = []
-        for actor in self.lattice_actors:
-            self.plotter.remove_actor(actor)
-        self.lattice_actors.clear()
+        if not getattr(self, 'current_structure', None): return
 
-        # If both are unchecked, just render the cleared scene and exit
-        if not self.chk_show_conventional.isChecked() and not self.chk_show_primitive.isChecked():
-            self.plotter.render()
+        import pyvista as pv
+        import numpy as np
+
+        def draw_slanted_box(matrix, color):
+            """Helper function to draw 12 slanted lines from a lattice matrix"""
+            origin = np.array([0, 0, 0])
+            corners = [
+                origin,
+                origin + matrix[0],
+                origin + matrix[1],
+                origin + matrix[0] + matrix[1],
+                origin + matrix[2],
+                origin + matrix[0] + matrix[2],
+                origin + matrix[1] + matrix[2],
+                origin + matrix[0] + matrix[1] + matrix[2]
+            ]
+            edges = [
+                (0, 1), (0, 2), (1, 3), (2, 3), # Bottom face
+                (4, 5), (4, 6), (5, 7), (6, 7), # Top face
+                (0, 4), (1, 5), (2, 6), (3, 7)  # Vertical pillars
+            ]
+            for p1, p2 in edges:
+                line = pv.Line(corners[p1], corners[p2])
+                actor = self.plotter.add_mesh(line, color=color, line_width=2, render=False)
+                self.box_actors.append(actor)
+
+        # 1. Conventional Cell Box (Uses standard loaded matrix)
+        if hasattr(self, 'chk_show_conventional') and self.chk_show_conventional.isChecked():
+            draw_slanted_box(self.current_structure.lattice.matrix, "#FF5733")
+
+        # 2. Primitive Cell Box (Uses Universal Math Engine to prevent rotation)
+        if hasattr(self, 'chk_show_primitive') and self.chk_show_primitive.isChecked():
+            prim_matrix = self.get_universal_primitive_matrix(self.current_structure)
+            draw_slanted_box(prim_matrix, "#33FF57")
+
+        # Ensure the vector arrows stay perfectly synced with whichever boxes are currently active
+        self.draw_pyvista_axes()
+        self.plotter.render()
+
+    def draw_brillouin_zone(self):
+        """Calculates and draws the Wigner-Seitz cell of the reciprocal primitive lattice."""
+        if self.current_structure is None or self.combo_backend.currentIndex() == 0:
             return
 
-        def draw_lattice_box(matrix, color):
-            a, b, c = matrix[0], matrix[1], matrix[2]
-            v = np.zeros((8, 3))
-            v[0] = [0, 0, 0]
-            v[1], v[2], v[3] = a, b, c
-            v[4], v[5], v[6] = a + b, a + c, b + c
-            v[7] = a + b + c
-            edges = [(0, 1), (0, 2), (0, 3), (1, 4), (1, 5), (2, 4), (2, 6), (3, 5), (3, 6), (4, 7), (5, 7), (6, 7)]
-            for p1, p2 in edges:
-                line = pv.Line(v[p1], v[p2])
-                actor = self.plotter.add_mesh(line, color=color, line_width=3, render=False)
-                self.lattice_actors.append(actor) # Save actor to memory bank for easy deletion
+        import pyvista as pv
+        import numpy as np
+        from pymatgen.core import Lattice
+        from scipy.spatial import ConvexHull
 
-        # 2. Render Conventional standard cell boundary
-        if self.chk_show_conventional.isChecked():
-            try:
-                from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
-                sga = SpacegroupAnalyzer(self.current_structure)
-                conv_struct = sga.get_conventional_standard_structure()
-                draw_lattice_box(conv_struct.lattice.matrix, "#FF5733")
-            except Exception:
-                draw_lattice_box(self.current_structure.lattice.matrix, "#FF5733")
+        if not hasattr(self, 'bz_actors'):
+            self.bz_actors = []
+        for actor in self.bz_actors:
+            self.plotter.remove_actor(actor)
+        self.bz_actors.clear()
 
-        # 3. Render Primitive cell boundary 
-        if self.chk_show_primitive.isChecked():
-            try:
-                prim_struct = self.current_structure.get_primitive_structure()
-                draw_lattice_box(prim_struct.lattice.matrix, "#33FF57")
-            except Exception:
-                draw_lattice_box(self.current_structure.lattice.matrix, "#33FF57")
-                
+        prim_matrix = self.get_universal_primitive_matrix(self.current_structure)
+        prim_lat = Lattice(prim_matrix)
+        recip_lat = prim_lat.reciprocal_lattice
+
+        faces = recip_lat.get_wigner_seitz_cell()
+        all_pts = []
+        
+        # --- NEW: Save exact mathematical edges for the exporters ---
+        self.bz_export_edges = set() 
+        scale = self.spin_bz_scale.value()
+
+        for face in faces:
+            scaled_face = [np.array(pt) * scale for pt in face]
+            for pt in scaled_face:
+                all_pts.append(pt)
+            
+            # Extract unique edges from the flat face
+            for i in range(len(scaled_face)):
+                p1 = tuple(np.round(scaled_face[i], 5))
+                p2 = tuple(np.round(scaled_face[(i+1)%len(scaled_face)], 5))
+                self.bz_export_edges.add(tuple(sorted([p1, p2])))
+
+        if not all_pts: return
+        all_pts = np.array(all_pts)
+
+        # Generate the 3D Polyhedron and save Triangles for exporters
+        hull = ConvexHull(all_pts)
+        self.bz_hull_pts = hull.points
+        self.bz_hull_simplices = hull.simplices
+
+        faces_pv = np.column_stack((np.full(len(hull.simplices), 3), hull.simplices)).flatten()
+        bz_mesh = pv.PolyData(all_pts, faces_pv)
+
+        if self.chk_bz_solid.isChecked():
+            actor = self.plotter.add_mesh(bz_mesh, color="#FF00FF", opacity=0.25, show_edges=True, edge_color="white", line_width=2, render=False)
+            self.bz_actors.append(actor)
+        else:
+            actor = self.plotter.add_mesh(bz_mesh, style="wireframe", color="#FF00FF", line_width=3, render=False)
+            self.bz_actors.append(actor)
+
+        # Axes
+        origin = np.array([0, 0, 0])
+        arrow_scale = np.max(all_pts) * 1.25
+        recip_axes = np.eye(3) * arrow_scale
+        colors = ["#ff6666", "#66ff66", "#6666ff"]
+        labels = ["k_x", "k_y", "k_z"]
+
+        for vec, color, label in zip(recip_axes, colors, labels):
+            direction = vec / np.linalg.norm(vec)
+            arrow = pv.Arrow(start=origin, direction=direction, scale=np.linalg.norm(vec), shaft_radius=0.015, tip_radius=0.04)
+            a_act = self.plotter.add_mesh(arrow, color=color, render=False)
+            l_act = self.plotter.add_point_labels([origin + vec * 1.15], [label], text_color=color, font_size=24, shape_opacity=0.0, show_points=False, render=False)
+            self.bz_actors.extend([a_act, l_act])
+
         self.plotter.render()
 
     def draw_pyvista_polyhedra(self, supercell):
@@ -1636,61 +1841,173 @@ print("Crystal imported successfully to Blender!")
             self.spin_l.blockSignals(False)
     
     # ================= T A B  3:  S T A C K  &  T W I S T =================
-    def add_stack_layer(self):
-        # Create a popup dialog to choose between CIF or Template
-        from PySide6.QtWidgets import QDialog, QRadioButton, QDialogButtonBox
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Add New Layer")
-        layout = QVBoxLayout(dialog)
-        
-        radio_cif = QRadioButton("Load from CIF File")
-        radio_cif.setChecked(True)
-        layout.addWidget(radio_cif)
-        
-        radio_template = QRadioButton("Load from Template:")
-        layout.addWidget(radio_template)
-        
-        combo_template = QComboBox()
-        combo_template.addItems([
-            "Graphene (Monolayer)", "Graphene (AB Bilayer)", "Graphene (AA Bilayer)", "Graphene (ABA Trilayer)",
-            "Graphene (ABC 3-Layer)", "Graphene (ABCA 4-Layer)", "Graphene (ABCAB 5-Layer)", "Graphene (ABCABC 6-Layer)", "Graphene (ABCABCA 7-Layer)",
-            "hBN (Monolayer)", "MoS2 (1H)", "WS2 (1H)", "MoSe2 (1H)", "WSe2 (1H)", 
-            "TaS2 (1H)", "TaSe2 (1H)", "VTe2 (1H)", "TaS2 (1T)", "TaSe2 (1T)", "VTe2 (1T)",
-            "WTe2 (1T')", "MoTe2 (1T')", "TaIrTe4 (1T')", "NbIrTe4 (1T')",
-            "Phosphorene", "Silicene"
-        ])
-        layout.addWidget(combo_template)
-        
-        # Link radio button to combo box
-        combo_template.setEnabled(False)
-        radio_template.toggled.connect(combo_template.setEnabled)
-        
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        
-        if dialog.exec() == QDialog.Accepted:
-            struct = None
-            name = ""
-            if radio_cif.isChecked():
-                fname, _ = QFileDialog.getOpenFileName(self, 'Open CIF', '', "CIF files (*.cif)")
-                if not fname: return
-                try:
-                    import warnings
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore")
-                        struct = Structure.from_file(fname)
-                    name = fname.split('/')[-1].replace('.cif', '')
-                except Exception as e:
-                    print(f"Error loading CIF: {e}")
-                    return
-            else:
-                name = combo_template.currentText()
-                struct = self.generate_template_structure(name)
+    def extract_monolayer_from_bulk(self, *args):
+        """Automatically cleaves a bulk CIF using either vdW detection or explicit hkl parsing."""
+        fname, _ = QFileDialog.getOpenFileName(self, 'Open Bulk CIF', '', "CIF files (*.cif)")
+        if not fname: return
+
+        try:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                bulk_struct = Structure.from_file(fname, primitive=False) 
                 
-            if struct:
-                self.append_layer_to_ui(name, struct)
+                # --- NEW FIX: Nudge atoms off the absolute zero fractional boundaries ---
+                # SlabGenerator frequently crashes when atoms sit exactly on the cleavage plane
+                bulk_struct.translate_sites(list(range(len(bulk_struct))), [0.01, 0.01, 0.01], to_unit_cell=True)
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Parser Error", f"Could not parse structure file: {str(e)}")
+            return
+
+        mode = self.combo_exfoliate_mode.currentText()
+
+        # ================= ENGINE A: AUTOMATIC VAN DER WAALS DETECTOR =================
+        if "van der Waals" in mode:
+            try:
+                sites_sorted = sorted(bulk_struct, key=lambda s: s.frac_coords[2])
+                z_fracs = [s.frac_coords[2] for s in sites_sorted]
+                n_sites = len(z_fracs)
+                
+                if n_sites < 2:
+                    raise ValueError("Structure has too few atoms to evaluate spacing differences.")
+
+                gaps = []
+                for i in range(n_sites):
+                    if i < n_sites - 1:
+                        diff = z_fracs[i+1] - z_fracs[i]
+                    else:
+                        diff = (z_fracs[0] + 1.0) - z_fracs[i]
+                    gaps.append((diff, i))
+
+                max_gap_diff, split_index = max(gaps, key=lambda x: x[0])
+                gap_angstrom = max_gap_diff * bulk_struct.lattice.c
+                
+                print(f"Detected maximal interlayer spacing: {gap_angstrom:.3f} Å")
+
+                if gap_angstrom < 1.5:
+                    reply = QMessageBox.warning(
+                        self, 
+                        "vdW Gap Warning", 
+                        f"The detected maximal gap is only {gap_angstrom:.2f} Å.\n\n"
+                        "This is unusually small for a van der Waals gap and suggests this bulk "
+                        "crystal might be a tightly bound 3D material rather than a layered 2D material. "
+                        "Slicing here will likely break primary atomic bonds.\n\n"
+                        "Do you still want to force the exfoliation?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No
+                    )
+                    if reply == QMessageBox.StandardButton.No:
+                        return
+                
+                monolayer_sites = []
+                for idx, site in enumerate(sites_sorted):
+                    shifted_z = site.frac_coords[2]
+                    if idx <= split_index:
+                        shifted_z += 1.0 
+                    monolayer_sites.append((site, shifted_z))
+
+                monolayer_sites = sorted(monolayer_sites, key=lambda x: x[1])
+                final_sites = [item[0] for item in monolayer_sites[:-1]] if n_sites > 1 else [item[0] for item in monolayer_sites]
+                
+                old_matrix = bulk_struct.lattice.matrix
+                new_matrix = old_matrix.copy()
+                new_matrix[2] = [0, 0, 25.0] 
+                from pymatgen.core import Lattice
+                new_lat = Lattice(new_matrix)
+                
+                cart_coords = [s.cart_coords for s in final_sites]
+                z_vals = [c[2] for c in cart_coords]
+                z_center = (max(z_vals) + min(z_vals)) / 2.0
+                
+                final_coords = [[c[0], c[1], c[2] - z_center + 12.5] for c in cart_coords]
+                species = [s.specie for s in final_sites]
+                
+                mono_struct = Structure(new_lat, species, final_coords, coords_are_cartesian=True)
+                
+                name = fname.split('/')[-1].replace('.cif', '') + " (vdW Auto-Mono)"
+                self.append_layer_to_ui(name, mono_struct)
+                print(f"Successfully exfoliated monolayer via vdW detection! Gap: {gap_angstrom:.2f} Å")
+                
+            except Exception as e:
+                print(f"vdW Engine Error: {e}")
+                QMessageBox.warning(self, "vdW Detection Failure", f"Automatic detection failed: {str(e)}")
+
+        # ================= ENGINE B: MILLER INDEX CLEAVAGE ([h k l]) =================
+        else:
+            num_layers, ok1 = QInputDialog.getInt(self, "Exfoliator", "Number of layers to extract (1 = Mono, 2 = Bi, etc):", 1, 1, 10)
+            if not ok1: return
+            
+            hkl_str, ok2 = QInputDialog.getText(self, "Exfoliator", "Cleavage Plane (h k l):\n(Example: 0 0 1 or -2 0 1)", text="0 0 1")
+            if not ok2: return
+            
+            try:
+                hkl = tuple(map(int, hkl_str.replace(',', ' ').split()))
+                if len(hkl) != 3: raise ValueError
+            except:
+                QMessageBox.warning(self, "Error", "Invalid Miller Indices. Please use format: h k l")
+                return
+
+            try:
+                from pymatgen.core.surface import SlabGenerator
+                
+                # --- NEW FIX: Lower the thickness threshold so 1-layer cells don't trigger multi-layer overlaps ---
+                approx_thickness = max(1.5, num_layers * 3.0) 
+                
+                slabgen = SlabGenerator(bulk_struct, miller_index=hkl, min_slab_size=approx_thickness, min_vacuum_size=25.0, center_slab=True)
+                slabs = slabgen.get_slabs()
+                
+                if not slabs:
+                    raise ValueError(f"Could not generate slabs for plane {hkl}")
+                
+                raw_slab = slabs[0]
+                
+                old_matrix = raw_slab.lattice.matrix
+                new_matrix = old_matrix.copy()
+                new_matrix[2] = [0, 0, 25.0] 
+                from pymatgen.core import Lattice
+                new_lat = Lattice(new_matrix)
+                
+                cart_coords = raw_slab.cart_coords
+                z_vals = [c[2] for c in cart_coords]
+                z_center = (max(z_vals) + min(z_vals)) / 2.0
+                
+                final_coords = [[c[0], c[1], c[2] - z_center + 12.5] for c in cart_coords]
+                
+                mono_struct = Structure(new_lat, raw_slab.species, final_coords, coords_are_cartesian=True)
+                
+                layer_label = "Mono" if num_layers == 1 else f"{num_layers}-Layer"
+                name = fname.split('/')[-1].replace('.cif', '') + f" ({layer_label} {hkl_str.replace(' ', '')})"
+                
+                self.append_layer_to_ui(name, mono_struct)
+                print(f"Successfully exfoliated {layer_label} from {name}!")
+                
+            except Exception as e:
+                print(f"Miller Engine Error: {e}")
+                QMessageBox.critical(self, "Exfoliation Error", str(e))
+
+    def load_cif_layer(self):
+        """Directly loads a 2D CIF without a pop-up menu."""
+        fname, _ = QFileDialog.getOpenFileName(self, 'Open CIF', '', "CIF files (*.cif)")
+        if not fname: return
+        try:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                struct = Structure.from_file(fname)
+            name = fname.split('/')[-1].replace('.cif', '')
+            self.append_layer_to_ui(name, struct)
+        except Exception as e:
+            QMessageBox.critical(self, "Parser Error", f"Could not parse CIF: {e}")
+
+    def generate_layer_from_dropdown(self):
+        """Reads the front-facing dropdown and routes it to the master math engine."""
+        name = self.combo_template.currentText()
+        struct = self.generate_template_structure(name)
+        if struct:
+            self.append_layer_to_ui(name, struct)
+        else:
+            QMessageBox.warning(self, "Error", f"Could not generate template coordinates for: {name}")
     
     def append_layer_to_ui(self, name, struct):
         if len(self.stack_layers) == 0:
@@ -1701,6 +2018,7 @@ print("Crystal imported successfully to Blender!")
             
         layer_widget = StackLayerWidget(name, struct, default_z)
         layer_widget.btn_delete.clicked.connect(lambda: self.remove_stack_layer(layer_widget))
+        layer_widget.btn_save_tpl.clicked.connect(lambda: self.save_layer_as_template(layer_widget))
         
         self.layer_layout.addWidget(layer_widget)
         self.stack_layers.append(layer_widget)
@@ -1709,6 +2027,28 @@ print("Crystal imported successfully to Blender!")
         for el in unique_elements:
             if el not in self.active_colors:
                 self.active_colors[el] = CPK_COLORS.get(el, "#008080")
+    
+    def save_layer_as_template(self, layer_widget):
+        """Serializes the PyMatgen structure and saves it to the JSON database."""
+        # Clean up the name by removing HTML bold tags
+        clean_name = layer_widget.lbl_name.text().replace("<b>", "").replace("</b>", "")
+        
+        name, ok = QInputDialog.getText(self, "Save Template", "Enter a name for this custom template:", text=clean_name)
+        if ok and name:
+            templates = {}
+            # Load existing database if it exists
+            if os.path.exists("user_templates.json"):
+                with open("user_templates.json", "r") as f:
+                    templates = json.load(f)
+            
+            # Serialize the structure to JSON format
+            templates[name] = layer_widget.struct.as_dict()
+            
+            # Write back to disk
+            with open("user_templates.json", "w") as f:
+                json.dump(templates, f)
+                
+            QMessageBox.information(self, "Success", f"'{name}' has been saved to your templates!")
     
     def generate_template_structure(self, template_name):
         from pymatgen.core import Lattice, Structure
@@ -1745,86 +2085,39 @@ print("Crystal imported successfully to Blender!")
                     
             return Structure(lat, ["C"] * len(coords), coords)
             
-        elif template_name == "hBN (Monolayer)":
+        elif "(1T')" in template_name and ("TaIrTe4" in template_name or "NbIrTe4" in template_name):
+            is_ta = "TaIrTe4" in template_name
+            lat = Lattice.orthorhombic(3.808 if is_ta else 3.78, 12.605 if is_ta else 12.4, c_vac)
+            m1 = "Ta" if is_ta else "Nb"
+            species = ["Te", "Te", m1, "Te", "Te", "Ir", "Te", "Te", "Ir", "Te", "Te", m1]
+            coords = [
+                [0.0, 0.0657, 0.4424], [0.5, 0.1518, 0.5591], [0.0, 0.2691, 0.4963], [0.5, 0.3229, 0.4206], 
+                [0.0, 0.4120, 0.5741], [0.5, 0.4655, 0.5011], [0.0, 0.5650, 0.4463], [0.5, 0.6533, 0.5526], 
+                [0.0, 0.7531, 0.4981], [0.5, 0.8076, 0.4254], [0.0, 0.8933, 0.5800], [0.5, 0.9477, 0.5044], 
+            ]
+            return Structure(lat, species, coords)
+            
+        elif template_name == "h-BN":
             lat = Lattice.hexagonal(2.50, c_vac)
             return Structure(lat, ["B", "N"], [[1/3, 2/3, 0.5], [2/3, 1/3, 0.5]])
             
-        elif "(1H)" in template_name:
-            params = {
-                "MoS2 (1H)": (3.16, 1.58, "Mo", "S"), 
-                "WS2 (1H)": (3.15, 1.57, "W", "S"), 
-                "MoSe2 (1H)": (3.29, 1.66, "Mo", "Se"), 
-                "WSe2 (1H)": (3.28, 1.65, "W", "Se"), 
-                "TaS2 (1H)": (3.31, 1.55, "Ta", "S"), 
-                "TaSe2 (1H)": (3.43, 1.64, "Ta", "Se"),
-                "VTe2 (1H)": (3.64, 1.65, "V", "Te")
-            }
-            a, z_dist, metal, chalc = params.get(template_name, (3.16, 1.58, "Mo", "S"))
-            lat = Lattice.hexagonal(a, c_vac)
-            z_frac = z_dist / c_vac
-            coords = [[0, 0, 0.5], [1/3, 2/3, 0.5 + z_frac], [1/3, 2/3, 0.5 - z_frac]]
-            return Structure(lat, [metal, chalc, chalc], coords)
+        elif template_name == "MoS2":
+            lat = Lattice.hexagonal(3.16, c_vac)
+            z_offset = 1.56 / c_vac
+            return Structure(lat, ["Mo", "S", "S"], [[1/3, 2/3, 0.5], [2/3, 1/3, 0.5 + z_offset], [2/3, 1/3, 0.5 - z_offset]])
             
-        elif "(1T)" in template_name and not "1T'" in template_name:
-            params = {
-                "TaS2 (1T)": (3.36, 1.50, "Ta", "S"), 
-                "TaSe2 (1T)": (3.48, 1.60, "Ta", "Se"), 
-                "VTe2 (1T)": (3.64, 1.65, "V", "Te")
-            }
-            a, z_dist, metal, chalc = params.get(template_name, (3.36, 1.50, "Ta", "S"))
-            lat = Lattice.hexagonal(a, c_vac)
-            z_frac = z_dist / c_vac
-            coords = [[0, 0, 0.5], [1/3, 2/3, 0.5 + z_frac], [2/3, 1/3, 0.5 - z_frac]]
-            return Structure(lat, [metal, chalc, chalc], coords)
-            
-        elif "(1T')" in template_name:
-            if "TaIrTe4" in template_name or "NbIrTe4" in template_name:
-                # These materials have a DOUBLED unit cell along the b-axis (12 atoms)
-                is_ta = "TaIrTe4" in template_name
-                lat = Lattice.orthorhombic(3.77 if is_ta else 3.78, 12.4, c_vac)
-                m1 = "Ta" if is_ta else "Nb"
-                species = [m1, "Ir", m1, "Ir"] + ["Te"] * 8
-                z_frac = 1.75 / c_vac
-                coords = [
-                    # Metals (y is halved compared to WTe2, then duplicated at +0.5)
-                    [0.0, 0.125, 0.5], [0.5, 0.375, 0.5], 
-                    [0.0, 0.625, 0.5], [0.5, 0.875, 0.5],
-                    # Top Te
-                    [0.5, 0.075, 0.5 + z_frac], [0.0, 0.425, 0.5 + z_frac],
-                    [0.5, 0.575, 0.5 + z_frac], [0.0, 0.925, 0.5 + z_frac],
-                    # Bottom Te
-                    [0.0, 0.175, 0.5 - z_frac], [0.5, 0.325, 0.5 - z_frac],
-                    [0.0, 0.675, 0.5 - z_frac], [0.5, 0.825, 0.5 - z_frac]
-                ]
-                return Structure(lat, species, coords)
-            else:
-                # Standard 1T' (WTe2, MoTe2) with single unit cell (6 atoms)
-                is_w = "WTe2" in template_name
-                lat = Lattice.orthorhombic(3.47 if is_w else 3.45, 6.32 if is_w else 6.30, c_vac)
-                m = "W" if is_w else "Mo"
-                species = [m, m, "Te", "Te", "Te", "Te"]
-                z_frac = 1.75 / c_vac
-                coords = [
-                    [0.0, 0.25, 0.5], [0.5, 0.75, 0.5], 
-                    [0.5, 0.15, 0.5 + z_frac], [0.0, 0.85, 0.5 + z_frac],
-                    [0.0, 0.35, 0.5 - z_frac], [0.5, 0.65, 0.5 - z_frac]
-                ]
-                return Structure(lat, species, coords)
+        elif template_name == "WSe2":
+            lat = Lattice.hexagonal(3.28, c_vac)
+            z_offset = 1.66 / c_vac
+            return Structure(lat, ["W", "Se", "Se"], [[1/3, 2/3, 0.5], [2/3, 1/3, 0.5 + z_offset], [2/3, 1/3, 0.5 - z_offset]])
 
-        elif template_name == "Phosphorene":
-            lat = Lattice.orthorhombic(3.31, 4.38, c_vac)
-            z_frac = 1.05 / c_vac
-            coords = [
-                [0.0, 0.0, 0.5 - z_frac], [0.5, 0.5, 0.5 - z_frac],
-                [0.0, 0.17, 0.5 + z_frac], [0.5, 0.67, 0.5 + z_frac]
-            ]
-            return Structure(lat, ["P"] * 4, coords)
-
-        elif template_name == "Silicene":
-            lat = Lattice.hexagonal(3.86, c_vac)
-            z_frac = 0.46 / c_vac
-            coords = [[1/3, 2/3, 0.5 + z_frac], [2/3, 1/3, 0.5 - z_frac]]
-            return Structure(lat, ["Si", "Si"], coords)
+        else:
+            # --- NEW: Dynamically Load Custom Template from Database ---
+            if os.path.exists("user_templates.json"):
+                with open("user_templates.json", "r") as f:
+                    custom_templates = json.load(f)
+                if template_name in custom_templates:
+                    return Structure.from_dict(custom_templates[template_name])
 
         return None
 
@@ -1901,16 +2194,16 @@ print("Crystal imported successfully to Blender!")
         self.erased_atoms = set()
         self.erased_bonds = set()
         
-        # 5. Route to existing render engines
+        # --- FIX: Force Tab 1's color panel to recognize the tagged elements FIRST ---
+        if "layer_tag" in self.active_supercell.site_properties:
+            unique_elements = sorted(list(set(self.active_supercell.site_properties["layer_tag"])))
+            self.build_dynamic_color_panel(unique_elements)
+
+        # 5. Route to existing render engines AFTER colors are registered
         if self.combo_backend.currentIndex() == 0: 
             self.draw_matplotlib(self.active_supercell)
         else: 
             self.draw_pyvista(self.active_supercell)
-            
-        # --- FIX: Force Tab 1's color panel to recognize the tagged elements from properties ---
-        if "layer_tag" in self.active_supercell.site_properties:
-            unique_elements = sorted(list(set(self.active_supercell.site_properties["layer_tag"])))
-            self.build_dynamic_color_panel(unique_elements)
             
         self.update_projection()
         self.set_camera_view('z') # Automatically look straight down at the stack!
