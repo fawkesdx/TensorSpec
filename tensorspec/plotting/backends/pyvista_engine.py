@@ -1,14 +1,50 @@
 # File: tensorspec/plotting/backends/pyvista_engine.py
 import os
+import platform
 import numpy as np
 from scipy.spatial import KDTree
 import pyvista as pv
 from pyvistaqt import QtInteractor
 
-# Ensure standard cross-platform OpenGL rendering flags
-pv.global_theme.depth_peeling.enabled = False
-pv.global_theme.anti_aliasing = "fxaa"
-os.environ["QSG_RHI_BACKEND"] = "opengl"
+# --- UNIVERSAL HARDWARE DETECTION ENGINE ---
+system = platform.system()
+machine = platform.machine()
+
+print(f"🖥️ Hardware Detected: {system} ({machine})")
+
+if system == "Darwin" and machine == "x86_64":
+    # 1. LEGACY MACS (Intel / 2013 MBP / OCLP patched)
+    print("⚙️ Engaging Safe Mode graphics for Legacy Mac.")
+    pv.global_theme.depth_peeling.enabled = False
+    pv.global_theme.anti_aliasing = None
+    pv.global_theme.multi_samples = 1
+    # Force legacy OpenGL to bypass broken Metal drivers on OCLP
+    os.environ["QSG_RHI_BACKEND"] = "opengl"
+
+elif system == "Darwin" and machine == "arm64":
+    # 2. MODERN MACS (Apple Silicon M-Series / Mac Studio / Recent MBPs)
+    print("🚀 Engaging High-Performance graphics for Apple Silicon.")
+    pv.global_theme.depth_peeling.enabled = True
+    pv.global_theme.anti_aliasing = "fxaa"
+    pv.global_theme.multi_samples = 4
+    # Intentionally do NOT set QSG_RHI_BACKEND so Qt6 uses the native, blazing-fast Metal API
+
+elif system == "Windows":
+    # 3. WINDOWS PCs
+    print("🚀 Engaging High-Performance graphics for Windows.")
+    pv.global_theme.depth_peeling.enabled = True
+    pv.global_theme.anti_aliasing = "fxaa"
+    pv.global_theme.multi_samples = 4
+    # CRITICAL WINDOWS FIX: Force OpenGL to prevent Qt6 DirectX from segfaulting C++ VTK
+    os.environ["QSG_RHI_BACKEND"] = "opengl"
+
+else:
+    # 4. LINUX / UNIX DEFAULT
+    print("🐧 Engaging Standard High-Performance graphics for Linux.")
+    pv.global_theme.depth_peeling.enabled = True
+    pv.global_theme.anti_aliasing = "fxaa"
+    pv.global_theme.multi_samples = 4
+    os.environ["QSG_RHI_BACKEND"] = "opengl"
 
 
 class PyVistaCrystalBackend:
