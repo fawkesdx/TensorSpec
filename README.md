@@ -13,7 +13,7 @@ Move beyond technique-specific file formats and flat structs. `TensorSpec` utili
 * **Multi-Technique Coordinates:** Treats intensity arrays as N-dimensional labeled tensors locked to physical coordinates:
   * **ARPES:** $(\theta, \phi, E) \to (k_x, k_y, E)$ or $(k_z, k_y, E)$
   * **sARPES:** $(sx,sy,sz,ARPES)$
-  * **tARPES:** $(delay_time,pump_power,pump_photon_energy,ARPES)$
+  * **tARPES:** $(t_{delay},power_{pump},Eph_{pump},ARPES)$
   * **Nano-ARPES:** $(x, y, ARPES)$
   * **XAS/XMCD:** $(H_{field}, Energy)$
   * **Microscopy/PEEM:** $(x, y, z, Time)$
