@@ -7,12 +7,17 @@ The goal of this project is to provide a unified data structure for high-dimensi
 
 ## Key Features
 
-### 1. Universal Data Structure (In Development)
-Move beyond technique-specific file formats. `TensorSpec` treats intensity data as N-dimensional tensors with associated coordinates:
-* **ARPES:** $(\theta, \phi, E)$ or $(k_x, k_y, E)$, $(E_{ph}, \phi, E)$ or $(k_z, k_y, E)$
-* **Nano-ARPES:** $(x, y, ARPES)$
-* **XAS/XMCD:** $(H_{field}, Energy)$
-* **Microscopy:** $(x, y, z)$
+### 1. Universal Hierarchical Data Structure (In Development)
+Move beyond technique-specific file formats and flat structs. `TensorSpec` utilizes a **Hierarchical Data Tree architecture** powered by `xarray.DataTree` (NeXus/HDF5 aligned) to organize high-dimensional data, metadata, and analytical provenance:
+* **Structured Nodes:** Isolates immutable raw beamline data (`/raw`) from calibrated or interpolated data (`/processed`) and fitting outputs (`/analysis/peakfit`).
+* **Multi-Technique Coordinates:** Treats intensity arrays as N-dimensional labeled tensors locked to physical coordinates:
+  * **ARPES:** $(\theta, \phi, E) \to (k_x, k_y, E)$ or $(k_z, k_y, E)$
+  * **sARPES:** $(sx,sy,sz,ARPES)$
+  * **tARPES:** $(delay_time,pump_power,pump_photon_energy,ARPES)$
+  * **Nano-ARPES:** $(x, y, ARPES)$
+  * **XAS/XMCD:** $(H_{field}, Energy)$
+  * **Microscopy/PEEM:** $(x, y, z, Time)$
+* **Built-in Provenance Tracking:** Automatically records data processing history and algorithmic parameters directly inside the container tree (`/history`).
 
 ### 2. Visualization & Slicing (In Development)
 * **Hyperspectral Slicing:** View 2D cuts of 3D/4D data (e.g., momentum-energy cuts in ARPES).

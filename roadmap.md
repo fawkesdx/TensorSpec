@@ -2,6 +2,7 @@
 
 Grand App
 - Crystal viewer Suite
+	- [ ] **Refactor Architectural Modularity:** Decouple monolithic `crystal_viewer.py` into modular architecture (`core/crystallography.py`, `plotting/pyvista_engine.py`, `plotting/matplotlib_engine.py`, and `gui/crystal_tabs/`).
 	- [x] File loader panel & "Draw" button.
 	- [ ] Define Miller indices for bounding the drawing. Define number of unit cells.
 	- [x] Draw atoms as spheres scaled to atomic radii.
@@ -10,6 +11,7 @@ Grand App
 	- [x] Interactive Mode: Toggle to view, select, and delete individual atoms/sticks (Continuous Eraser Brush & Camera Lock).
 	- [x] PBR/Shiny visual styling (3ds Max style) with color controls.
 	- [x] Toggleable crystallographic a, b, c axes display mapped to bounding box.
+	- [x] Twisting Multilayer Tab
 	- [ ] Draw polyhedra/planes connecting atoms instead of just sticks (deletable).
 	- [ ] CDW Mode: Define atom shifts (dx, dy, dz) and propagate simulated distortions.
 	- [ ] Brillouin Zone Engine: Bulk BZ, Cleaving surface BZ, kz slicing, and surface termination projections.
@@ -37,8 +39,13 @@ Grand App
 		- [ ] ADRESS SLS
 		- [ ] Lorea Alba
 		- [ ] Bloch MaxIV
-	- [ ] The data will store all of the information of the measurement incuding the meta data
-	- [ ] The data will stored in this manner (order doesnt matter): data.energy, data.slitangle, data.value, as the data from the analyzer by doing just a single shot of dispersion. then it can store data.motor1 where motor1 can mean anything like deflection angle for fermi map, or any angular motor like theta for theta maping fermi map. or motor X, Y from manipulator to scan the dispersion cut at different position. or piezo fine scan X, Y to scan dispersion cut at different piezo position. it can be different photon energy for kz dispersion measurement. it can also mean different photon polarization (1 = LH, 0 = LV, 0.5 = CP, -0.5 = CM). it can also store data.motor2 where it may contain the other variables from the same list as before. it can also store data.motor3 and so on depending on the kind of data as input.
+	- [ ] Implement the `TensorSpec` Hierarchical Data Container (`xarray.DataTree` / NeXus model) to store measurement arrays and comprehensive beamline metadata (`attrs`).
+	- [ ] Structure tree hierarchy into standardized functional nodes:
+		- [ ] `/raw`: Raw analyzer intensity array (`data.value`) bound to angular/energy coordinates (`data.energy`, `data.slitangle`).
+		- [ ] `/raw/motors`: Log multi-axis manipulator variables (`motor1` e.g., polar deflection/theta map, `motor2` e.g., fine piezo scan X/Y, or photon energy $h\nu$ for $k_z$ scans).
+		- [ ] `/processed`: Store transformed coordinate cubes (e.g., interpolated $E, k_x, k_y$ volumes, curvature analysis, or normalization).
+		- [ ] `/analysis`: Attach mathematical model outputs (e.g., `/analysis/mdc_peakfit` or `/analysis/edc_peakfit` containing Lorentzian parameters and residuals).
+		- [ ] `/history`: Append sequential audit trail logs of every functional transformation applied to the dataset.
 	- [ ] once the data is loaded, there is option to launch a general viewer where it will plot the data according to the kind of data
 		- [ ] it will display the data.energy, data.slitangle, data.value of the dispersion
 			- [ ] I want to have the option to toggle to plot the EDC and MDC on the right and lower panel
