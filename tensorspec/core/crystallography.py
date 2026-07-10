@@ -166,7 +166,7 @@ class CrystalEngine:
         new_matrix[2] = [0, 0, 25.0]
         new_lat = Lattice(new_matrix)
         
-        cart_coords = [s.cart_coords for s in final_sites]
+        cart_coords = [s.coords for s in final_sites]
         z_vals = [c[2] for c in cart_coords]
         z_center = (max(z_vals) + min(z_vals)) / 2.0
         final_coords = [[c[0], c[1], c[2] - z_center + 12.5] for c in cart_coords]
