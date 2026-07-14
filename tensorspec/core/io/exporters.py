@@ -13,10 +13,13 @@ class SceneExporter:
         if bz_solid_data:
             verts = bz_solid_data['verts']
             faces = bz_solid_data['faces']
-            verts_str = ", ".join([f"[{p[0]},{p[1]},{p[2]}]" for p in verts])
-            faces_str = ", ".join([f"[{f[0]+1},{f[1]+1},{f[2]+1}]" for f in faces]) 
+            # Cast coordinates strictly as rt.Point3 objects for 3ds Max
+            verts_str = ", ".join([f"rt.Point3({p[0]}, {p[1]}, {p[2]})" for p in verts])
+            faces_str = ", ".join([f"rt.Point3({f[0]+1}, {f[1]+1}, {f[2]+1})" for f in faces]) 
             bz_solid_script = f'''
-    bz_mesh = rt.mesh(vertices=rt.Array({verts_str}), faces=rt.Array({faces_str}))
+    bz_verts = rt.Array({verts_str})
+    bz_faces = rt.Array({faces_str})
+    bz_mesh = rt.mesh(vertices=bz_verts, faces=bz_faces)
     bz_mesh.material = get_material("#FF00FF")
     bz_mesh.material.opacity = 0.3
 '''

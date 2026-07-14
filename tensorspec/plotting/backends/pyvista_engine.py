@@ -170,10 +170,38 @@ class PyVistaCrystalBackend:
             actor.prop.interpolation = 'pbr'
             actor.prop.metallic = 0.2
             actor.prop.roughness = 0.15
+    
+    def draw_polyhedra(self, supercell, active_colors: dict):
+        """Generates Convex Hulls around central coordinating atoms using PyMatgen CrystalNN."""
+        from pymatgen.analysis.local_env import CrystalNN
+        from scipy.spatial import ConvexHull
+        import pyvista as pv
+        import numpy as np
+        
+        nn_finder = CrystalNN(distance_cutoffs=None, x_diff_weight=0.0, porous_adjustment=False)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            for i, site in enumerate(supercell):
+                if site.specie.symbol in ["Te", "O", "S", "Se"]: continue
+                try:
+                    neighbors = nn_finder.get_nn_info(supercell, i)
+                    pts = np.array([n['site'].coords for n in neighbors if tuple(n['image']) == (0,0,0)])
+                    if len(pts) >= 4:
+                        hull = ConvexHull(pts)
+                        faces = np.column_stack((np.full(len(hull.simplices), 3), hull.simplices)).flatten()
+                        poly = pv.PolyData(pts, faces)
+                        poly_color = active_colors.get(site.specie.symbol, "#008080")
+                        
+                        self.plotter.add_mesh(poly, color=poly_color, opacity=0.4, show_edges=True, pickable=False)
+                except:
+                    continue
 
     # ================= LATTICE & AXES RENDERERS =================
     def draw_axes(self, conventional_matrix: np.ndarray = None, primitive_matrix: np.ndarray = None):
         """Draws crystallographic directional arrows mapped to lattice matrices."""
+        import pyvista as pv
+        
         for actor in self.axis_actors: self.plotter.remove_actor(actor)
         self.axis_actors.clear()
 
@@ -199,6 +227,8 @@ class PyVistaCrystalBackend:
 
     def draw_lattice_boxes(self, conventional_matrix: np.ndarray = None, primitive_matrix: np.ndarray = None):
         """Draws slanted unit cell wireframe boundaries."""
+        import pyvista as pv
+        
         for actor in self.box_actors: self.plotter.remove_actor(actor)
         self.box_actors.clear()
 
@@ -218,19 +248,26 @@ class PyVistaCrystalBackend:
         if primitive_matrix is not None: _draw_slanted(primitive_matrix, "#33FF57")
 
     # ================= SPECIALIZED RECIPROCAL & MOIRÉ RENDERERS =================
-    def draw_brillouin_zone(self, bz_points: np.ndarray, bz_simplices: np.ndarray, solid: bool = True):
+    def draw_brillouin_zone(self, bz_points: np.ndarray, bz_simplices: np.ndarray, style_idx: int = 0):
         """Renders 3D Wigner-Seitz reciprocal cell and reciprocal axis vectors."""
+        import pyvista as pv
+        import numpy as np
+        
         for actor in self.bz_actors: self.plotter.remove_actor(actor)
         self.bz_actors.clear()
 
         faces_pv = np.column_stack((np.full(len(bz_simplices), 3), bz_simplices)).flatten()
         bz_mesh = pv.PolyData(bz_points, faces_pv)
 
-        if solid:
+        is_solid = style_idx in [0, 2]
+        is_frame = style_idx in [1, 2]
+
+        if is_solid:
             actor = self.plotter.add_mesh(bz_mesh, color="#FF00FF", opacity=0.25, show_edges=True, edge_color="white", line_width=2, render=False)
-        else:
+            self.bz_actors.append(actor)
+        if is_frame:
             actor = self.plotter.add_mesh(bz_mesh, style="wireframe", color="#FF00FF", line_width=3, render=False)
-        self.bz_actors.append(actor)
+            self.bz_actors.append(actor)
 
         origin = np.zeros(3)
         arrow_scale = np.max(bz_points) * 1.25
@@ -239,6 +276,29 @@ class PyVistaCrystalBackend:
             a_act = self.plotter.add_mesh(arrow, color=color, render=False)
             l_act = self.plotter.add_point_labels([origin + vec * 1.15], [label], text_color=color, font_size=24, shape_opacity=0.0, show_points=False, render=False)
             self.bz_actors.extend([a_act, l_act])
+
+    def draw_surface_bz(self, base_plane, hover_plane, simplices, proj_lines):
+        """Draws the transparent base plane, the solid hover plane, and projection lines."""
+        import pyvista as pv
+        import numpy as np
+        
+        faces_pv = np.column_stack((np.full(len(simplices), 3), simplices)).flatten()
+        
+        # 1. Base Plane (intersecting the origin)
+        base_mesh = pv.PolyData(base_plane, faces_pv)
+        act1 = self.plotter.add_mesh(base_mesh, color="#00FFFF", opacity=0.15, show_edges=True, edge_color="gray", line_width=1, render=False)
+        self.bz_actors.append(act1)
+        
+        # 2. Hover Plane (offset)
+        hover_mesh = pv.PolyData(hover_plane, faces_pv)
+        act2 = self.plotter.add_mesh(hover_mesh, color="#00FFFF", opacity=0.6, show_edges=True, edge_color="white", line_width=3, render=False)
+        self.bz_actors.append(act2)
+        
+        # 3. Yellow Projection Lines
+        for p1, p2 in proj_lines:
+            line = pv.Line(p1, p2)
+            act_line = self.plotter.add_mesh(line, color="yellow", line_width=2, render=False)
+            self.bz_actors.append(act_line)
 
     def draw_moire_envelope(self, m_moire: np.ndarray, z_min: float, z_max: float):
         """Renders a glowing golden bounding envelope around stacked 2D supercells."""
