@@ -1,10 +1,12 @@
 # TensorSpec Roadmap
-
+General Rule for the App
+- [] Always give option to work with GPU or CPU. With PyVista or MatplotLib. In any suite, detect what kind of machine is being used and use the right machinary.
+- [] 
 Grand App
 - Crystal viewer Suite
-	- [ ] **Refactor Architectural Modularity:** Decouple monolithic `crystal_viewer.py` into modular architecture (`core/crystallography.py`, `plotting/pyvista_engine.py`, `plotting/matplotlib_engine.py`, and `gui/crystal_tabs/`).
+	- [x] **Refactor Architectural Modularity:** Decouple monolithic `crystal_viewer.py` into modular architecture (`core/crystallography.py`, `plotting/pyvista_engine.py`, `plotting/matplotlib_engine.py`, and `gui/crystal_tabs/`).
 	- [x] File loader panel & "Draw" button.
-	- [ ] Define Miller indices for bounding the drawing. Define number of unit cells.
+	- [x] Define Miller indices for bounding the drawing. Define number of unit cells.
 	- [x] Draw atoms as spheres scaled to atomic radii.
 	- [x] Draw nearest-neighbor connecting sticks.
 	- [x] 3D Rotation and camera controls.
@@ -13,25 +15,42 @@ Grand App
 	- [x] Toggleable crystallographic a, b, c axes display mapped to bounding box.
 	- [x] Twisting Multilayer Tab
 	- [ ] Draw polyhedra/planes connecting atoms instead of just sticks (deletable).
-	- [ ] CDW Mode: Define atom shifts (dx, dy, dz) and propagate simulated distortions.
-	- [ ] Brillouin Zone Engine: Bulk BZ, Cleaving surface BZ, kz slicing, and surface termination projections.
-- DFT suite
-	- [ ] drawing from the structure from crystal viewer suite, it takes the input to perform bulk band structure calculation
-	- [ ] tight binding capability
-	- [ ] k.p capability
-	- [ ] DFT capability
+	- [x] CDW Mode: Define atom shifts (dx, dy, dz) and propagate simulated distortions.
+	- [x] Brillouin Zone Engine: Bulk BZ, Cleaving surface BZ, kz slicing, and surface termination projections. (Completed: Tab 4 is fully operational, generating the Wigner-Seitz cell, the hovering surface plane, and exporting them natively.)
+- DFT Suite
+	- [x] Establish Data Pipeline: Pull crystal structure from `workspace.py` (drawn from Crystal Viewer Suite) to perform bulk band structure calculations.
+	- [ ] Core Math: High-Symmetry K-Path Generator (calculate k-points between high symmetry nodes like Gamma, M, K).
+	- [ ] Core Math: Pull exact Wigner-Seitz BZ nodes (Gamma, M, K, etc.) directly from Tab 4 of the Crystal Suite via global_workspace to define arbitrary 3D k-paths.
+	- [x] Toy Tight Binding (TB) Engine: Built-in simple models (1D chain, 2D square lattice, 2D honeycomb/graphene) to test the solver and plotting.
+	- [x] Generalized TB Capability: UI to define custom hopping parameters and on-site energies.Engine dynamically scales Slater-Koster integrals using Harrison's rules and auto-detects materials via database.
+	- [x] Multi-Orbital Projection: Calculate eigenvector probabilities for atomic character mapping (Fat Bands).
+	- [ ] k.p Perturbation Capability: Near-band-edge models (e.g., Dirac cone effective mass).
+	- [ ] Full DFT Capability: Wrappers to trigger/parse external solvers.
 		- [ ] PBE
 		- [ ] GGA
 		- [ ] HSE
-		- [ ] ???
-	- [ ] drawing from the structure from crystal suite, it creates the slab for slab calculation
-		- [ ] PBE
-		- [ ] GGA
-		- [ ] HSE
-		- ???
-	- [ ] drawing from the structure from crystal suite, it creates the semi infinite structure for green function calculation
-		- [ ] it can define which termination to stop so we know which band belongs to the surface
+	- [ ] Slab creation for surface slab calculations (drawn from the structure from the crystal suite).
+	- [ ] Semi-infinite structure setup for Green's function calculation (drawn from the crystal suite).
+		- [ ] Define which termination to stop at so we know which band belongs to the surface.
 - ARPES Suite
+	- [x] Matrix Element Simulator: a stand alone GUI to simulate the heatmap of the intensity given various Matrix element source
+		- [x] Connect engine to `workspace.py` to dynamically pull crystal basis from loaded CIFs.
+        - [x] Integrate orbital eigenvectors from `dft_engine.py` to calculate dipole transitions for specific initial states (s, p, d orbitals).
+        - [x] Overlay the Matrix Element heatmap as an intensity mask over simulated Band Structures (E vs k) from the DFT suite.
+		- [x] Draw the setup to simulate sample in manipulator position (Z is vertical manipulator, Y is forward, X is side way)
+		- [x] Draw ability to rotate sample, theta is defined by rotating with Z as axis or rotation
+		- [x] Draw rotation of sample, beta is defined as tilting the sample attach to the sample coordinate not the manipulator
+		- [x] Draw rotation of sample, azimuth as azimuthal rotation of the sample
+		- [x] Draw the slit orientation and ability to rotate the slit direction. the slit acceptance angle is 30 degree in total
+		- [x] Draw the beam direction, ability to rotate the beam incident angle, and define the beam polarizations LH,LV,CP,CM
+ 		- [x] Geometric Matrix Element as defined by Moser's paper
+		- [x] Matrix element from the structure factor
+		- [ ] Advanced Final State Physics: Surface refraction (Fresnel equations) for grazing incidence.
+		- [ ] Advanced Final State Physics: Photon energy ($h\nu$), inner potential ($V_0$), and Work Function variables.
+		- [ ] Advanced Final State Physics: Atomic photoionization cross-sections (e.g., Yeh-Lindau).
+		- [ ] Advanced Final State Physics: Time-reversed LEED state phase shifts (vs. plane wave).
+		- [ ] Spin-Orbit Coupling (SOC): 2N x 2N Hamiltonian expansion and Circular Dichroism (CD-AD).
+        - [x] Standalone Kinematics Engine: Convert experimental angles/energies to $k_{||}$ and $k_z$, including SX-ARPES photon momentum corrections.
 	- [ ] data loader from various beamline
 		- [ ] MAESTRO
 		- [ ] i05 Diamond

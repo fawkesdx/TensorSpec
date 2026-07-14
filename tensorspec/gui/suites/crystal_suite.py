@@ -10,6 +10,7 @@ from pymatgen.core import Structure
 
 # Clean modular imports from our established architecture
 from tensorspec.core.crystallography import CrystalEngine
+from tensorspec.core.workspace import global_workspace
 import platform
 
 # --- SMART ENGINE ROUTER ---
@@ -102,12 +103,29 @@ class CrystalViewerSuite(QWidget):
         splitter = QSplitter(Qt.Horizontal)
         main_layout.addWidget(splitter)
 
-        # 1. Left Control Panel (Tabs)
+        #1. Left Control Panel (Tabs)
+        left_container = QWidget()
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.tabs = QTabWidget()
         self.tabs.setMinimumWidth(340)
-        splitter.addWidget(self.tabs)
+        left_layout.addWidget(self.tabs)
         
-        self.init_tab_view_edit()
+        # --- NEW: Push to Workspace Button ---
+        self.btn_push_workspace = QPushButton("📥 Push Structure to Central Workspace")
+        self.btn_push_workspace.setStyleSheet("background-color: #5cb85c; color: white; font-weight: bold; padding: 10px;")
+        self.btn_push_workspace.clicked.connect(self.push_current_to_workspace)
+        left_layout.addWidget(self.btn_push_workspace)
+        
+        splitter.addWidget(left_container)
+        
+        # --- NEW: Import and Mount Modular Tab 1 ---
+        from tensorspec.gui.crystal_tabs.tab_view import TabViewEdit
+        self.tab_view = TabViewEdit(self)
+        self.tabs.addTab(self.tab_view, "1. View & Edit")
+        
+        # Keep the rest initialized locally for now until we move them
         self.init_tab_cdw()
         self.init_tab_heterostructure()
         self.init_tab_bz()
@@ -123,6 +141,9 @@ class CrystalViewerSuite(QWidget):
         
         self.viewer_stack.addWidget(self.renderer_cpu.plotter) # Index 0: Matplotlib
         self.viewer_stack.addWidget(self.renderer_gpu.plotter) # Index 1: PyVista
+        
+        # Hook the camera sync to mouse release
+        self.renderer_gpu.plotter.iren.add_observer("EndInteractionEvent", self.tab_view.sync_ui_to_camera)
         splitter.addWidget(self.viewer_stack)
         
         # Auto-detect default based on hardware, but allow manual switching
@@ -135,292 +156,8 @@ class CrystalViewerSuite(QWidget):
         
         splitter.setSizes([380, 820])
 
-    # ================= TAB 1: VIEW & EDIT =================
-    def init_tab_view_edit(self):
-        tab = QWidget()
-        main_tab_layout = QVBoxLayout(tab)
-        main_tab_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Wrap everything in a scroll area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        
-        container = QWidget()
-        layout = QVBoxLayout(container) # ALL your existing UI groups go into this layout now
-        
-        self.btn_load = QPushButton("📂 Load CIF File")
-        self.btn_load.clicked.connect(self.handle_load_cif)
-        layout.addWidget(self.btn_load)
-        
-        self.lbl_file = QLabel("No file loaded"); self.lbl_file.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.lbl_file)
-        
-        # --- RESTORED: Space Group Label ---
-        self.lbl_sym = QLabel("Space Group: N/A")
-        self.lbl_sym.setStyleSheet("color: #aaaaaa; font-style: italic;")
-        layout.addWidget(self.lbl_sym)
 
-        # --- RESTORED: Manual Backend Switcher ---
-        layout.addWidget(QLabel("Graphics Backend:"))
-        self.combo_backend = QComboBox()
-        self.combo_backend.addItems(["CPU Safe Mode (Matplotlib)", "GPU Fast Mode (PyVista)"])
-        self.combo_backend.setCurrentIndex(0 if is_legacy_mac else 1)
-        self.combo_backend.currentIndexChanged.connect(self.switch_backend)
-        layout.addWidget(self.combo_backend)
-
-        # 1. Geometry & Scaling
-        from PySide6.QtWidgets import QRadioButton, QButtonGroup
-        group_geom = QGroupBox("Geometry & Scaling")
-        geom_layout = QVBoxLayout(group_geom)
-        
-        self.radio_conv = QRadioButton("Conventional Basis")
-        self.radio_prim = QRadioButton("Primitive Basis")
-        self.radio_conv.setChecked(True)
-        self.radio_conv.toggled.connect(self.handle_draw)
-        basis_layout = QHBoxLayout()
-        basis_layout.addWidget(self.radio_conv); basis_layout.addWidget(self.radio_prim)
-        geom_layout.addLayout(basis_layout)
-        
-        sc_layout = QHBoxLayout()
-        sc_layout.addWidget(QLabel("Supercell (X,Y,Z):"))
-        self.spin_scx = QSpinBox(); self.spin_scx.setValue(1); self.spin_scx.setRange(1, 20)
-        self.spin_scy = QSpinBox(); self.spin_scy.setValue(1); self.spin_scy.setRange(1, 20)
-        self.spin_scz = QSpinBox(); self.spin_scz.setValue(1); self.spin_scz.setRange(1, 20)
-        sc_layout.addWidget(self.spin_scx); sc_layout.addWidget(self.spin_scy); sc_layout.addWidget(self.spin_scz)
-        geom_layout.addLayout(sc_layout)
-
-        scale_layout = QHBoxLayout()
-        scale_layout.addWidget(QLabel("Atom Radius Scale:"))
-        self.spin_radius = QDoubleSpinBox(); self.spin_radius.setRange(0.1, 3.0); self.spin_radius.setValue(0.5); self.spin_radius.setSingleStep(0.1)
-        scale_layout.addWidget(self.spin_radius)
-        scale_layout.addWidget(QLabel("Bond Thick:"))
-        self.spin_bond_thick = QDoubleSpinBox(); self.spin_bond_thick.setRange(0.01, 1.0); self.spin_bond_thick.setValue(0.10); self.spin_bond_thick.setSingleStep(0.02)
-        scale_layout.addWidget(self.spin_bond_thick)
-        geom_layout.addLayout(scale_layout)
-        layout.addWidget(group_geom)
-
-        # 2. Styles & Rendering
-        group_render = QGroupBox("Styles & Rendering")
-        render_layout = QVBoxLayout(group_render)
-        
-        style_layout = QHBoxLayout()
-        style_layout.addWidget(QLabel("Connections:"))
-        self.combo_style = QComboBox()
-        self.combo_style.addItems(["Bonds (Sticks)", "Polyhedra (Planes)", "None"])
-        self.combo_style.currentIndexChanged.connect(self.refresh_render)
-        style_layout.addWidget(self.combo_style)
-        style_layout.addWidget(QLabel("Bond Thresh:"))
-        self.spin_bond_thresh = QDoubleSpinBox(); self.spin_bond_thresh.setRange(0.1, 5.0); self.spin_bond_thresh.setValue(1.15)
-        style_layout.addWidget(self.spin_bond_thresh)
-        render_layout.addLayout(style_layout)
-
-        chk_layout = QHBoxLayout()
-        self.chk_shiny = QCheckBox("PBR Shiny"); self.chk_shiny.stateChanged.connect(self.refresh_render)
-        self.chk_axes = QCheckBox("Show Axes"); self.chk_axes.setChecked(True); self.chk_axes.stateChanged.connect(self.refresh_render)
-        self.chk_show_conventional = QCheckBox("Show Conv. Box"); self.chk_show_conventional.setChecked(True); self.chk_show_conventional.stateChanged.connect(self.refresh_render)
-        self.chk_show_primitive = QCheckBox("Show Prim. Box"); self.chk_show_primitive.stateChanged.connect(self.refresh_render)
-        chk_layout.addWidget(self.chk_shiny); chk_layout.addWidget(self.chk_axes); chk_layout.addWidget(self.chk_show_conventional); chk_layout.addWidget(self.chk_show_primitive)
-        render_layout.addLayout(chk_layout)
-        layout.addWidget(group_render)
-
-        # 3. Interactive Eraser
-        self.chk_edit_mode = QCheckBox("Enable Interactive Eraser Brush")
-        self.chk_edit_mode.setStyleSheet("color: #d9534f; font-weight: bold;")
-        self.chk_edit_mode.stateChanged.connect(self.toggle_edit_mode)
-        layout.addWidget(self.chk_edit_mode)
-
-        # 4. Dynamic Color Pickers
-        self.group_colors = QGroupBox("Dynamic Element Colors")
-        self.colors_layout = QGridLayout(self.group_colors)
-        layout.addWidget(self.group_colors)
-
-        # 5. Camera & Projection
-        self.group_camera = QGroupBox("Camera & Projection")
-        self.cam_layout = QVBoxLayout(self.group_camera)
-        
-        self.combo_projection = QComboBox()
-        self.combo_projection.addItems(["Perspective Projection", "Orthogonal Projection"])
-        self.combo_projection.currentIndexChanged.connect(self.handle_camera_update)
-        self.cam_layout.addWidget(self.combo_projection)
-        
-        quick_view_layout = QHBoxLayout()
-        quick_view_layout.addWidget(QLabel("Quick View:"))
-        for axis, label in [('x', '+a'), ('y', '+b'), ('z', '+c'), ('iso', '111')]:
-            btn = QPushButton(label)
-            btn.clicked.connect(lambda checked, a=axis: self.renderer.set_camera_preset(a) if hasattr(self.renderer, 'set_camera_preset') else None)
-            quick_view_layout.addWidget(btn)
-        self.cam_layout.addLayout(quick_view_layout)
-        
-        azel_layout = QHBoxLayout()
-        azel_layout.addWidget(QLabel("Azimuth:")); self.spin_azimuth = QDoubleSpinBox(); self.spin_azimuth.setRange(-360.0, 360.0); self.spin_azimuth.setSingleStep(5.0); azel_layout.addWidget(self.spin_azimuth)
-        azel_layout.addWidget(QLabel("Elevation:")); self.spin_elevation = QDoubleSpinBox(); self.spin_elevation.setRange(-90.0, 90.0); self.spin_elevation.setSingleStep(5.0); azel_layout.addWidget(self.spin_elevation)
-        self.cam_layout.addLayout(azel_layout)
-        layout.addWidget(self.group_camera)
-
-        # 6. Crystallography Tools
-        self.group_cryst = QGroupBox("Crystallography Tools")
-        self.cryst_layout = QVBoxLayout(self.group_cryst)
-        
-        hkl_layout = QHBoxLayout()
-        hkl_layout.addWidget(QLabel("View [h k l]:"))
-        self.spin_h = QDoubleSpinBox(); self.spin_h.setRange(-10, 10); self.spin_k = QDoubleSpinBox(); self.spin_k.setRange(-10, 10); self.spin_l = QDoubleSpinBox(); self.spin_l.setRange(-10, 10)
-        hkl_layout.addWidget(self.spin_h); hkl_layout.addWidget(self.spin_k); hkl_layout.addWidget(self.spin_l)
-        self.btn_align_hkl = QPushButton("Align"); self.btn_align_hkl.clicked.connect(self.align_to_hkl)
-        hkl_layout.addWidget(self.btn_align_hkl)
-        self.cryst_layout.addLayout(hkl_layout)
-
-        plane_layout = QHBoxLayout()
-        self.chk_show_plane = QCheckBox("Show Cut Plane"); plane_layout.addWidget(self.chk_show_plane)
-        self.combo_plane_color = QComboBox(); self.combo_plane_color.addItems(["cyan", "magenta", "yellow", "white", "gray"]); plane_layout.addWidget(self.combo_plane_color)
-        self.combo_plane_orient = QComboBox(); self.combo_plane_orient.addItems(["Lock to Camera", "Lock to [h k l]"]); plane_layout.addWidget(self.combo_plane_orient)
-        self.cryst_layout.addLayout(plane_layout)
-        
-        depth_layout = QHBoxLayout()
-        depth_layout.addWidget(QLabel("Depth:")); self.slider_plane_depth = QSlider(Qt.Horizontal); self.slider_plane_depth.setRange(-100, 100); self.slider_plane_depth.setValue(0)
-        depth_layout.addWidget(self.slider_plane_depth)
-        self.cryst_layout.addLayout(depth_layout)
-        layout.addWidget(self.group_cryst)
-
-        # 7. Export Elements
-        self.group_export = QGroupBox("Export Elements")
-        exp_layout = QVBoxLayout(self.group_export)
-        chk_layout = QHBoxLayout()
-        self.chk_exp_atoms = QCheckBox("Atoms/Bonds"); self.chk_exp_atoms.setChecked(True)
-        self.chk_exp_cell = QCheckBox("Unit Cell"); self.chk_exp_cell.setChecked(True)
-        self.chk_exp_bz = QCheckBox("Brillouin Zone"); self.chk_exp_bz.setChecked(True)
-        chk_layout.addWidget(self.chk_exp_atoms); chk_layout.addWidget(self.chk_exp_cell); chk_layout.addWidget(self.chk_exp_bz)
-        exp_layout.addLayout(chk_layout)
-        
-        btn_layout = QHBoxLayout()
-        self.btn_export_max = QPushButton("Export 3ds Max"); self.btn_export_max.setStyleSheet("background-color: #0F6A8B; color: white; font-weight: bold;"); self.btn_export_max.clicked.connect(self.export_scripts)
-        self.btn_export_blend = QPushButton("Export Blender"); self.btn_export_blend.setStyleSheet("background-color: #E87D0D; color: white; font-weight: bold;"); self.btn_export_blend.clicked.connect(self.export_scripts)
-        btn_layout.addWidget(self.btn_export_max); btn_layout.addWidget(self.btn_export_blend)
-        exp_layout.addLayout(btn_layout)
-        layout.addWidget(self.group_export)
-
-        # 8. Action Buttons
-        self.btn_draw = QPushButton("🎨 Render Structure")
-        self.btn_draw.setStyleSheet("background-color: #2b5c8f; color: white; font-weight: bold; padding: 6px;")
-        self.btn_draw.clicked.connect(self.handle_draw)
-        layout.addWidget(self.btn_draw)
-
-        self.btn_save = QPushButton("📸 Save High-Res Image")
-        self.btn_save.setStyleSheet("background-color: #28a745; color: white; font-weight: bold; padding: 6px;")
-        self.btn_save.clicked.connect(self.save_image)
-        layout.addWidget(self.btn_save)
-
-        layout.addStretch()
-        # Cap off the scroll container and add it to the tab
-        scroll.setWidget(container)
-        main_tab_layout.addWidget(scroll)
-        self.tabs.addTab(tab, "1. View & Edit")
-
-    # --- RESTORED LOGIC METHODS ---
-    def switch_backend(self, index):
-        """Swaps the active rendering engine with a safety warning for old hardware."""
-        # 1. Guardrail for older hardware
-        if index == 1 and is_legacy_mac:
-            reply = QMessageBox.warning(
-                self, "Hardware Warning", 
-                "Your older MacBook (Intel/OCLP) does not support the modern Metal drivers required for PyVista.\n\nSwitching to GPU Fast Mode will likely cause a segmentation fault and crash the application instantly.\n\nDo you still want to proceed?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No
-            )
-            
-            if reply == QMessageBox.StandardButton.No:
-                # Silently revert the dropdown back to Matplotlib without triggering an infinite loop
-                self.combo_backend.blockSignals(True)
-                self.combo_backend.setCurrentIndex(0)
-                self.combo_backend.blockSignals(False)
-                return
-
-        # 2. Proceed with the switch if it's safe (or if you forced it!)
-        self.viewer_stack.setCurrentIndex(index)
-        self.renderer = self.renderer_cpu if index == 0 else self.renderer_gpu
-        self.handle_draw()
-
-    def handle_camera_update(self):
-        """Passes camera alignment requests to the active rendering backend."""
-        if self.combo_projection.currentIndex() == 1:
-            if hasattr(self.renderer.plotter, 'camera'):
-                self.renderer.plotter.camera.enable_parallel_projection()
-        else:
-            if hasattr(self.renderer.plotter, 'camera'):
-                self.renderer.plotter.camera.disable_parallel_projection()
-        
-        if hasattr(self.renderer, 'plotter') and hasattr(self.renderer.plotter, 'render'):
-            self.renderer.plotter.render()
-        elif hasattr(self.renderer, 'canvas'):
-            self.renderer.canvas.draw_idle()
-
-    def toggle_edit_mode(self, *args):
-        is_erasing = self.chk_edit_mode.isChecked()
-        if hasattr(self.renderer, 'plotter'):
-            if is_erasing:
-                if hasattr(self.renderer.plotter, 'enable_trackball_actor_style'):
-                    self.renderer.plotter.enable_trackball_actor_style()
-                QMessageBox.information(self, "Eraser Mode", "Left-click and drag to delete atoms/bonds. Right-click to exit.")
-            else:
-                if hasattr(self.renderer.plotter, 'enable_trackball_style'):
-                    self.renderer.plotter.enable_trackball_style()
-
-    def save_image(self):
-        fname, _ = QFileDialog.getSaveFileName(self, "Save Image", "", "PNG Files (*.png)")
-        if not fname: return
-        
-        if hasattr(self.renderer, 'plotter') and hasattr(self.renderer.plotter, 'screenshot'):
-            self.renderer.plotter.screenshot(fname, transparent_background=True, window_size=[3840, 2160])
-        elif hasattr(self.renderer, 'figure'):
-            self.renderer.figure.savefig(fname, dpi=600, bbox_inches='tight', transparent=True)
-            
-        QMessageBox.information(self, "Saved", f"High resolution image saved to:\n{fname}")
-
-    def export_scripts(self):
-        if not getattr(self, 'active_supercell', None):
-            QMessageBox.warning(self, "Export Error", "Please draw a structure first!")
-            return
-            
-        sender = self.sender()
-        software = "3ds Max" if sender == self.btn_export_max else "Blender"
-        file_path, _ = QFileDialog.getSaveFileName(self, f"Export {software} Script", "", "Python Files (*.py)")
-        
-        if not file_path: return
-
-        import numpy as np
-        from tensorspec.core.io.exporters import SceneExporter
-        from tensorspec.core.crystallography import CrystalEngine
-
-        atoms_data, bonds_data, lattice_data = [], [], []
-        bz_solid_data = None
-
-        if self.chk_exp_atoms.isChecked():
-            scale_mod = self.spin_radius.value()
-            for i, site in enumerate(self.active_supercell):
-                if i in self.erased_atoms: continue
-                radius = float((site.specie.atomic_radius if site.specie.atomic_radius else 1.0) * scale_mod)
-                color = self.active_colors.get(site.specie.symbol, "#008080")
-                atoms_data.append((float(site.coords[0]), float(site.coords[1]), float(site.coords[2]), radius, color))
-
-        if self.chk_exp_cell.isChecked() and getattr(self, 'current_structure', None):
-            def get_edges(matrix, color):
-                a, b, c = matrix[0], matrix[1], matrix[2]
-                v = np.zeros((8, 3))
-                v[1], v[2], v[3] = a, b, c; v[4], v[5], v[6], v[7] = a + b, a + c, b + c, a + b + c
-                edges = [(0, 1), (0, 2), (0, 3), (1, 4), (1, 5), (2, 4), (2, 6), (3, 5), (3, 6), (4, 7), (5, 7), (6, 7)]
-                for p1, p2 in edges:
-                    lattice_data.append((float(v[p1][0]), float(v[p1][1]), float(v[p1][2]), float(v[p2][0]), float(v[p2][1]), float(v[p2][2]), color))
-
-            if self.chk_show_conventional.isChecked():
-                get_edges(self.current_structure.lattice.matrix, "#FF5733")
-
-        if software == "3ds Max":
-            SceneExporter.export_3dsmax(file_path, atoms_data, bonds_data, lattice_data, bz_solid_data)
-        else:
-            SceneExporter.export_blender(file_path, atoms_data, bonds_data, lattice_data, bz_solid_data)
-            
-        QMessageBox.information(self, "Export Complete", f"Successfully saved {software} script!")
-
+    
     # ================= TAB 2: CDW MODULATOR =================
     def init_tab_cdw(self):
         tab = QWidget()
@@ -472,8 +209,24 @@ class CrystalViewerSuite(QWidget):
         
         tpl_group = QGroupBox("2D Material Templates")
         tpl_layout = QVBoxLayout(tpl_group)
+        
+        self.btn_add_layer = QPushButton("📂 Load 2D Monolayer CIF")
+        self.btn_add_layer.setStyleSheet("background-color: #5cb85c; color: white; font-weight: bold; padding: 5px; border-radius: 4px;")
+        self.btn_add_layer.clicked.connect(self.load_cif_layer)
+        tpl_layout.addWidget(self.btn_add_layer)
+        
         self.combo_tpl = QComboBox()
-        self.combo_tpl.addItems(["Graphene (Monolayer)", "Graphene (AB Bilayer)", "TaIrTe4 (1T')", "MoS2", "h-BN"])
+        base_templates = ["Graphene (Monolayer)", "Graphene (AB Bilayer)", "TaIrTe4 (1T')", "MoS2", "h-BN"]
+        if os.path.exists("user_templates.json"):
+            try:
+                import json
+                with open("user_templates.json", "r") as f:
+                    custom_templates = json.load(f)
+                    base_templates.extend(list(custom_templates.keys()))
+            except Exception:
+                pass
+                
+        self.combo_tpl.addItems(base_templates)
         tpl_layout.addWidget(self.combo_tpl)
         
         btn_add_tpl = QPushButton("➕ Add Template Sheet")
@@ -481,7 +234,7 @@ class CrystalViewerSuite(QWidget):
         tpl_layout.addWidget(btn_add_tpl)
         layout.addWidget(tpl_group)
 
-        # --- RESTORED: Bulk Exfoliator ---
+        # --- RESTORED: Bulk Exfoliator with Dynamic HKL UI ---
         exf_group = QGroupBox("Bulk Exfoliator")
         exf_layout = QVBoxLayout(exf_group)
 
@@ -492,6 +245,26 @@ class CrystalViewerSuite(QWidget):
             "Manual [h k l] Miller Index Cleavage"
         ])
         exf_layout.addWidget(self.combo_exfoliate_mode)
+        
+        # Embedded HKL Inputs
+        self.hkl_widget = QWidget()
+        hkl_layout = QHBoxLayout(self.hkl_widget)
+        hkl_layout.setContentsMargins(0, 0, 0, 0)
+        hkl_layout.addWidget(QLabel("Layers:"))
+        self.spin_exf_layers = QSpinBox(); self.spin_exf_layers.setRange(1, 10); self.spin_exf_layers.setValue(1)
+        hkl_layout.addWidget(self.spin_exf_layers)
+        hkl_layout.addWidget(QLabel("Plane [h k l]:"))
+        self.spin_exf_h = QSpinBox(); self.spin_exf_h.setRange(-10, 10); self.spin_exf_h.setValue(0)
+        self.spin_exf_k = QSpinBox(); self.spin_exf_k.setRange(-10, 10); self.spin_exf_k.setValue(0)
+        self.spin_exf_l = QSpinBox(); self.spin_exf_l.setRange(-10, 10); self.spin_exf_l.setValue(1)
+        hkl_layout.addWidget(self.spin_exf_h); hkl_layout.addWidget(self.spin_exf_k); hkl_layout.addWidget(self.spin_exf_l)
+        exf_layout.addWidget(self.hkl_widget)
+        
+        # Hide by default, show when Manual is selected
+        self.hkl_widget.setVisible(False)
+        self.combo_exfoliate_mode.currentTextChanged.connect(
+            lambda text: self.hkl_widget.setVisible("Manual" in text)
+        )
 
         self.btn_extract_bulk = QPushButton("✂️ Extract Monolayer from Bulk CIF")
         self.btn_extract_bulk.setStyleSheet("background-color: #f0ad4e; color: black; font-weight: bold; padding: 5px;")
@@ -499,7 +272,6 @@ class CrystalViewerSuite(QWidget):
         exf_layout.addWidget(self.btn_extract_bulk)
         layout.addWidget(exf_group)
 
-        # Dynamic Scroll Area for Layer Controls
         self.scroll_area = QScrollArea(); self.scroll_area.setWidgetResizable(True)
         self.scroll_container = QWidget(); self.scroll_layout = QVBoxLayout(self.scroll_container)
         self.scroll_layout.setAlignment(Qt.AlignTop)
@@ -528,7 +300,43 @@ class CrystalViewerSuite(QWidget):
         layout = QVBoxLayout(tab)
         layout.addWidget(QLabel("<b>Reciprocal Space (Wigner-Seitz Cell)</b>"))
         
-        btn_bz = QPushButton("🛑 Render 1st Brillouin Zone")
+        self.chk_overlay_atoms = QCheckBox("Overlay Real-Space Crystal Structure")
+        self.chk_overlay_atoms.setStyleSheet("font-weight: bold; color: #d9534f;")
+        self.chk_overlay_atoms.setChecked(True)
+        layout.addWidget(self.chk_overlay_atoms)
+        
+        scale_layout = QHBoxLayout()
+        scale_layout.addWidget(QLabel("BZ Visual Scale:"))
+        self.spin_bz_scale = QDoubleSpinBox()
+        self.spin_bz_scale.setRange(0.1, 10.0); self.spin_bz_scale.setValue(1.0); self.spin_bz_scale.setSingleStep(0.1)
+        scale_layout.addWidget(self.spin_bz_scale)
+        layout.addLayout(scale_layout)
+        
+        # --- NEW: Skeleton vs Solid Control ---
+        style_layout = QHBoxLayout()
+        style_layout.addWidget(QLabel("Render Style:"))
+        self.combo_bz_style = QComboBox()
+        self.combo_bz_style.addItems(["Solid Faces", "Skeleton (Cylinder Frame)", "Both Solid & Skeleton"])
+        style_layout.addWidget(self.combo_bz_style)
+        layout.addLayout(style_layout)
+        
+        # --- NEW: Surface Projection Controls ---
+        group_surf = QGroupBox("Projected Surface BZ")
+        surf_layout = QVBoxLayout(group_surf)
+        self.chk_surf_bz = QCheckBox("Enable Surface Projection")
+        self.chk_surf_bz.setStyleSheet("font-weight: bold; color: #0F6A8B;")
+        surf_layout.addWidget(self.chk_surf_bz)
+        
+        hkl_layout = QHBoxLayout()
+        hkl_layout.addWidget(QLabel("Plane [h k l]:"))
+        self.spin_bz_h = QSpinBox(); self.spin_bz_h.setRange(-10, 10); self.spin_bz_h.setValue(0)
+        self.spin_bz_k = QSpinBox(); self.spin_bz_k.setRange(-10, 10); self.spin_bz_k.setValue(0)
+        self.spin_bz_l = QSpinBox(); self.spin_bz_l.setRange(-10, 10); self.spin_bz_l.setValue(1)
+        hkl_layout.addWidget(self.spin_bz_h); hkl_layout.addWidget(self.spin_bz_k); hkl_layout.addWidget(self.spin_bz_l)
+        surf_layout.addLayout(hkl_layout)
+        layout.addWidget(group_surf)
+        
+        btn_bz = QPushButton("🛑 Render Brillouin Zone")
         btn_bz.setStyleSheet("background-color: #8A2BE2; color: white; font-weight: bold; padding: 6px;")
         btn_bz.clicked.connect(self.handle_draw_bz)
         layout.addWidget(btn_bz)
@@ -536,245 +344,87 @@ class CrystalViewerSuite(QWidget):
         layout.addStretch()
         self.tabs.addTab(tab, "4. Brillouin Zone")
 
-    # ================= LOGIC AND EVENT CONTROLLERS =================
-    def align_to_hkl(self):
-        """Calculates the physical Cartesian vector from Miller Indices and snaps the camera."""
-        if not getattr(self, 'current_structure', None): return
-        h, k, l = self.spin_h.value(), self.spin_k.value(), self.spin_l.value()
-        if h == 0 and k == 0 and l == 0: return
-        
-        import numpy as np
-        recip_matrix = self.current_structure.lattice.reciprocal_lattice.matrix
-        cart_vec = h * recip_matrix[0] + k * recip_matrix[1] + l * recip_matrix[2]
-        
-        # Check specifically for a PyVista camera
-        if hasattr(self.renderer, 'plotter') and hasattr(self.renderer.plotter, 'camera'):
-            fp = np.array(self.renderer.plotter.camera.focal_point)
-            dist = self.renderer.plotter.camera.distance
-            norm_vec = cart_vec / np.linalg.norm(cart_vec)
-            self.renderer.plotter.camera.position = fp + norm_vec * dist
-            self.renderer.plotter.camera.up = (0, 0, 1)
-            self.renderer.plotter.render()
-            
-        # Check specifically for a Matplotlib axis
-        elif hasattr(self.renderer, 'ax'):
-            dist = np.linalg.norm(cart_vec)
-            az = np.degrees(np.arctan2(cart_vec[1], cart_vec[0]))
-            el = np.degrees(np.arcsin(cart_vec[2] / dist))
-            self.renderer.ax.view_init(elev=el, azim=az)
-            if hasattr(self.renderer, 'canvas'):
-                self.renderer.canvas.draw_idle()
+    # ================= LOGIC AND EVENT CONTROLLERS ================
 
-    def handle_camera_update(self):
-        """Passes camera alignment requests to the active rendering backend."""
-        # Note: We will implement the full HKL normal math in the core engine later,
-        # but this registers the button clicks safely for now.
-        if self.combo_projection.currentIndex() == 1:
-            if hasattr(self.renderer.plotter, 'camera'):
-                self.renderer.plotter.camera.enable_parallel_projection()
-        else:
-            if hasattr(self.renderer.plotter, 'camera'):
-                self.renderer.plotter.camera.disable_parallel_projection()
-        
-        if hasattr(self.renderer, 'plotter') and hasattr(self.renderer.plotter, 'render'):
-            self.renderer.plotter.render()
-        elif hasattr(self.renderer, 'canvas'):
-            self.renderer.canvas.draw_idle()
-
-    def export_scripts(self):
-        """Gathers crystal data and passes it to the external script formatting engine."""
-        if not getattr(self, 'active_supercell', None):
-            QMessageBox.warning(self, "Export Error", "Please draw a structure first!")
-            return
-            
-        sender = self.sender()
-        software = "3ds Max" if sender == self.btn_export_max else "Blender"
-        file_path, _ = QFileDialog.getSaveFileName(self, f"Export {software} Script", "", "Python Files (*.py)")
-        
-        if not file_path: return
-
-        import numpy as np
-        from tensorspec.core.io.exporters import SceneExporter
-        from tensorspec.core.crystallography import CrystalEngine
-
-        atoms_data, bonds_data, lattice_data = [], [], []
-        bz_solid_data = None
-
-        # 1. Gather Atoms & Bonds
-        if self.chk_exp_atoms.isChecked():
-            scale_mod = self.spin_radius.value()
-            for i, site in enumerate(self.active_supercell):
-                if i in self.erased_atoms: continue
-                radius = float((site.specie.atomic_radius if site.specie.atomic_radius else 1.0) * scale_mod)
-                color = self.active_colors.get(site.specie.symbol, "#008080")
-                atoms_data.append((float(site.coords[0]), float(site.coords[1]), float(site.coords[2]), radius, color))
-
-            # Gather bonds if stick style is active
-            if hasattr(self, 'combo_style') and self.combo_style.currentIndex() == 0:
-                cyl_radius = float(self.spin_bond_thick.value())
-                bond_color = self.active_colors.get("Bonds", "#FFFFFF")
-                coords = self.active_supercell.cart_coords
-                radii = np.array([s.specie.atomic_radius if s.specie.atomic_radius else 1.2 for s in self.active_supercell])
-                thresh = self.spin_bond_thresh.value()
-                
-                dist_mat = np.linalg.norm(coords[:, np.newaxis, :] - coords[np.newaxis, :, :], axis=-1)
-                threshold_mat = (radii[:, np.newaxis] + radii[np.newaxis, :]) * thresh
-                valid_pairs = np.triu((dist_mat > 0.5) & (dist_mat <= threshold_mat), k=1)
-                
-                for i, j in np.argwhere(valid_pairs):
-                    if (i, j) in self.erased_bonds or i in self.erased_atoms or j in self.erased_atoms:
-                        continue
-                    bonds_data.append((float(coords[i][0]), float(coords[i][1]), float(coords[i][2]), 
-                                       float(coords[j][0]), float(coords[j][1]), float(coords[j][2]), 
-                                       cyl_radius, bond_color))
-
-        # 2. Gather Unit Cell Wireframes
-        if self.chk_exp_cell.isChecked() and getattr(self, 'current_structure', None):
-            def get_edges(matrix, color):
-                a, b, c = matrix[0], matrix[1], matrix[2]
-                v = np.zeros((8, 3))
-                v[1], v[2], v[3] = a, b, c
-                v[4], v[5], v[6], v[7] = a + b, a + c, b + c, a + b + c
-                edges = [(0, 1), (0, 2), (0, 3), (1, 4), (1, 5), (2, 4), (2, 6), (3, 5), (3, 6), (4, 7), (5, 7), (6, 7)]
-                for p1, p2 in edges:
-                    lattice_data.append((float(v[p1][0]), float(v[p1][1]), float(v[p1][2]), 
-                                         float(v[p2][0]), float(v[p2][1]), float(v[p2][2]), color))
-
-            if self.chk_show_conventional.isChecked():
-                get_edges(self.current_structure.lattice.matrix, "#FF5733")
-            if self.chk_show_primitive.isChecked():
-                prim_matrix = CrystalEngine.get_universal_primitive_matrix(self.current_structure)
-                get_edges(prim_matrix, "#33FF57")
-
-        # 3. Gather Brillouin Zone Data
-        if self.chk_exp_bz.isChecked():
-            # Check if BZ has actually been calculated/rendered yet
-            if hasattr(self.renderer, 'bz_export_edges'):
-                for p1, p2 in self.renderer.bz_export_edges:
-                    lattice_data.append((float(p1[0]), float(p1[1]), float(p1[2]), 
-                                         float(p2[0]), float(p2[1]), float(p2[2]), "#FF00FF"))
-                
-                if self.chk_bz_solid.isChecked() and hasattr(self.renderer, 'bz_hull_pts'):
-                    bz_solid_data = {
-                        'verts': self.renderer.bz_hull_pts.tolist(),
-                        'faces': self.renderer.bz_hull_simplices.tolist()
-                    }
-
-        # 4. Route to external exporter engine
-        if software == "3ds Max":
-            SceneExporter.export_3dsmax(file_path, atoms_data, bonds_data, lattice_data, bz_solid_data)
-        else:
-            SceneExporter.export_blender(file_path, atoms_data, bonds_data, lattice_data, bz_solid_data)
-            
-        print(f"✅ Extracted scene data successfully exported to {file_path}")
-        QMessageBox.information(self, "Export Complete", f"Successfully saved {software} script!")
-
-    def handle_load_cif(self):
-        fname, _ = QFileDialog.getOpenFileName(self, 'Open CIF', '', "CIF files (*.cif)")
-        if not fname: return
-        try:
-            self.current_structure = Structure.from_file(fname)
-            self.lbl_file.setText(fname.split('/')[-1])
-            
-            # Delegate math to core
-            sym_info = CrystalEngine.get_symmetry_info(self.current_structure)
-            self.lbl_sym.setText(f"Space Group: {sym_info['spacegroup']} | V_conv = {sym_info['volume_ratio']}× V_prim")
-            
-            # Update UI color controls
-            unique_els = sorted(list(set([s.specie.symbol for s in self.current_structure])))
-            self.build_color_panel(unique_els)
-            
-            self.combo_cdw_el.clear()
-            self.combo_cdw_el.addItem("All Elements")
-            self.combo_cdw_el.addItems(unique_els)
-            
-            # Push reference to global workspace if manager exists
-            if self.workspace:
-                self.workspace[fname.split('/')[-1]] = {"type": "Structure", "data": self.current_structure}
-        except Exception as e:
-            QMessageBox.critical(self, "Load Error", f"Failed to parse CIF: {e}")
-
-    def build_color_panel(self, elements: list):
-        """Rebuilds color pickers dynamically when a new crystal is loaded."""
-        while self.colors_layout.count():
-            item = self.colors_layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-
-        for idx, el in enumerate(elements + ["Bonds"]):
-            color = self.active_colors.get(el, "#008080")
-            lbl = QLabel(f"{el}:")
-            btn = QPushButton()
-            btn.setStyleSheet(f"background-color: {color}; border: 1px solid white;")
-            btn.clicked.connect(lambda checked, key=el, b=btn: self.pick_color(key, b))
-            self.colors_layout.addWidget(lbl, idx, 0)
-            self.colors_layout.addWidget(btn, idx, 1)
-
-    def pick_color(self, key: str, button: QPushButton):
-        color = QColorDialog.getColor()
-        if color.isValid():
-            hex_str = color.name()
-            self.active_colors[key] = hex_str
-            button.setStyleSheet(f"background-color: {hex_str}; border: 1px solid white;")
-            self.refresh_render()
-
-    def handle_draw(self):
-        if not self.current_structure: return
-        # Generate base supercell
-        self.active_supercell = self.current_structure * (self.spin_scx.value(), self.spin_scy.value(), self.spin_scz.value())
-        self.refresh_render()
-        self.renderer.set_camera_preset('iso')
+    
 
     def refresh_render(self):
         """Routes structure state through core math transformations, then pushes to PyVista."""
         if not self.active_supercell: return
         
-        # 1. Apply CDW math if enabled
         render_struct = self.active_supercell.copy()
         if getattr(self, 'chk_cdw', None) and self.chk_cdw.isChecked():
             import numpy as np
             q_vec = (self.spin_qx.value(), self.spin_qy.value(), self.spin_qz.value())
             amp_vec = (self.spin_ax.value(), self.spin_ay.value(), self.spin_az.value())
-            
-            # Grab phase if it exists, default to 0 if not
             phase_rad = np.radians(self.spin_cdw_phase.value()) if hasattr(self, 'spin_cdw_phase') else 0.0
-            
-            render_struct = CrystalEngine.apply_cdw_distortion(
-                render_struct, 
-                self.combo_cdw_el.currentText(), 
-                q_vec, 
-                amp_vec, 
-                phase_rad
-            )
+            render_struct = CrystalEngine.apply_cdw_distortion(render_struct, self.combo_cdw_el.currentText(), q_vec, amp_vec, phase_rad)
 
-        # 2. Push hardware rendering pipeline
         self.renderer.clear_scene()
-        is_shiny = self.chk_shiny.isChecked()
-        scale = self.spin_radius.value()
         
-        self.renderer.draw_atoms(render_struct, self.active_colors, scale_mod=scale, is_shiny=is_shiny)
-        self.renderer.draw_bonds(render_struct, self.active_colors, is_shiny=is_shiny)
+        # Point to the variables inside the new tab_view
+        is_shiny = self.tab_view.chk_shiny.isChecked()
+        scale = self.tab_view.spin_radius.value()
         
-        # 3. Handle Lattice Boxes & Axes with the split Conventional/Primitive logic
+        style = self.tab_view.combo_style.currentIndex()
+        
+        # Pass the erased_atoms list to the renderer so it knows what to hide!
+        self.renderer.draw_atoms(render_struct, self.active_colors, scale_mod=scale, is_shiny=is_shiny, erased_atoms=self.erased_atoms)
+        
+        if style == 0:
+            # Bonds need to know about erased bonds AND erased atoms (so hanging bonds are hidden)
+            self.renderer.draw_bonds(render_struct, self.active_colors, is_shiny=is_shiny, erased_bonds=self.erased_bonds, erased_atoms=self.erased_atoms)
+        elif style == 1:
+            if hasattr(self.renderer, 'draw_polyhedra'):
+                self.renderer.draw_polyhedra(render_struct, self.active_colors)
+        
         if self.current_structure:
-            conv_mat = self.current_structure.lattice.matrix if self.chk_show_conventional.isChecked() else None
-            prim_mat = CrystalEngine.get_universal_primitive_matrix(self.current_structure) if self.chk_show_primitive.isChecked() else None
+            # Prevent the massive 500A dummy lattice from ruining the zoom scale
+            is_dummy_canvas = self.current_structure.lattice.a >= 499.0
             
-            if getattr(self, 'chk_axes', None) and self.chk_axes.isChecked():
+            conv_mat = self.current_structure.lattice.matrix if (self.tab_view.chk_show_conventional.isChecked() and not is_dummy_canvas) else None
+            prim_mat = CrystalEngine.get_universal_primitive_matrix(self.current_structure) if (self.tab_view.chk_show_primitive.isChecked() and not is_dummy_canvas) else None
+            
+            if self.tab_view.chk_axes.isChecked() and not is_dummy_canvas:
                 self.renderer.draw_axes(conventional_matrix=conv_mat, primitive_matrix=prim_mat)
-                
             if conv_mat is not None or prim_mat is not None:
                 self.renderer.draw_lattice_boxes(conventional_matrix=conv_mat, primitive_matrix=prim_mat)
             
-        # Support both PyVista and Matplotlib refresh commands
         if hasattr(self.renderer, 'plotter') and hasattr(self.renderer.plotter, 'render'):
             self.renderer.plotter.render()
         elif hasattr(self.renderer, 'canvas'):
             self.renderer.canvas.draw_idle()
-
+        
+    def push_current_to_workspace(self):
+        """Pushes the full PyMatgen Structure object to the central memory."""
+        if getattr(self, 'current_structure', None) is None:
+            QMessageBox.warning(self, "Warning", "No active structure to push!")
+            return
+            
+        name, ok = QInputDialog.getText(self, "Workspace Export", "Enter a variable name for this structure:", text="My_Crystal")
+        if ok and name:
+            # Push the FULL PyMatgen object, not just the raw coordinates!
+            global_workspace.push_crystal_structure(name, self.current_structure)
+            QMessageBox.information(self, "Success", f"Structure '{name}' sent to Global Workspace!\nYou can now load it in the DFT or ARPES Suites.")
+            
     def handle_add_template(self):
         name = self.combo_tpl.currentText()
         struct = CrystalEngine.generate_template_structure(name)
         if struct: self.append_stack_layer(name, struct)
+    
+    def load_cif_layer(self):
+        """Directly loads a 2D CIF into the heterostructure stack without exfoliation."""
+        fname, _ = QFileDialog.getOpenFileName(self, 'Open 2D CIF', '', "CIF files (*.cif)")
+        if not fname: return
+        try:
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                struct = Structure.from_file(fname)
+            name = fname.split('/')[-1].replace('.cif', '')
+            self.append_stack_layer(name, struct)
+        except Exception as e:
+            QMessageBox.critical(self, "Parser Error", f"Could not parse CIF: {e}")
     
     def move_layer_up(self, row):
         idx = self.stack_layer_rows.index(row)
@@ -828,60 +478,67 @@ class CrystalViewerSuite(QWidget):
             except Exception as e:
                 QMessageBox.critical(self, "vdW Cleave Error", str(e))
         else:
-            num_layers, ok1 = QInputDialog.getInt(self, "Exfoliator", "Number of layers to extract:", 1, 1, 10)
-            if not ok1: return
-            hkl_str, ok2 = QInputDialog.getText(self, "Exfoliator", "Cleavage Plane (h k l):", text="0 0 1")
-            if not ok2: return
+            # Read directly from our new persistent UI boxes
+            num_layers = self.spin_exf_layers.value()
+            h = self.spin_exf_h.value()
+            k = self.spin_exf_k.value()
+            l = self.spin_exf_l.value()
+            hkl = (h, k, l)
+            hkl_str = f"{h} {k} {l}"
             
             try:
-                hkl = tuple(map(int, hkl_str.replace(',', ' ').split()))
                 from pymatgen.core.surface import SlabGenerator
                 
-                approx_thickness = 0.1 if num_layers == 1 else (num_layers * 3.0) - 1.5 
+                # 1. Ask PyMatgen for a MASSIVE slab to guarantee it contains complete molecules
+                safe_thickness = max(30.0, num_layers * 15.0) 
                 
                 import warnings
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    slabgen = SlabGenerator(bulk_struct, miller_index=hkl, min_slab_size=approx_thickness, min_vacuum_size=25.0, center_slab=True)
+                    slabgen = SlabGenerator(bulk_struct, miller_index=hkl, min_slab_size=safe_thickness, min_vacuum_size=25.0, center_slab=True)
                     slabs = slabgen.get_slabs()
                     
                 if not slabs: raise ValueError(f"Could not generate slabs for plane {hkl}")
                 
-                # --- THE ULTIMATE FIX: Topological Chemical Graphing ---
-                # We ignore the Z-axis completely. We build a network of chemical bonds.
-                # A 2D layer is defined as a single connected component of atoms!
+                # 2. 3D Topological Chemical Graphing with Surface Dust Filtering[cite: 2]
                 raw_slab = slabs[0]
-                dist_mat = raw_slab.distance_matrix # PyMatgen's periodic distance matrix
+                dist_mat = raw_slab.distance_matrix 
                 
-                bond_threshold = 3.2 # Ångströms (Safely captures covalent bonds, avoids vdW gaps)
+                bond_threshold = 3.2 # Safely connects all tilted intra-layer bonds
                 num_sites = len(raw_slab)
                 visited = set()
-                layers = []
+                all_clusters = []
                 import numpy as np
                 
-                # Breadth-First Search (BFS) to cluster bonded atoms into layers
+                # Breadth-First Search (BFS) to map all covalently connected molecules[cite: 2]
                 for i in range(num_sites):
                     if i not in visited:
                         queue = [i]
-                        current_layer = []
+                        current_cluster = []
                         while queue:
                             curr = queue.pop(0)
                             if curr not in visited:
                                 visited.add(curr)
-                                current_layer.append(curr)
-                                # Find all atoms bonded to this one
+                                current_cluster.append(curr)
                                 neighbors = np.where((dist_mat[curr] > 0.1) & (dist_mat[curr] < bond_threshold))[0]
                                 queue.extend([n for n in neighbors if n not in visited])
-                        layers.append(current_layer)
+                        all_clusters.append(current_cluster)
                 
-                # Sort the detected discrete layers by their average Z-height
-                layers.sort(key=lambda indices: np.mean([raw_slab[idx].coords[2] for idx in indices]))
+                # FILTER: A full sandwich spans the whole supercell width and has max atoms.
+                # We throw away the broken "surface dust" slabs left over by PyMatgen's cut.
+                max_size = max([len(c) for c in all_clusters]) if all_clusters else 0
+                valid_layers = [c for c in all_clusters if len(c) > max_size * 0.75]
                 
-                # Grab EXACTLY the requested number of discrete layers
-                target_layers = layers[:min(num_layers, len(layers))]
+                # Sort the surviving valid layers bottom-to-top
+                valid_layers.sort(key=lambda indices: np.mean([raw_slab[idx].coords[2] for idx in indices]))
+                
+                # Grab exactly the number of complete layers requested
+                target_layer_indices = valid_layers[:min(num_layers, len(valid_layers))]
+                
                 sites_to_keep = []
-                for layer_indices in target_layers:
-                    sites_to_keep.extend([raw_slab[idx] for idx in layer_indices])
+                for indices in target_layer_indices:
+                    sites_to_keep.extend([raw_slab[idx] for idx in indices])
+                
                 
                 # Reconstruct the structure safely
                 new_matrix = raw_slab.lattice.matrix.copy()
@@ -942,7 +599,18 @@ class CrystalViewerSuite(QWidget):
             if el not in self.active_colors: 
                 self.active_colors[el] = CPK_COLORS.get(base_el, "#008080")
 
-        self.build_color_panel(unique_elements)
+        self.tab_view.build_color_panel(unique_elements)
+        
+        # Update Tab 2 CDW Target Elements Dropdown
+        self.combo_cdw_el.blockSignals(True)
+        self.combo_cdw_el.clear()
+        self.combo_cdw_el.addItem("All Elements")
+        for el in unique_elements:
+            # Strip layer tags (e.g., V_L1 becomes V) so CDW targets the element
+            clean_el = el.split('_')[0] if '_' in el else el
+            if self.combo_cdw_el.findText(clean_el) == -1:
+                self.combo_cdw_el.addItem(clean_el)
+        self.combo_cdw_el.blockSignals(False)
         
         # 3. Draw to screen
         self.refresh_render()
@@ -966,12 +634,90 @@ class CrystalViewerSuite(QWidget):
             self.lbl_moire.setText(f"🟡 Incommensurate / Error: {result.get('message', 'Strain required.')}")
 
     def handle_draw_bz(self):
-        if not self.current_structure: return
+        if not getattr(self, 'current_structure', None): return
+        
+        # 1. Ask Engine for pure math
         bz_data = CrystalEngine.calculate_brillouin_zone(self.current_structure)
-        if bz_data:
-            self.renderer.clear_scene()
-            self.renderer.draw_brillouin_zone(bz_data["points"], bz_data["simplices"], solid=True)
+        if not bz_data: return
+        
+        self.renderer.clear_scene()
+        import numpy as np
+        
+        # --- OVERLAY CRYSTAL STRUCTURE ---
+        if getattr(self, 'chk_overlay_atoms', None) and self.chk_overlay_atoms.isChecked():
+            is_shiny = self.tab_view.chk_shiny.isChecked()
+            scale_mod = self.tab_view.spin_radius.value()
+            style = self.tab_view.combo_style.currentIndex()
+            
+            # Draw real-space atoms and bonds
+            self.renderer.draw_atoms(self.current_structure, self.active_colors, scale_mod=scale_mod, is_shiny=is_shiny, erased_atoms=self.erased_atoms)
+            if style == 0:
+                self.renderer.draw_bonds(self.current_structure, self.active_colors, is_shiny=is_shiny, erased_bonds=self.erased_bonds, erased_atoms=self.erased_atoms)
+            
+            # Draw Real-Space Axes to correlate with BZ direction
+            if self.tab_view.chk_axes.isChecked():
+                is_dummy = self.current_structure.lattice.a >= 499.0
+                if not is_dummy:
+                    prim_mat = CrystalEngine.get_universal_primitive_matrix(self.current_structure) if self.tab_view.chk_show_primitive.isChecked() else None
+                    conv_mat = self.current_structure.lattice.matrix if self.tab_view.chk_show_conventional.isChecked() else None
+                    self.renderer.draw_axes(conventional_matrix=conv_mat, primitive_matrix=prim_mat)
+        
+        scale = self.spin_bz_scale.value()
+        style_idx = self.combo_bz_style.currentIndex()
+        scaled_points = np.array(bz_data["points"]) * scale
+        scaled_hull_points = np.array(bz_data["hull_points"]) * scale
+        
+        self.active_bz_points = scaled_hull_points
+        self.active_bz_faces = bz_data["simplices"]
+        self.active_bz_edges = bz_data["edges"]
+        self.active_bz_style = style_idx
+        self.active_surf_bz_edges = []
+        
+        # 2. Command Renderer to draw Bulk BZ
+        if hasattr(self.renderer, 'draw_brillouin_zone'):
+            self.renderer.draw_brillouin_zone(scaled_hull_points, np.array(bz_data["simplices"]), style_idx)
+            
+        # 3. Route Surface Projection (if checked)
+        if getattr(self, 'chk_surf_bz', None) and self.chk_surf_bz.isChecked():
+            h, k, l = self.spin_bz_h.value(), self.spin_bz_k.value(), self.spin_bz_l.value()
+            if h != 0 or k != 0 or l != 0:
+                surf_data = CrystalEngine.calculate_surface_projection(scaled_points, self.current_structure, h, k, l)
+                if surf_data and hasattr(self.renderer, 'draw_surface_bz'):
+                    
+                    normal = np.array(surf_data["normal"])
+                    base_plane = np.array(surf_data["origin_plane"])
+                    
+                    # Calculate visual hover distance
+                    offset_dist = np.max(scaled_points) * 1.5
+                    hover_plane = base_plane + normal * offset_dist
+                    
+                    silh_3d = np.array(surf_data["silhouette_3d"])
+                    proj_bounds = np.array(surf_data["projected_bounds"])
+                    hover_bounds = proj_bounds + normal * offset_dist
+                    
+                    proj_lines = [(silh_3d[i], hover_bounds[i]) for i in range(len(silh_3d))]
+                    
+                    # Command renderer
+                    self.renderer.draw_surface_bz(
+                        base_plane=base_plane, 
+                        hover_plane=hover_plane, 
+                        simplices=np.array(surf_data["simplices"]), 
+                        proj_lines=proj_lines
+                    )
+                    
+                    # Cache both planes + dashed lines for 3ds Max/Blender
+                    for i in range(len(proj_bounds)):
+                        self.active_surf_bz_edges.append((proj_bounds[i], proj_bounds[(i+1)%len(proj_bounds)]))
+                    for i in range(len(hover_bounds)):
+                        self.active_surf_bz_edges.append((hover_bounds[i], hover_bounds[(i+1)%len(hover_bounds)]))
+                    for line in proj_lines:
+                        self.active_surf_bz_edges.append(line)
+
+        # 4. Push updates to screen
+        if hasattr(self.renderer, 'plotter') and hasattr(self.renderer.plotter, 'render'):
             self.renderer.plotter.render()
+        elif hasattr(self.renderer, 'canvas'):
+            self.renderer.canvas.draw_idle()
 
     def closeEvent(self, event):
         """Safely shuts down ALL rendering pipelines (visible and hidden) to prevent segfaults."""

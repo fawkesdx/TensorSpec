@@ -6,6 +6,11 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QIcon
 from tensorspec.gui.suites.crystal_suite import CrystalViewerSuite
+from tensorspec.gui.suites.arpes_suite import ARPESSuite
+from tensorspec.gui.suites.dft_suite import DFTSuite
+
+from tensorspec.core.workspace import global_workspace
+from PySide6.QtWidgets import QPushButton
 
 class TensorSpecMainBrowser(QMainWindow):
     """
@@ -46,7 +51,7 @@ class TensorSpecMainBrowser(QMainWindow):
         # Define actions for all roadmap suites
         suites = [
             ("Crystal Viewer", self.launch_crystal_suite),
-            ("DFT Engine", self.launch_dft_suite),
+            ("DFT Suite", self.launch_dft_suite),
             ("ARPES Suite", self.launch_arpes_suite),
             ("PEEM Suite", self.launch_peem_suite),
             ("XAS Suite", self.launch_xas_suite),
@@ -66,7 +71,14 @@ class TensorSpecMainBrowser(QMainWindow):
         # Left Panel: Data Tree Explorer
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
-        left_layout.addWidget(QLabel("<b>Active Workspace Variables</b>"))
+        
+        # --- NEW: Workspace Controls ---
+        top_left_layout = QHBoxLayout()
+        top_left_layout.addWidget(QLabel("<b>Active Workspace Variables</b>"))
+        self.btn_refresh_tree = QPushButton("🔄 Refresh Workspace")
+        self.btn_refresh_tree.clicked.connect(self.refresh_workspace_tree)
+        top_left_layout.addWidget(self.btn_refresh_tree)
+        left_layout.addLayout(top_left_layout)
         
         self.data_tree_widget = QTreeWidget()
         self.data_tree_widget.setHeaderLabels(["Variable Name", "Type", "Dimensions / Shape"])
@@ -120,17 +132,20 @@ class TensorSpecMainBrowser(QMainWindow):
         if var_name in self.workspace_data:
             meta_text = self.workspace_data[var_name]["metadata"]
             self.metadata_inspector.setText(f"Variable: {var_name}\n" + "-"*40 + f"\n{meta_text}")
-
-    # --- Slot Placeholders for Suite Launching Windows ---
-    def launch_crystal_suite(self):
-        print("Launching Crystal Viewer Suite Window...")
-        # Will link directly to the modularized crystal tab / window later
         
     def launch_dft_suite(self):
-        print("Launching DFT Suite Window...")
+        """Spawns the DFT & Tight Binding Suite window."""
+        self.dft_window = DFTSuite()
+        self.dft_window.resize(900, 600)
+        self.dft_window.setWindowTitle("TensorSpec - DFT Suite")
+        self.dft_window.show()
 
     def launch_arpes_suite(self):
-        print("Launching ARPES Suite Window...")
+        """Spawns the ARPES Suite window containing the Matrix Simulator."""
+        self.arpes_window = ARPESSuite()
+        self.arpes_window.resize(1100, 700)
+        self.arpes_window.setWindowTitle("TensorSpec - ARPES Suite")
+        self.arpes_window.show()
 
     def launch_peem_suite(self):
         print("Launching PEEM Suite Window...")
@@ -150,6 +165,24 @@ class TensorSpecMainBrowser(QMainWindow):
         self.crystal_window.resize(1100, 700)
         self.crystal_window.setWindowTitle("TensorSpec - Crystal Suite")
         self.crystal_window.show()
+    
+    def refresh_workspace_tree(self):
+        """Pulls the actual active data from global_workspace and populates the tree."""
+        self.data_tree_widget.clear()
+        
+        # 1. Fetch Crystal Structures
+        for name in global_workspace.list_crystal_structures():
+            item = QTreeWidgetItem(self.data_tree_widget)
+            item.setText(0, name)
+            item.setText(1, "Crystal Structure")
+            item.setText(2, "3D Basis Vectors")
+            
+        # 2. Fetch Band Structures
+        for name in global_workspace.list_band_structures():
+            item = QTreeWidgetItem(self.data_tree_widget)
+            item.setText(0, name)
+            item.setText(1, "Band Structure")
+            item.setText(2, "E(k) Dispersion Data")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
