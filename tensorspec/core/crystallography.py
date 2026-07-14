@@ -297,3 +297,59 @@ class CrystalEngine:
             "simplices": hull.simplices,
             "edges": export_edges
         }
+    
+    @staticmethod
+    def calculate_surface_projection(bz_points, structure, h, k, l):
+        """Projects 3D BZ vertices onto a specific 2D Miller plane and extracts the 3D silhouette."""
+        from scipy.spatial import ConvexHull
+        import numpy as np
+        
+        recip_matrix = structure.lattice.reciprocal_lattice.matrix
+        normal = h * recip_matrix[0] + k * recip_matrix[1] + l * recip_matrix[2]
+        dist = np.linalg.norm(normal)
+        if dist == 0: return None
+        normal = normal / dist
+        
+        # Project points onto the plane
+        proj_pts = []
+        for pt in bz_points:
+            d = np.dot(pt, normal)
+            proj_pts.append(pt - d * normal)
+        proj_pts = np.array(proj_pts)
+        
+        # Create a local 2D basis
+        u = np.cross(normal, [0, 0, 1])
+        if np.linalg.norm(u) < 1e-5: u = np.cross(normal, [0, 1, 0])
+        u = u / np.linalg.norm(u)
+        v = np.cross(normal, u)
+        
+        pts_2d = np.array([[np.dot(p, u), np.dot(p, v)] for p in proj_pts])
+        pts_2d = np.round(pts_2d, decimals=5)
+        unique_pts_2d, indices = np.unique(pts_2d, axis=0, return_index=True)
+        
+        if len(unique_pts_2d) < 3: return None
+        
+        surf_hull = ConvexHull(unique_pts_2d)
+        
+        # Extract the exact 3D vertices that form the outer boundary (silhouette)
+        hull_indices = indices[surf_hull.vertices]
+        surf_vertices_3d = proj_pts[hull_indices]
+        silhouette_3d = bz_points[hull_indices]
+        
+        # Triangulate for rendering
+        center = np.mean(surf_vertices_3d, axis=0)
+        surf_pts_with_center = np.vstack([surf_vertices_3d, center])
+        c_idx = len(surf_pts_with_center) - 1
+        
+        surf_simplices = []
+        n_v = len(surf_vertices_3d)
+        for i in range(n_v):
+            surf_simplices.append([i, (i+1)%n_v, c_idx])
+            
+        return {
+            "normal": normal.tolist(),
+            "origin_plane": surf_pts_with_center.tolist(),
+            "simplices": surf_simplices,
+            "silhouette_3d": silhouette_3d.tolist(),
+            "projected_bounds": surf_vertices_3d.tolist()
+        }

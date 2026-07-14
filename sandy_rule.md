@@ -23,6 +23,7 @@ tensorspec/
 │   ├── workspace.py          # CENTRAL MEMORY: Global dictionary/manager for all active loaded data
 │   ├── data_tree.py          # Hierarchical xarray.DataTree structure & /history audit tracking
 │   ├── crystallography.py    # Math engine: PyMatgen symmetry, Miller cleavage, CDW, Moiré strain
+│   ├── kinematics.py         # Angle/energy to momentum space (k_parallel, k_z) conversions & photon momentum
 │   ├── io/                   # Dedicated file loaders
 │   │   ├── __init__.py
 │   │   ├── arpes_loaders.py  # Readers for MAESTRO, i05 Diamond, SIS/ADRESS SLS, Lorea Alba, Bloch MaxIV[cite: 2]
