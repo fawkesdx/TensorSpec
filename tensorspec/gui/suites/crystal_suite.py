@@ -35,6 +35,10 @@ CPK_COLORS = {
 class StackLayerRow(QFrame):
     """Mini UI Row Controller for individual 2D sheets in the Heterostructure Tab."""
     def __init__(self, name: str, struct: Structure, default_z: float):
+
+        # --- NEW: Terminal Logging ---
+        print("open suite Crystal Viewer")
+
         super().__init__()
         self.struct = struct
         self.setFrameShape(QFrame.StyledPanel)
@@ -86,7 +90,12 @@ class CrystalViewerSuite(QWidget):
     Links user actions to core crystallography math and 3D PyVista rendering.
     """
     def __init__(self, workspace_manager=None, parent=None):
+        print("open suite Crystal Suite")
         super().__init__(parent)
+
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self._is_closing = False  # NEW: Kill-switch to prevent ghost rendering
+
         self.workspace = workspace_manager
         
         self.current_structure = None
@@ -350,6 +359,7 @@ class CrystalViewerSuite(QWidget):
 
     def refresh_render(self):
         """Routes structure state through core math transformations, then pushes to PyVista."""
+        if getattr(self, '_is_closing', False): return  # ABORT if the window is tearing down
         if not self.active_supercell: return
         
         render_struct = self.active_supercell.copy()
@@ -372,8 +382,12 @@ class CrystalViewerSuite(QWidget):
         self.renderer.draw_atoms(render_struct, self.active_colors, scale_mod=scale, is_shiny=is_shiny, erased_atoms=self.erased_atoms)
         
         if style == 0:
-            # Bonds need to know about erased bonds AND erased atoms (so hanging bonds are hidden)
-            self.renderer.draw_bonds(render_struct, self.active_colors, is_shiny=is_shiny, erased_bonds=self.erased_bonds, erased_atoms=self.erased_atoms)
+            # Fetch the exact widget names defined in tab_view.py
+            b_rad = self.tab_view.spin_bond_thick.value() if hasattr(self.tab_view, 'spin_bond_thick') else 0.1
+            b_thresh = self.tab_view.spin_bond_thresh.value() if hasattr(self.tab_view, 'spin_bond_thresh') else 1.15
+            
+            # Pass both the radius AND the threshold to the rendering engine
+            self.renderer.draw_bonds(render_struct, self.active_colors, cyl_radius=b_rad, thresh_multiplier=b_thresh, is_shiny=is_shiny, erased_bonds=self.erased_bonds, erased_atoms=self.erased_atoms)
         elif style == 1:
             if hasattr(self.renderer, 'draw_polyhedra'):
                 self.renderer.draw_polyhedra(render_struct, self.active_colors)
@@ -675,7 +689,7 @@ class CrystalViewerSuite(QWidget):
         
         # 2. Command Renderer to draw Bulk BZ
         if hasattr(self.renderer, 'draw_brillouin_zone'):
-            self.renderer.draw_brillouin_zone(scaled_hull_points, np.array(bz_data["simplices"]), style_idx)
+            self.renderer.draw_brillouin_zone(scaled_hull_points, np.array(bz_data["simplices"]), style_idx, edges=bz_data["edges"])
             
         # 3. Route Surface Projection (if checked)
         if getattr(self, 'chk_surf_bz', None) and self.chk_surf_bz.isChecked():
@@ -720,15 +734,26 @@ class CrystalViewerSuite(QWidget):
             self.renderer.canvas.draw_idle()
 
     def closeEvent(self, event):
-        """Safely shuts down ALL rendering pipelines (visible and hidden) to prevent segfaults."""
-        # 1. Safely kill the hidden PyVista GPU Engine (The main culprit for crashes)
+        # 1. Trip the kill-switch immediately to block all incoming UI signals
+        self._is_closing = True 
+        print("close suite Crystal Viewer")
+        
+        # 2. Safely isolate the PyVista GPU Engine without nuking the shared context
         if hasattr(self, 'renderer_gpu') and hasattr(self.renderer_gpu, 'plotter'):
             try:
+                # Stop VTK from listening to any more Qt events
+                if hasattr(self.renderer_gpu.plotter, 'iren'):
+                    self.renderer_gpu.plotter.iren.remove_all_observers()
+                
+                # Detach the PyVista widget from the main Qt window so destruction is localized
+                self.renderer_gpu.plotter.setParent(None)
+                
+                # Cleanly close the plotter (DO NOT use Finalize() in multi-window apps)
                 self.renderer_gpu.plotter.close()
             except Exception:
                 pass
                 
-        # 2. Safely kill the Matplotlib CPU Engine
+        # 3. Safely kill the Matplotlib CPU Engine
         if hasattr(self, 'renderer_cpu') and hasattr(self.renderer_cpu, 'figure'):
             try:
                 import matplotlib.pyplot as plt
@@ -736,5 +761,4 @@ class CrystalViewerSuite(QWidget):
             except Exception:
                 pass
         
-        # Now that all graphics memory is detached, allow the window to close
         event.accept()
