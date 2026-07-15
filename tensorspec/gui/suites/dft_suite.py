@@ -17,6 +17,7 @@ class DFTSuite(QWidget):
     Currently implements the Toy Tight Binding engine for Graphene.
     """
     def __init__(self, parent=None):
+        print("open suite DFT")
         super().__init__(parent)
         self.setWindowTitle("TensorSpec - DFT & Tight Binding Suite")
         self.resize(900, 600)
@@ -193,11 +194,11 @@ class DFTSuite(QWidget):
         try:
             if solver_mode == "Workspace Structure":
                 eigenvalues, eigenvectors, orb_labels = self.engine.solve_workspace_structure(k_vecs)
-                title = f"Multi-Orbital Bands ({template_name.capitalize()} Path)"
+                title = "Multi-Orbital 2D Mesh" if is_2d else f"Multi-Orbital Bands ({template_name.capitalize()} Path)"
             else:
                 t_val = self.spin_t1.value()
                 eigenvalues, eigenvectors, orb_labels = self.engine.solve_toy_graphene(k_vecs, t=t_val, onsite=onsite_val)
-                title = f"Toy Graphene Bands (t={t_val} eV)"
+                title = f"Toy Graphene 2D Map (t={t_val} eV)" if is_2d else f"Toy Graphene Bands (t={t_val} eV)"
         except Exception as e:
             QMessageBox.warning(self, "Calculation Error", str(e))
             return
@@ -302,6 +303,9 @@ class DFTSuite(QWidget):
         
         dim_str_display = "2D Mesh" if self.active_bands_data.get('is_2d') else "1D Path"
         QMessageBox.information(self, "Success", f"Band structure '{name}' ({dim_str_display}) pushed to Workspace!\nYou can now load it in the ARPES Suite.")
+
+    def closeEvent(self, event):
+        print("close suite DFT Suite")
 
 
 # Standalone runner for independent testing

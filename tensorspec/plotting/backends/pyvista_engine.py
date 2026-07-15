@@ -104,11 +104,10 @@ class PyVistaCrystalBackend:
             sphere = pv.Sphere(radius=rad, theta_resolution=res, phi_resolution=res)
             glyphs = poly.glyph(geom=sphere, factor=1.0)
 
-            actor = self.plotter.add_mesh(glyphs, color=color, smooth_shading=True, pickable=False, render=False)
-            if is_shiny and hasattr(actor, 'prop'):
-                actor.prop.interpolation = 'pbr'
-                actor.prop.metallic = 0.2
-                actor.prop.roughness = 0.15
+            if is_shiny:
+                actor = self.plotter.add_mesh(glyphs, color=color, smooth_shading=True, pickable=False, render=False, pbr=True, metallic=0.6, roughness=0.2)
+            else:
+                actor = self.plotter.add_mesh(glyphs, color=color, smooth_shading=True, pickable=False, render=False)
 
     def draw_bonds(self, supercell, active_colors: dict, cyl_radius: float = 0.1, thresh_multiplier: float = 1.15, is_shiny: bool = False, erased_bonds: set = None, erased_atoms: set = None):
         """Vectorized C-level bond distance calculation and GPU cylinder glyphing."""
@@ -165,11 +164,10 @@ class PyVistaCrystalBackend:
         glyphs = bonds_data.glyph(orient="vectors", scale="scale", geom=source_cyl)
 
         bond_color = active_colors.get("Bonds", "#FFFFFF")
-        actor = self.plotter.add_mesh(glyphs, color=bond_color, smooth_shading=True, pickable=False, render=False)
-        if is_shiny and hasattr(actor, 'prop'):
-            actor.prop.interpolation = 'pbr'
-            actor.prop.metallic = 0.2
-            actor.prop.roughness = 0.15
+        if is_shiny:
+            actor = self.plotter.add_mesh(glyphs, color=bond_color, smooth_shading=True, pickable=False, render=False, pbr=True, metallic=0.6, roughness=0.2)
+        else:
+            actor = self.plotter.add_mesh(glyphs, color=bond_color, smooth_shading=True, pickable=False, render=False)
     
     def draw_polyhedra(self, supercell, active_colors: dict):
         """Generates Convex Hulls around central coordinating atoms using PyMatgen CrystalNN."""
@@ -248,7 +246,7 @@ class PyVistaCrystalBackend:
         if primitive_matrix is not None: _draw_slanted(primitive_matrix, "#33FF57")
 
     # ================= SPECIALIZED RECIPROCAL & MOIRÉ RENDERERS =================
-    def draw_brillouin_zone(self, bz_points: np.ndarray, bz_simplices: np.ndarray, style_idx: int = 0):
+    def draw_brillouin_zone(self, bz_points: np.ndarray, bz_simplices: np.ndarray, style_idx: int = 0, edges: list = None):
         """Renders 3D Wigner-Seitz reciprocal cell and reciprocal axis vectors."""
         import pyvista as pv
         import numpy as np
@@ -265,7 +263,15 @@ class PyVistaCrystalBackend:
         if is_solid:
             actor = self.plotter.add_mesh(bz_mesh, color="#FF00FF", opacity=0.25, show_edges=True, edge_color="white", line_width=2, render=False)
             self.bz_actors.append(actor)
-        if is_frame:
+
+        if is_frame and edges is not None:
+            # The edges array contains actual 3D coordinates, not indices!
+            for p1_coord, p2_coord in edges:
+                line = pv.Line(p1_coord, p2_coord)
+                actor = self.plotter.add_mesh(line, color="#FF00FF", line_width=3, render=False)
+                self.bz_actors.append(actor)
+        elif is_frame:
+            # Fallback if edges aren't provided
             actor = self.plotter.add_mesh(bz_mesh, style="wireframe", color="#FF00FF", line_width=3, render=False)
             self.bz_actors.append(actor)
 
