@@ -161,6 +161,13 @@ class TensorSpecMainBrowser(QMainWindow):
     
     def launch_crystal_suite(self):
         """Spawns the Crystal Viewer window and connects it to the central workspace."""
+        # If the window exists but was closed/deleted, reset the reference
+        if hasattr(self, 'crystal_window'):
+            try:
+                self.crystal_window.close()
+            except RuntimeError:
+                pass # The C++ object was already deleted by WA_DeleteOnClose
+
         self.crystal_window = CrystalViewerSuite(workspace_manager=self.workspace_data)
         self.crystal_window.resize(1100, 700)
         self.crystal_window.setWindowTitle("TensorSpec - Crystal Suite")
