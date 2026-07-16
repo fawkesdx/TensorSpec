@@ -1,4 +1,8 @@
 # TensorSpec
+## Prerequisites
+* **Python 3.11 or 3.12** (Python 3.9 and 3.10 are not supported due to modern dependency requirements).
+* A virtual environment is highly recommended.
+
 **A General-Purpose Framework for N-Dimensional Spectroscopic Analysis**
 `TensorSpec` is a Python-based library designed to handle, visualize, and analyze multidimensional spectroscopic data. 
 Originally developed for ARPES (Angle-Resolved Photoemission Spectroscopy), it generalizes the concept of "coordinates vs. intensity" to support a wide range of experimental techniques, including XAS, XMCD, PEEM, and other multi-dimensional scanning microscopy.

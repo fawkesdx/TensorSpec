@@ -33,24 +33,18 @@ Grand App
 	- [ ] Semi-infinite structure setup for Green's function calculation (drawn from the crystal suite).
 		- [ ] Define which termination to stop at so we know which band belongs to the surface.
 - ARPES Suite
-	- [x] Matrix Element Simulator: a stand alone GUI to simulate the heatmap of the intensity given various Matrix element source
-		- [x] Connect engine to `workspace.py` to dynamically pull crystal basis from loaded CIFs.
-        - [x] Integrate orbital eigenvectors from `dft_engine.py` to calculate dipole transitions for specific initial states (s, p, d orbitals).
-        - [x] Overlay the Matrix Element heatmap as an intensity mask over simulated Band Structures (E vs k) from the DFT suite.
-		- [x] Draw the setup to simulate sample in manipulator position (Z is vertical manipulator, Y is forward, X is side way)
-		- [x] Draw ability to rotate sample, theta is defined by rotating with Z as axis or rotation
-		- [x] Draw rotation of sample, beta is defined as tilting the sample attach to the sample coordinate not the manipulator
-		- [x] Draw rotation of sample, azimuth as azimuthal rotation of the sample
-		- [x] Draw the slit orientation and ability to rotate the slit direction. the slit acceptance angle is 30 degree in total
-		- [x] Draw the beam direction, ability to rotate the beam incident angle, and define the beam polarizations LH,LV,CP,CM
- 		- [x] Geometric Matrix Element as defined by Moser's paper
-		- [x] Matrix element from the structure factor
-		- [ ] Advanced Final State Physics: Surface refraction (Fresnel equations) for grazing incidence.
-		- [ ] Advanced Final State Physics: Photon energy ($h\nu$), inner potential ($V_0$), and Work Function variables.
-		- [ ] Advanced Final State Physics: Atomic photoionization cross-sections (e.g., Yeh-Lindau).
-		- [ ] Advanced Final State Physics: Time-reversed LEED state phase shifts (vs. plane wave).
-		- [ ] Spin-Orbit Coupling (SOC): 2N x 2N Hamiltonian expansion and Circular Dichroism (CD-AD).
-        - [x] Standalone Kinematics Engine: Convert experimental angles/energies to $k_{||}$ and $k_z$, including SX-ARPES photon momentum corrections.
+	- [ ] Standalone Kinematics Engine: Convert experimental angles/energies to k_parallel and k_z
+	- [ ] Hierarchical Simulation Engine Selector (GUI Dropdown & Factory Router)
+		- [ ] Option A: Phenomenological Three-Step Model
+			- [ ] Step 1: Matrix element optical excitation mapping
+			- [ ] Step 2: Mean-free path electron transport modeling
+			- [ ] Step 3: Classic surface transmission & refraction
+		- [ ] Option B: One-Step Photoemission Model
+			- [ ] B1: Tight-Binding + Free Electron Final State (Chinook Engine integration)
+			- [ ] B2: Real-space DFT Orbitals + Plane Wave Final State (kMap FFT tomography integration)
+			- [ ] B3: Full Multiple Scattering & Time-Reversed LEED (SPR-KKR execution wrapper using oscarpes API)
+	- [ ] Data Loader from various beamlines (MAESTRO, i05 Diamond, SIS SLS, etc.)
+	- [ ] Linked Crosshair Data Viewer (Interactive EDC and MDC extraction)
 	- [ ] data loader from various beamline
 		- [ ] MAESTRO
 		- [ ] i05 Diamond
