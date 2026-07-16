@@ -1,5 +1,10 @@
 import sys
 import os
+# --- Python Version Check ---
+if sys.version_info < (3, 11):
+    sys.exit("\n[ERROR] TensorSpec requires Python 3.11 or newer.\n"
+             f"You are currently running Python {sys.version_info.major}.{sys.version_info.minor}.\n"
+             "Please upgrade your Python environment or create a new virtual environment using python3.11.\n")
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QTreeWidget, QTreeWidgetItem, QToolBar, 
                                QSplitter, QTextEdit, QLabel, QApplication)
