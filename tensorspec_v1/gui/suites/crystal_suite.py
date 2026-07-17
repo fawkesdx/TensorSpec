@@ -42,7 +42,7 @@ class StackLayerRow(QFrame):
         super().__init__()
         self.struct = struct
         self.setFrameShape(QFrame.StyledPanel)
-        self.setStyleSheet("QFrame { background-color: #2b2b36; border: 1px solid #555555; border-radius: 5px; padding: 4px; color: #ffffff; } QLabel { color: #ffffff; }")
+        self.setStyleSheet("QFrame { background-color: #f0f0f0; border: 1px solid #cccccc; border-radius: 5px; padding: 4px; }")
         
         main_layout = QVBoxLayout(self) # Stacked vertically now!
         main_layout.setContentsMargins(5, 5, 5, 5)
@@ -53,8 +53,8 @@ class StackLayerRow(QFrame):
         top_row.addWidget(self.lbl_name)
         
         top_row.addWidget(QLabel("SC:"))
-        self.spin_x = QSpinBox(); self.spin_x.setRange(1, 100); self.spin_x.setValue(1)
-        self.spin_y = QSpinBox(); self.spin_y.setRange(1, 100); self.spin_y.setValue(1)
+        self.spin_x = QSpinBox(); self.spin_x.setRange(1, 50); self.spin_x.setValue(1)
+        self.spin_y = QSpinBox(); self.spin_y.setRange(1, 50); self.spin_y.setValue(1)
         top_row.addWidget(self.spin_x); top_row.addWidget(self.spin_y)
         main_layout.addLayout(top_row)
         
@@ -639,22 +639,13 @@ class CrystalViewerSuite(QWidget):
         l1, l2 = self.stack_layer_rows[0].get_layer_dict(), self.stack_layer_rows[1].get_layer_dict()
         result = CrystalEngine.calculate_moire_superlattice(l1['struct'], l2['struct'], l1['twist'], l2['twist'])
         
-        z_vals = [r.spin_z.value() for r in self.stack_layer_rows]
-        
         if result["status"] == "commensurate":
             self.lbl_moire.setText(f"🟢 Commensurate! Periodicity: {result['periodicity']:.2f} Å ({result['n_cells']}×{result['n_cells']})")
+            z_vals = [r.spin_z.value() for r in self.stack_layer_rows]
             self.renderer.draw_moire_envelope(result["matrix"], min(z_vals)-1.5, max(z_vals)+1.5)
             self.renderer.plotter.render()
         else:
-            self.lbl_moire.setText(f"🟡 Incommensurate: Showing forced strain supercell boundaries.")
-            if self.active_supercell:
-                # FIX: Pass result["matrix"] instead of the 500A dummy lattice
-                self.renderer.draw_moire_envelope(result["matrix"], min(z_vals)-1.5, max(z_vals)+1.5)
-                
-                if hasattr(self.renderer, 'plotter') and hasattr(self.renderer.plotter, 'render'):
-                    self.renderer.plotter.render()
-                elif hasattr(self.renderer, 'canvas'):
-                    self.renderer.canvas.draw_idle()
+            self.lbl_moire.setText(f"🟡 Incommensurate / Error: {result.get('message', 'Strain required.')}")
 
     def handle_draw_bz(self):
         if not getattr(self, 'current_structure', None): return
