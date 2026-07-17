@@ -102,7 +102,7 @@ class PyVistaCrystalBackend:
 
             poly = pv.PolyData(np.array(coords))
             sphere = pv.Sphere(radius=rad, theta_resolution=res, phi_resolution=res)
-            glyphs = poly.glyph(geom=sphere, factor=1.0, scale=False, orient=False)
+            glyphs = poly.glyph(geom=sphere, factor=1.0)
 
             if is_shiny:
                 actor = self.plotter.add_mesh(glyphs, color=color, smooth_shading=True, pickable=False, render=False, pbr=True, metallic=0.6, roughness=0.2)
@@ -111,7 +111,7 @@ class PyVistaCrystalBackend:
 
     def draw_bonds(self, supercell, active_colors: dict, cyl_radius: float = 0.1, thresh_multiplier: float = 1.15, is_shiny: bool = False, erased_bonds: set = None, erased_atoms: set = None):
         """Vectorized C-level bond distance calculation and GPU cylinder glyphing."""
-        if len(supercell) > 500000:
+        if len(supercell) > 20000:
             self.bond_tree = None
             return
 
@@ -311,12 +311,8 @@ class PyVistaCrystalBackend:
         for actor in self.moire_actors: self.plotter.remove_actor(actor)
         self.moire_actors.clear()
 
-        # Reverted back to the 4-sided primitive unit cell (rhombus)
-        v0 = np.zeros(3)
-        v1 = np.array([m_moire[0,0], m_moire[0,1], 0])
-        v2 = np.array([m_moire[1,0], m_moire[1,1], 0])
+        v0, v1, v2 = np.zeros(3), np.array([m_moire[0,0], m_moire[0,1], 0]), np.array([m_moire[1,0], m_moire[1,1], 0])
         v3 = v1 + v2
-        
         b0, b1, b2, b3 = [np.array([v[0], v[1], z_min]) for v in (v0, v1, v2, v3)]
         t0, t1, t2, t3 = [np.array([v[0], v[1], z_max]) for v in (v0, v1, v2, v3)]
 
@@ -325,7 +321,7 @@ class PyVistaCrystalBackend:
             line = pv.Line(p1, p2)
             actor = self.plotter.add_mesh(line, color="#FFD700", line_width=4, render=False)
             self.moire_actors.append(actor)
-            
+
     def set_camera_preset(self, preset: str):
         """Snaps hardware camera to quick isometric or crystallographic axes."""
         if preset == 'x': self.plotter.view_yz()

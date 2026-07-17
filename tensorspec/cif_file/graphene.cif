@@ -1,19 +1,26 @@
 data_graphene
-_cell_length_a 2.46
-_cell_length_b 2.46
-_cell_length_c 15.0
-_cell_angle_alpha 90
-_cell_angle_beta 90
-_cell_angle_gamma 120
-_symmetry_space_group_name_H-M 'P 1'
-_symmetry_Int_Tables_number 1
+_audit_creation_date              2026-07-16
+_audit_creation_method            'TensorSpec Standard Template'
+_symmetry_space_group_name_H-M    'P 1'
+_symmetry_Int_Tables_number       1
+_cell_length_a                    2.468
+_cell_length_b                    2.468
+_cell_length_c                    20.000
+_cell_angle_alpha                 90.0000
+_cell_angle_beta                  90.0000
+_cell_angle_gamma                 120.0000
 
 loop_
-  _atom_site_label
+  _symmetry_equiv_pos_site_id
+  _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+
+loop_
   _atom_site_type_symbol
+  _atom_site_label
   _atom_site_fract_x
   _atom_site_fract_y
   _atom_site_fract_z
   _atom_site_occupancy
-  C1 C 0.33333 0.66667 0.5 1.0
-  C2 C 0.66667 0.33333 0.5 1.0
+  C  C1  0.333333  0.666667  0.500000  1.0
+  C  C2  0.666667  0.333333  0.500000  1.0
