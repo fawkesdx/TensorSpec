@@ -14,18 +14,18 @@ Grand App
 	- [x] PBR/Shiny visual styling (3ds Max style) with color controls.
 	- [x] Toggleable crystallographic a, b, c axes display mapped to bounding box.
 	- [x] Twisting Multilayer Tab
-	- [ ] Draw polyhedra/planes connecting atoms instead of just sticks (deletable).
+	- [x] Draw polyhedra/planes connecting atoms instead of just sticks (deletable).
 	- [x] CDW Mode: Define atom shifts (dx, dy, dz) and propagate simulated distortions.
 	- [x] Brillouin Zone Engine: Bulk BZ, Cleaving surface BZ, kz slicing, and surface termination projections. (Completed: Tab 4 is fully operational, generating the Wigner-Seitz cell, the hovering surface plane, and exporting them natively.)
 - DFT Suite
 	- [x] Establish Data Pipeline: Pull crystal structure from `workspace.py` (drawn from Crystal Viewer Suite) to perform bulk band structure calculations.
-	- [ ] Core Math: High-Symmetry K-Path Generator (calculate k-points between high symmetry nodes like Gamma, M, K).
-	- [ ] Core Math: Pull exact Wigner-Seitz BZ nodes (Gamma, M, K, etc.) directly from Tab 4 of the Crystal Suite via global_workspace to define arbitrary 3D k-paths.
+	- [x] Core Math: High-Symmetry K-Path Generator (calculate k-points between high symmetry nodes like Gamma, M, K).
+	- [x] Core Math: Pull exact Wigner-Seitz BZ nodes (Gamma, M, K, etc.) directly from Tab 4 of the Crystal Suite via global_workspace to define arbitrary 3D k-paths.
 	- [x] Toy Tight Binding (TB) Engine: Built-in simple models (1D chain, 2D square lattice, 2D honeycomb/graphene) to test the solver and plotting.
 	- [x] Generalized TB Capability: UI to define custom hopping parameters and on-site energies.Engine dynamically scales Slater-Koster integrals using Harrison's rules and auto-detects materials via database.
 	- [x] Multi-Orbital Projection: Calculate eigenvector probabilities for atomic character mapping (Fat Bands).
 	- [ ] k.p Perturbation Capability: Near-band-edge models (e.g., Dirac cone effective mass).
-	- [ ] Full DFT Capability: Wrappers to trigger/parse external solvers.
+	- [ ] Full DFT Capability: Wrappers to trigger/parse external solvers from Quantum Espresso
 		- [ ] PBE
 		- [ ] GGA
 		- [ ] HSE
@@ -33,14 +33,14 @@ Grand App
 	- [ ] Semi-infinite structure setup for Green's function calculation (drawn from the crystal suite).
 		- [ ] Define which termination to stop at so we know which band belongs to the surface.
 - ARPES Suite
-	- [ ] Standalone Kinematics Engine: Convert experimental angles/energies to k_parallel and k_z
-	- [ ] Hierarchical Simulation Engine Selector (GUI Dropdown & Factory Router)
-		- [ ] Option A: Phenomenological Three-Step Model
-			- [ ] Step 1: Matrix element optical excitation mapping
-			- [ ] Step 2: Mean-free path electron transport modeling
-			- [ ] Step 3: Classic surface transmission & refraction
-		- [ ] Option B: One-Step Photoemission Model
-			- [ ] B1: Tight-Binding + Free Electron Final State (Chinook Engine integration)
+	- [x] Standalone Kinematics Engine: Convert experimental angles/energies to k_parallel and k_z
+	- [x] Hierarchical Simulation Engine Selector (GUI Dropdown & Factory Router)
+		- [x] Option A: Phenomenological Three-Step Model
+			- [x] Step 1: Matrix element optical excitation mapping
+			- [x] Step 2: Mean-free path electron transport modeling
+			- [x] Step 3: Classic surface transmission & refraction
+		- [x] Option B: One-Step Photoemission Model
+			- [x] B1: Tight-Binding + Free Electron Final State (Chinook Engine integration)
 			- [ ] B2: Real-space DFT Orbitals + Plane Wave Final State (kMap FFT tomography integration)
 			- [ ] B3: Full Multiple Scattering & Time-Reversed LEED (SPR-KKR execution wrapper using oscarpes API)
 	- [ ] Data Loader from various beamlines (MAESTRO, i05 Diamond, SIS SLS, etc.)
