@@ -241,6 +241,12 @@ class ChinookTightBindingEngine:
             
             tb_model.Kobj = klib.kpath(k_points) 
             print("3. Successfully built K-path!")
+            
+            # --- NEW: Save the Chinook objects to the engine so the UI can extract them! ---
+            self.basis = basis
+            self.H_dict = tb_dict
+            self.tb_model = tb_model
+            
             print("---------------------------\n")
         except Exception as e:
             print("\n!!! FATAL CHINOOK CRASH !!!")

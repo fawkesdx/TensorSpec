@@ -1,10 +1,20 @@
 import numpy as np
 
+import collections
+import collections.abc
+# Monkey-patch to fix Python 3.10+ compatibility for Chinook
+collections.Iterable = collections.abc.Iterable
+
 try:
     import chinook.build_lib as build_lib
-    import chinook.experiment as experiment
+    from chinook.ARPES_lib import experiment
     CHINOOK_AVAILABLE = True
-except ImportError:
+except Exception as e:
+    import traceback
+    print("\n" + "="*50)
+    print("CHINOOK IMPORT FAILED WITH ERROR:")
+    traceback.print_exc()
+    print("="*50 + "\n")
     CHINOOK_AVAILABLE = False
 
 class ChinookWrapper:
@@ -24,8 +34,25 @@ class ChinookWrapper:
         if not CHINOOK_AVAILABLE:
             print("Chinook not installed. Running in Dummy Mode.")
             return
+            
+        # 1. Check if DFT suite passed a valid pre-built Chinook model directly
+        if tb_dict.get('tb_model') is not None:
+            self.tb_model = tb_dict['tb_model']
+            return
+        if tb_dict.get('chinook_model') is not None:
+            self.tb_model = tb_dict['chinook_model']
+            return
+
+        # 2. Attempt to extract basis and hamiltonian_dict using standard keys
+        basis = tb_dict.get('basis', tb_dict.get('Basis', tb_dict.get('chinook_basis')))
+        h_dict = tb_dict.get('hamiltonian_dict', tb_dict.get('H_dict', tb_dict.get('hamiltonian')))
         
-        self.tb_model = build_lib.gen_tb(tb_dict)
+        # 3. Catch the NoneType error and diagnose the workspace contents
+        if basis is None or h_dict is None:
+            available_keys = list(tb_dict.keys())
+            raise ValueError(f"CRITICAL: Workspace missing Tight-Binding params. Available keys in tb_dict are: {available_keys}")
+            
+        self.tb_model = build_lib.gen_TB(basis, h_dict)
 
     def run_simulation(self, experiment_kwargs):
         """
@@ -49,35 +76,53 @@ class ChinookWrapper:
         inc_angle = experiment_kwargs.get('incidence_angle', 55.0)
         pol_str = experiment_kwargs.get('polarization', "Linear Horizontal")
         me_mode = experiment_kwargs.get('matrix_element_mode', "Full Matrix Elements")
+        se_width = experiment_kwargs.get('se_width', 0.01)
+        res_e = experiment_kwargs.get('res_E', 0.02)
+        res_k = experiment_kwargs.get('res_k', 0.02)
 
-        # 3. Calculate Polarization Vector (A)
-        # Assuming the sample normal is along Z, and the beam is in the XZ plane
-        theta = np.radians(inc_angle)
+        # 3. Calculate Polarization Vector (A) in Lab Frame
+        inc_rad = np.radians(inc_angle)
+        lin_ang = np.radians(experiment_kwargs.get('lin_pol_angle', 45.0))
         
-        # p-pol (LH): Electric field is in the scattering plane, perpendicular to beam
-        A_LH = np.array([np.cos(theta), 0.0, np.sin(theta)])
-        # s-pol (LV): Electric field is perpendicular to the scattering plane (along Y)
-        A_LV = np.array([0.0, 1.0, 0.0])
+        if "Horizontal" in pol_str: 
+            A_lab = np.array([np.cos(inc_rad), -np.sin(inc_rad), 0.0])
+        elif "Vertical" in pol_str: 
+            A_lab = np.array([0.0, 0.0, 1.0])
+        elif "Arbitrary" in pol_str:
+            A_lab = np.cos(lin_ang)*np.array([np.cos(inc_rad), -np.sin(inc_rad), 0.0]) + np.sin(lin_ang)*np.array([0.0, 0.0, 1.0])
+        elif "Right" in pol_str: 
+            A_lab = (np.array([np.cos(inc_rad), -np.sin(inc_rad), 0.0]) + 1j*np.array([0.0, 0.0, 1.0])) / np.sqrt(2)
+        else: 
+            A_lab = (np.array([np.cos(inc_rad), -np.sin(inc_rad), 0.0]) - 1j*np.array([0.0, 0.0, 1.0])) / np.sqrt(2)
+
+        # Parse Manipulator Geometry from GUI
+        theta_deg = experiment_kwargs.get('manip_theta', 0.0)
+        azi_deg = experiment_kwargs.get('manip_azimuth', 0.0)
+        tilt_deg = experiment_kwargs.get('manip_tilt', 0.0)
         
-        if "Horizontal" in pol_str:
-            A = A_LH
-        elif "Vertical" in pol_str:
-            A = A_LV
-        elif "Right" in pol_str:
-            A = (A_LH + 1j * A_LV) / np.sqrt(2)
-        else: # Circular Left
-            A = (A_LH - 1j * A_LV) / np.sqrt(2)
+        # Build Rotation Stack
+        t_rad, a_rad, tilt_rad = np.radians(theta_deg), np.radians(azi_deg), np.radians(tilt_deg)
+        R_z = np.array([[np.cos(t_rad), -np.sin(t_rad), 0], [np.sin(t_rad), np.cos(t_rad), 0], [0, 0, 1]])
+        R_y = np.array([[np.cos(a_rad), 0, np.sin(a_rad)], [0, 1, 0], [-np.sin(a_rad), 0, np.cos(a_rad)]])
+        R_x = np.array([[1, 0, 0], [0, np.cos(tilt_rad), -np.sin(tilt_rad)], [0, np.sin(tilt_rad), np.cos(tilt_rad)]])
+        
+        R_total = R_z @ R_y @ R_x
+        R_inv = np.linalg.inv(R_total)
+        
+        # Transform Lab polarization into the Sample's local frame for Chinook
+        A_sample = R_inv @ A_lab
 
         # 4. Determine Matrix Element Toggles
-        # If "Bare Spectral Function" is selected, we disable Matrix Elements
-        ME_flag = "Off" not in me_mode
+        is_bare = "Off" in me_mode
+        is_full = "Full" in me_mode
+        ME_flag = is_full  # Chinook natively calculates Full MEs if True, Bare if False
 
         # 5. Format the Domain (Cube) for Chinook
-        domain = [
-            kb['X'][0], kb['X'][1], num_x,
-            kb['Y'][0], kb['Y'][1], num_y,
-            kb['E'][0], kb['E'][1], num_e
-        ]
+        domain = {
+            'X': [kb['X'][0], kb['X'][1], num_x],
+            'Y': [kb['Y'][0], kb['Y'][1], num_y],
+            'E': [kb['E'][0], kb['E'][1], num_e]
+        }
 
         # 6. Build the Chinook ARPES Dictionary
         arpes_dict = {
@@ -86,22 +131,52 @@ class ChinookWrapper:
             'W': W,
             'V0': V0,
             'T': T,
-            'pol': A,
+            'pol': A_sample,
             'ME': ME_flag,
-            'resolution': {'E': 0.02, 'k': 0.02} # Energy & Momentum broadening
+            'SE': ['constant', se_width],          # Dynamically linked
+            'resolution': {'E': res_e, 'k': res_k} # Dynamically linked
         }
 
         # 7. Execute the ARPES Simulation
         try:
-            exp = experiment.experiment(self.tb_model, arpes_dict)
-            exp.run()
+            print(f">> DEBUG: Chinook domain bounds: {domain}")
+            # Instantiate the experiment class directly
+            exp = experiment(self.tb_model, arpes_dict)
+            exp.datacube()
             
-            # Chinook returns a flattened 1D array of intensities. 
-            # We must reshape it to match our (kx, ky, E) grid.
-            intensity_1d = np.real(exp.spectral)
-            intensity_3d = intensity_1d.reshape((num_x, num_y, num_e))
+            # The spectral() method returns both a raw and a resolution-broadened map.
+            # np.real() casts this into a 4D array of shape (2, kx, ky, E).
+            output_maps = np.real(exp.spectral())
+            print(f">> DEBUG: Output maps shape: {output_maps.shape}")
+            
+            if output_maps.ndim == 4 and output_maps.shape[0] == 2:
+                intensity_3d = output_maps[1]
+            elif output_maps.ndim == 1:
+                intensity_3d = output_maps.reshape((num_x, num_y, num_e), order='F')
+            else:
+                intensity_3d = output_maps
+            
+            # --- Apply Dipole Approximation (if selected) ---
+            if not is_bare and not is_full:
+                kx_arr = np.linspace(kb['X'][0], kb['X'][1], num_x)
+                ky_arr = np.linspace(kb['Y'][0], kb['Y'][1], num_y)
+                KX, KY = np.meshgrid(kx_arr, ky_arr, indexing='ij')
+                # Purely geometric A dot k scaling (assuming 2D projection kz~0)
+                dipole_factor = np.abs(A_sample[0]*KX + A_sample[1]*KY)**2
+                intensity_3d = intensity_3d * dipole_factor[:, :, np.newaxis]
+                
+            # --- Apply Lab Frame Rotation ---
+            import scipy.ndimage
+            effective_rot = experiment_kwargs.get('manip_azimuth', 0.0) + experiment_kwargs.get('slit_angle', 0.0)
+            if effective_rot != 0.0:
+                intensity_3d = scipy.ndimage.rotate(intensity_3d, angle=-effective_rot, axes=(0, 1), reshape=False, order=1)
+                
+            print(f">> DEBUG: Final 3D cube shape: {intensity_3d.shape}")
             
         except Exception as e:
+            import traceback
+            print("\n>> CHINOOK EXECUTION FAILED:")
+            traceback.print_exc()
             raise RuntimeError(f"Chinook Calculation Error: {e}")
 
         return {'intensity_broadened': intensity_3d}

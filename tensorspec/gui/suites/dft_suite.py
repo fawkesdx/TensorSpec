@@ -221,6 +221,9 @@ class DFTSuite(QWidget):
         self.btn_ws_refresh.clicked.connect(self.refresh_workspace_list)
         self.btn_ws_load.clicked.connect(self.load_workspace_structure)
         self.btn_push_bands.clicked.connect(self.push_bands_to_workspace)
+        
+        # --- NEW: Connect spin box for live plotting updates ---
+        self.spin_iso.valueChanged.connect(self.update_2d_plot)
 
     def refresh_workspace_list(self):
         self.ws_combo.clear()
@@ -317,7 +320,7 @@ class DFTSuite(QWidget):
                     k_points, k_labels, points_per_segment=self.spin_k_res.value()
                 )
             else:
-                self.res = 150 
+                self.res = self.spin_k_res.value() 
                 self.kx_vals = np.linspace(-4.5, 4.5, self.res)
                 self.ky_vals = np.linspace(-4.5, 4.5, self.res)
                 Kx, Ky = np.meshgrid(self.kx_vals, self.ky_vals)
@@ -369,6 +372,51 @@ class DFTSuite(QWidget):
             QMessageBox.warning(self, "Calculation Error", str(e))
             return
 
+        # --- NEW: Extract Basis Coordinates for ARPES Matrix Elements ---
+        basis_coords = []
+        if hasattr(self.engine, 'crystal_structure') and self.engine.crystal_structure is not None:
+            # Extract Cartesian coordinates of the atoms in the unit cell
+            # For a simple graphene pz-orbital model, the 2 atoms map perfectly to the 2 basis states.
+            basis_coords = [site.coords.tolist() for site in self.engine.crystal_structure]
+
+        # --- NEW: Ultra-Deep Hunt for Chinook objects ---
+        found_basis = None
+        found_h_dict = None
+        found_tb_model = None
+        
+        for attr_name in dir(self.engine):
+            if attr_name.startswith('__'): continue
+            attr_val = getattr(self.engine, attr_name)
+            type_name = type(attr_val).__name__
+            
+            # Catch the pre-built model
+            if 'TB_model' in type_name:
+                found_tb_model = attr_val
+            
+            # Catch the Hamiltonian dict (or if basis is nested inside a dict)
+            elif isinstance(attr_val, dict):
+                if 'ham' in attr_name.lower() or 'dict' in attr_name.lower():
+                    found_h_dict = attr_val
+                if 'basis' in attr_val:
+                    found_basis = attr_val['basis']
+                    
+            # Catch the basis by checking list/tuple/array contents
+            elif isinstance(attr_val, (list, tuple)) or type_name == 'ndarray':
+                try:
+                    if len(attr_val) > 0 and 'orbital' in type(attr_val[0]).__name__.lower():
+                        found_basis = attr_val
+                except Exception:
+                    pass
+            
+            # Fallback direct name matching for basis
+            if 'basis' in attr_name.lower() and found_basis is None:
+                found_basis = attr_val
+
+        # If tb_model was found but basis/h_dict wasn't, extract them directly from the model
+        if found_tb_model is not None:
+            if found_basis is None: found_basis = getattr(found_tb_model, 'basis', None)
+            if found_h_dict is None: found_h_dict = getattr(found_tb_model, 'H_dict', None)
+
         # 4. Cache data for pushing
         self.active_bands_data = {
             'type': 'band_structure',
@@ -376,7 +424,14 @@ class DFTSuite(QWidget):
             'k_vecs': k_vecs,
             'eigenvalues': eigenvalues,
             'eigenvectors': eigenvectors,
+            'orbital_positions': basis_coords, 
+            'basis': found_basis,
+            'H_dict': found_h_dict,
+            'tb_model': found_tb_model,
+            'title': title
         }
+        
+        print(f">> DEBUG: Deep Hunt | tb_model: {type(found_tb_model)} | basis: {type(found_basis)} | H_dict: {type(found_h_dict)}")
         if is_2d:
             self.active_bands_data.update({'kx': self.kx_vals, 'ky': self.ky_vals, 'grid_shape': (self.res, self.res)})
         else:
@@ -384,7 +439,15 @@ class DFTSuite(QWidget):
         self.btn_push_bands.setEnabled(True)
 
         # 5. Render Plot
-        self.figure.clear() # Completely clear the figure to rebuild axes safely
+        # SAFELY remove the colorbar from C++ memory before clearing the figure
+        if hasattr(self, 'cbar') and self.cbar is not None:
+            try:
+                self.cbar.remove()
+            except Exception:
+                pass
+            self.cbar = None
+            
+        self.figure.clear() 
         
         if not is_2d:
             self.ax = self.figure.add_subplot(111)
@@ -392,36 +455,26 @@ class DFTSuite(QWidget):
             projection_mode = self.combo_projection.currentText()
             
             if projection_mode != "None (Standard Lines)":
-                # 1. Identify which basis indices belong to the chosen element
                 target_el = projection_mode.replace("Element: ", "")
                 target_indices = [i for i, lbl in enumerate(orb_labels) if lbl.startswith(target_el)]
                 
                 if target_indices:
-                    # 2. Calculate Quantum Mechanical Probability Density |psi|^2
                     probs = np.abs(eigenvectors)**2
-                    
-                    # Safely handle the matrix axis depending on Chinook's return shape
                     if probs.shape[1] == len(orb_labels):
                         weights = np.sum(probs[:, target_indices, :], axis=1) 
                     else:
                         weights = np.sum(probs[:, :, target_indices], axis=2)
                         
-                    # 3. Flatten for Matplotlib Scatter
                     x = np.tile(k_dist, (num_bands, 1)).T.flatten()
                     y = eigenvalues.flatten()
                     c = weights.flatten()
                     
-                    # Draw Fat Bands
                     scatter = self.ax.scatter(x, y, c=c, cmap='coolwarm', s=8, zorder=2, vmin=0, vmax=1)
                     self.cbar = self.figure.colorbar(scatter, ax=self.ax)
                     self.cbar.set_label(f"Orbital Character (Red = {target_el})", fontsize=10)
             else:
-                # Standard Line Plot (No Projection)
                 for b in range(num_bands):
                     self.ax.plot(k_dist, eigenvalues[:, b], color='blue', linewidth=2)
-                # The colorbar is already destroyed by self.figure.clear(), so we just delete our Python reference to avoid crashes
-                if hasattr(self, 'cbar'):
-                    del self.cbar
             
             self.ax.axhline(0, color='gray', linestyle='--', linewidth=1, zorder=1)
             self.ax.set_xlim(0, k_dist[-1])
@@ -432,41 +485,54 @@ class DFTSuite(QWidget):
                 self.ax.axvline(k_dist[i], color='black', linewidth=0.8, zorder=1)
                 
             self.ax.set_title(title, fontsize=14)
-            self.figure.tight_layout()
+            self.figure.subplots_adjust(left=0.15, right=0.85, top=0.9, bottom=0.15)
             self.canvas.draw()
             
         else:
-            # 2D ARPES Isoenergy Heatmap Rendering
-            self.ax = self.figure.add_subplot(111)
-            num_bands = eigenvalues.shape[1]
+            self.update_2d_plot()
+
+    def update_2d_plot(self):
+        """Redraws the 2D isoenergy cut instantly without recalculating bands."""
+        if not hasattr(self, 'active_bands_data') or not self.active_bands_data.get('is_2d'):
+            return
             
-            omega = self.spin_iso.value()
-            eta = 0.1  # Lorentzian broadening factor (eV)
+        if hasattr(self, 'cbar') and self.cbar is not None:
+            try:
+                self.cbar.remove()
+            except Exception:
+                pass
+            self.cbar = None
             
-            # Calculate Spectral Weight A(k, w) across all bands
-            spectral_weight = np.zeros((self.res, self.res))
-            for b in range(num_bands):
-                band_energy = eigenvalues[:, b].reshape((self.res, self.res))
-                # Apply Lorentzian broadening to simulate experimental ARPES linewidth
-                spectral_weight += (eta / np.pi) / ((omega - band_energy)**2 + eta**2)
+        self.figure.clear()
+        self.ax = self.figure.add_subplot(111)
+        
+        eigenvalues = self.active_bands_data['eigenvalues']
+        num_bands = eigenvalues.shape[1]
+        res = self.active_bands_data['grid_shape'][0]
+        
+        omega = self.spin_iso.value()
+        eta = 0.1 
+        
+        spectral_weight = np.zeros((res, res))
+        for b in range(num_bands):
+            band_energy = eigenvalues[:, b].reshape((res, res))
+            spectral_weight += (eta / np.pi) / ((omega - band_energy)**2 + eta**2)
+        
+        im = self.ax.pcolormesh(self.active_bands_data['kx'], self.active_bands_data['ky'], spectral_weight, cmap='magma', shading='auto')
+        
+        self.ax.set_xlabel(r"$k_x$ ($\mathrm{\AA}^{-1}$)", fontsize=12)
+        self.ax.set_ylabel(r"$k_y$ ($\mathrm{\AA}^{-1}$)", fontsize=12)
+        
+        title = self.active_bands_data.get('title', "2D Mesh")
+        self.ax.set_title(f"{title}\nIsoenergy Cut at {omega:.2f} eV", fontsize=14)
+        self.ax.set_aspect('equal') 
+        
+        self.cbar = self.figure.colorbar(im, ax=self.ax)
+        self.cbar.set_label("Spectral Weight (A.U.)", fontsize=10)
+        
+        self.figure.subplots_adjust(left=0.15, right=0.85, top=0.85, bottom=0.15)
+        self.canvas.draw()
             
-            # Plot the 2D Heatmap
-            im = self.ax.pcolormesh(self.kx_vals, self.ky_vals, spectral_weight, cmap='magma', shading='auto')
-            
-            self.ax.set_xlabel(r"$k_x$ ($\mathrm{\AA}^{-1}$)", fontsize=12)
-            self.ax.set_ylabel(r"$k_y$ ($\mathrm{\AA}^{-1}$)", fontsize=12)
-            self.ax.set_title(f"{title}\nIsoenergy Cut at {omega} eV", fontsize=14)
-            self.ax.set_aspect('equal') # Keep the Brillouin Zone perfectly square
-            
-            # Safely handle the colorbar
-            if hasattr(self, 'cbar'):
-                del self.cbar
-            self.cbar = self.figure.colorbar(im, ax=self.ax)
-            self.cbar.set_label("Spectral Weight (A.U.)", fontsize=10)
-            
-            self.figure.tight_layout()
-            self.canvas.draw()
-    
     def push_bands_to_workspace(self):
         if not hasattr(self, 'active_bands_data'):
             QMessageBox.warning(self, "Warning", "No band structure calculated yet.")
