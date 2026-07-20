@@ -199,10 +199,16 @@ class TabViewEdit(QWidget):
         self.btn_draw.clicked.connect(self.handle_draw)
         layout.addWidget(self.btn_draw)
 
-        self.btn_save = QPushButton("📸 Save High-Res Image")
+        self.btn_save = QPushButton("萄 Save High-Res Image")
         self.btn_save.setStyleSheet("background-color: #28a745; color: white; font-weight: bold; padding: 6px;")
         self.btn_save.clicked.connect(self.save_image)
         layout.addWidget(self.btn_save)
+
+        # --- NEW: Export to CIF ---
+        self.btn_export_cif = QPushButton("💾 Export Structure to CIF")
+        self.btn_export_cif.setStyleSheet("background-color: #0F6A8B; color: white; font-weight: bold; padding: 6px;")
+        self.btn_export_cif.clicked.connect(self.export_cif)
+        layout.addWidget(self.btn_export_cif)
 
         layout.addStretch()
         scroll.setWidget(container)
@@ -665,3 +671,18 @@ class TabViewEdit(QWidget):
                 self.spin_h.blockSignals(False)
                 self.spin_k.blockSignals(False)
                 self.spin_l.blockSignals(False)
+
+    def export_cif(self):
+        """Exports the currently active supercell/cleaved structure to a CIF file."""
+        if not getattr(self.main_suite, 'current_structure', None):
+            QMessageBox.warning(self, "Export Error", "No structure available to export!")
+            return
+            
+        fname, _ = QFileDialog.getSaveFileName(self, "Save CIF", "cleaved_structure.cif", "CIF Files (*.cif)")
+        if fname:
+            try:
+                # PyMatgen's built-in exporter
+                self.main_suite.current_structure.to(filename=fname, fmt="cif")
+                QMessageBox.information(self, "Success", f"Structure successfully saved to:\n{fname}")
+            except Exception as e:
+                QMessageBox.critical(self, "Export Error", f"Failed to save CIF:\n{str(e)}")

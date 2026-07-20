@@ -10,6 +10,7 @@ When assisting with this repository, strictly adhere to the following rules:
     * **Core Math & Physics Engine (`tensorspec/core/`):** Pure Python/NumPy/PyMatgen logic (e.g., symmetry parsing, Moiré math, ARPES momentum transformations). Zero GUI or plotting imports allowed.
     * **Rendering & Visualization Backends (`tensorspec/plotting/`):** Dedicated wrapper classes for PyVista, Matplotlib, or PyQtGraph engines.
     * **UI Controllers (`tensorspec/gui/`):** PySide6 layout definitions, widgets, and signal/slot connection routing.
+    * if a long monolithic files need to be separated, always tell me which block to be moved where instead of giving me the whole code so I can follow the logic. when separating files, I want you to tell me what to copy from the old file and what to paste in the new file. I only want to move what I know exist in the old files so we dont lose any feature.
 6.  **Hierarchical Data Architecture:** All multi-dimensional spectroscopic data containers must adopt the **Hierarchical Tree Model** (via `xarray.DataTree` aligned with NeXus/HDF5 standards). Never store disconnected arrays. Every data object must structure its nodes as:
     * `/raw`: Immutable experimental intensity matrices, hardware coordinates, and metadata (`attrs`).
     * `/processed`: Transformed datasets (e.g., $E, k$ space, drift-corrected PEEM stacks).
@@ -28,7 +29,11 @@ tensorspec/
 │   │   ├── __init__.py
 │   │   ├── arpes_loaders.py  # Readers for MAESTRO, i05 Diamond, SIS/ADRESS SLS, Lorea Alba, Bloch MaxIV 
 │   │   └── peem_loaders.py   # TIF stack & sequence folder loaders 
-│   ├── dft_engine.py         # Bulk band structure, tight binding, k.p, DFT... 
+│   ├── dft_engine.py         # MAIN ROUTER: Routes calculation to chinook_tb or qe_generator
+│   ├── dft/                  # Nested folder for separated DFT physics engines
+│   │   ├── __init__.py
+│   │   ├── chinook_tb.py     # Tight Binding & Slater-Koster math engine
+│   │   └── qe_generator.py   # Quantum Espresso & Wannier90 input file generator
 │   ├── arpes_engine.py       # MAIN ROUTER: Routes calculation to three_step.py or one_step/
 │   ├── arpes/                # Nested folder for separated physics engines
 │   │   ├── __init__.py
@@ -57,6 +62,9 @@ tensorspec/
 │       └── viewer_4d.py       # HypercubeViewer: 3D VolumeSlicer + 4th dimension timeline/motor slider
 └── gui/
     ├── __init__.py
+    ├── components/           # Reusable, isolated UI panels to prevent monolithic suites
+    │   ├── __init__.py
+    │   └── dft_panels.py     # Holds QEGeneratorPanel and TightBindingPanel
     ├── main_browser.py       # THE BIG GUI: Global Data Workspace Explorer & Suite Launcher Ribbon
     └── suites/               # The 6 independent roadmap suites + ML integration
         ├── __init__.py

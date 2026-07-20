@@ -26,9 +26,10 @@ Grand App
 	- [x] Multi-Orbital Projection: Calculate eigenvector probabilities for atomic character mapping (Fat Bands).
 	- [ ] k.p Perturbation Capability: Near-band-edge models (e.g., Dirac cone effective mass).
 	- [ ] Full DFT Capability: Wrappers to trigger/parse external solvers from Quantum Espresso
-		- [ ] PBE
-		- [ ] GGA
-		- [ ] HSE
+		- [x] Abstract QE Input Generator (scf.in, nscf.in, wannier90.win) decoupled from local executables.
+		- [x] GUI component for defining pseudo_dir, k-mesh, and functionals (PBE, LDA, HSE).
+		- [x] Local subprocess execution runner with thread-safety.
+		- [x] Parse resulting wannier90_hr.dat back into the Tight Binding engine.
 	- [ ] Slab creation for surface slab calculations (drawn from the structure from the crystal suite).
 	- [ ] Semi-infinite structure setup for Green's function calculation (drawn from the crystal suite).
 		- [ ] Define which termination to stop at so we know which band belongs to the surface.

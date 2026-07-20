@@ -1,3 +1,7 @@
 TensorSpec_env/
 current_problem
+Pseudo
+qe_workspace
+tensorspec_v1
 .DS_Store
+out
