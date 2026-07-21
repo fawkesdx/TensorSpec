@@ -74,6 +74,14 @@ class QEGeneratorPanel(QWidget):
         self.spin_nbnd = QSpinBox()
         self.spin_nbnd.setRange(1, 500); self.spin_nbnd.setValue(12)
         qe_form.addRow("Number of Bands (nbnd):", self.spin_nbnd)
+        
+        # 1. Wannier Hybridization Toggle
+        self.combo_wannier_mode = QComboBox()
+        self.combo_wannier_mode.addItems([
+            "Atomic Projections (Chinook ARPES)", 
+            "Maximally Localized (WannierTools)"
+        ])
+        qe_form.addRow("Wannier Mode:", self.combo_wannier_mode)
 
         kmesh_layout = QHBoxLayout()
         self.spin_kx = QSpinBox(); self.spin_kx.setRange(1, 20); self.spin_kx.setValue(6)
@@ -163,7 +171,11 @@ class QEGeneratorPanel(QWidget):
             # Generate all 4 configuration files, passing the SOC state
             qe_gen.write_scf_input(out_dir, ecutwfc=ecut, kmesh=kmesh, use_soc=is_soc_enabled)
             qe_gen.write_nscf_input(out_dir, ecutwfc=ecut, kmesh=kmesh, nbnd=nbnd, use_soc=is_soc_enabled)
-            qe_gen.write_wannier90_input(out_dir, kmesh=kmesh, num_wann=nbnd, use_soc=is_soc_enabled)
+            
+            # Pass the MLWF mode toggle 
+            is_mlwf = (self.combo_wannier_mode.currentIndex() == 1)
+            qe_gen.write_wannier90_input(out_dir, kmesh=kmesh, num_wann=nbnd, use_soc=is_soc_enabled, mlwf_mode=is_mlwf)
+            
             qe_gen.write_pw2wan_input(out_dir)
             
             # Extract Commands
