@@ -64,7 +64,9 @@ class ARPESPanel(QWidget):
         engine_group = QGroupBox("1. Simulation Engine Selector")
         engine_layout = QFormLayout(engine_group)
         self.engine_dropdown = QComboBox()
-        self.engine_dropdown.addItem("Option B1: One-Step Model (Chinook)", "B1")
+        self.engine_dropdown.addItem("Option B1: One-Step Model (Chinook TB)", "B1")
+        self.engine_dropdown.addItem("Option B2: Bare Spectral Function (ME Off)", "B2")
+        self.engine_dropdown.addItem("Option B3: Full Multiple Scattering (SPR-KKR)", "B3")
         self.engine_dropdown.addItem("Option A: Phenomenological Three-Step Model", "A")
         engine_layout.addRow(QLabel("Physics Model:"), self.engine_dropdown)
         control_layout.addWidget(engine_group)
@@ -115,10 +117,6 @@ class ARPESPanel(QWidget):
         self.matrix_element_combo = QComboBox()
         self.matrix_element_combo.addItems(["Full Matrix Elements", "Polarization Dipole Only", "Bare Spectral Function (ME Off)"])
         
-        self.slit_size_spin = QDoubleSpinBox(); self.slit_size_spin.setRange(0.1, 5.0); self.slit_size_spin.setValue(0.5); self.slit_size_spin.setSingleStep(0.1); self.slit_size_spin.setSuffix(" mm")
-        self.slit_angle_spin = QDoubleSpinBox(); self.slit_angle_spin.setRange(-180.0, 180.0); self.slit_angle_spin.setValue(0.0); self.slit_angle_spin.setSuffix(" °")
-        self.deflector_angle_spin = QDoubleSpinBox(); self.deflector_angle_spin.setRange(-15.0, 15.0); self.deflector_angle_spin.setValue(0.0); self.deflector_angle_spin.setSuffix(" °")
-
         beam_layout.addRow("Manipulator Θ (Lab Z):", self.manip_theta_spin)
         beam_layout.addRow("Manipulator Azimuth:", self.manip_azi_spin)
         beam_layout.addRow("Manipulator Tilt:", self.manip_tilt_spin)
@@ -126,14 +124,20 @@ class ARPESPanel(QWidget):
         beam_layout.addRow("Polarization:", self.polarization_combo)
         beam_layout.addRow("Pol. Angle (Arbitrary):", self.lin_pol_angle_spin)
         beam_layout.addRow("Intensity Mode:", self.matrix_element_combo)
-        beam_layout.addRow("Analyzer Slit Size:", self.slit_size_spin)
-        beam_layout.addRow("Analyzer Slit Angle:", self.slit_angle_spin)
-        beam_layout.addRow("Deflector Angle:", self.deflector_angle_spin)
         control_layout.addWidget(beam_group)
         
-        # 4. Domain & Resolution
-        domain_group = QGroupBox("4. Domain & Resolution")
+        # 4. Analyzer Domain & Resolution
+        domain_group = QGroupBox("4. Analyzer Domain & Resolution")
         domain_layout = QVBoxLayout(domain_group)
+        
+        analyzer_layout = QFormLayout()
+        self.slit_size_spin = QDoubleSpinBox(); self.slit_size_spin.setRange(0.1, 5.0); self.slit_size_spin.setValue(0.5); self.slit_size_spin.setSingleStep(0.1); self.slit_size_spin.setSuffix(" mm")
+        self.slit_angle_spin = QDoubleSpinBox(); self.slit_angle_spin.setRange(-180.0, 180.0); self.slit_angle_spin.setValue(0.0); self.slit_angle_spin.setSuffix(" °")
+        self.deflector_angle_spin = QDoubleSpinBox(); self.deflector_angle_spin.setRange(-15.0, 15.0); self.deflector_angle_spin.setValue(0.0); self.deflector_angle_spin.setSuffix(" °")
+        analyzer_layout.addRow("Analyzer Slit Size:", self.slit_size_spin)
+        analyzer_layout.addRow("Analyzer Slit Angle:", self.slit_angle_spin)
+        analyzer_layout.addRow("Deflector Angle:", self.deflector_angle_spin)
+        domain_layout.addLayout(analyzer_layout)
         
         def create_range_row(label_text, min_val, max_val, pts_val):
             row = QHBoxLayout()
@@ -146,8 +150,9 @@ class ARPESPanel(QWidget):
             row.addWidget(QLabel("Pts:")); row.addWidget(vpts)
             return row, vmin, vmax, vpts
 
-        row_kx, self.spin_kx_min, self.spin_kx_max, self.spin_kx_steps = create_range_row("kx:", -2.0, 2.0, 100)
-        row_ky, self.spin_ky_min, self.spin_ky_max, self.spin_ky_steps = create_range_row("ky:", -2.0, 2.0, 100)
+        # Relabeled strictly to Slit and Deflector axes
+        row_kx, self.spin_kx_min, self.spin_kx_max, self.spin_kx_steps = create_range_row("kx (Slit):", -2.0, 2.0, 100)
+        row_ky, self.spin_ky_min, self.spin_ky_max, self.spin_ky_steps = create_range_row("ky (Deflect):", -2.0, 2.0, 100)
         row_e, self.spin_e_min, self.spin_e_max, self.spin_e_steps = create_range_row("E:", -2.0, 0.5, 100)
 
         domain_layout.addLayout(row_kx)
@@ -328,26 +333,37 @@ class ARPESPanel(QWidget):
             self.ax_schematic.plot(wave_pts[0], wave_pts[1], wave_pts[2], color='gold', linewidth=2, label='Linear Light')
             self.ax_schematic.quiver(start_pt[0], start_pt[1], start_pt[2], np.real(eps_lab)[0], np.real(eps_lab)[1], np.real(eps_lab)[2], length=1.5, color='magenta', linewidth=2, label='E-Field')
         
-        win_w = np.radians(15.0) 
-        slit_h = np.radians(slit_width / 10.0) 
         defl_rad, slit_rot = np.radians(deflector_angle), np.radians(slit_angle)
         
-        w_theta = np.linspace(-slit_h/2, slit_h/2, 5) + defl_rad
-        w_phi = np.linspace(-win_w/2, win_w/2, 20)
-        W_THETA, W_PHI = np.meshgrid(w_theta, w_phi)
+        # --- FIXED DETECTOR PLANE ---
+        # The detector is physically bolted to the Lab Frame at Y = 1.25
+        y_det = 1.25
+        plane_size = 0.5
+        px, pz = np.meshgrid(np.linspace(-plane_size, plane_size, 5), np.linspace(-plane_size, plane_size, 5))
+        py = np.full_like(px, y_det)
         
-        w_theta_rot = W_THETA * np.cos(slit_rot) - W_PHI * np.sin(slit_rot)
-        w_phi_rot = W_THETA * np.sin(slit_rot) + W_PHI * np.cos(slit_rot)
+        self.ax_schematic.plot_surface(px, py, pz, color='gray', alpha=0.3, edgecolor='blue', label='Detector Plane')
+
+        # --- DRAW ANALYZER SLIT (Fixed Cyan Line) ---
+        slit_len = 0.5
+        sx = slit_len * np.cos(slit_rot)
+        sz = slit_len * np.sin(slit_rot)
+        self.ax_schematic.plot([-sx, sx], [y_det, y_det], [-sz, sz], color='cyan', linewidth=4, zorder=10, label='Analyzer Slit')
+
+        # --- DRAW DEFLECTOR CUT (Animated Yellow Line) ---
+        # The deflector shifts the measurement orthogonally to the slit
+        shift_dist = y_det * np.tan(defl_rad)
+        dx_shift = shift_dist * (-np.sin(slit_rot))
+        dz_shift = shift_dist * (np.cos(slit_rot))
         
-        X_win = 1.25 * np.sin(np.pi/2 - w_theta_rot) * np.cos(np.pi/2 + w_phi_rot)
-        Z_win = 1.25 * np.sin(np.pi/2 - w_theta_rot) * np.sin(np.pi/2 + w_phi_rot)
-        Y_win = 1.25 * np.cos(np.pi/2 - w_theta_rot)
-        win_coords = R_total @ np.vstack([X_win.flatten(), Y_win.flatten(), Z_win.flatten()])
-        
-        self.ax_schematic.plot_surface(win_coords[0].reshape(W_THETA.shape), 
-                                       win_coords[1].reshape(W_THETA.shape), 
-                                       win_coords[2].reshape(W_THETA.shape), 
-                                       color='cyan', alpha=0.8, edgecolor='blue', label='Analyzer Slit')
+        self.ax_schematic.plot([-sx + dx_shift, sx + dx_shift], 
+                               [y_det, y_det], 
+                               [-sz + dz_shift, sz + dz_shift], 
+                               color='yellow', linestyle='--', linewidth=3, zorder=11, label='Deflector Cut')
+                               
+        # Draw a small arrow showing the deflection direction
+        if abs(deflector_angle) > 0.1:
+            self.ax_schematic.quiver(0, y_det, 0, dx_shift, 0, dz_shift, color='yellow', linewidth=2, arrow_length_ratio=0.3)
 
         self.ax_schematic.plot([0, 0], [0, 0], [-3, 3], color='black', linestyle='-.', linewidth=1, label='Lab Z (Theta)')
 
@@ -429,42 +445,86 @@ class ARPESPanel(QWidget):
             ky_min, ky_max, ky_steps = self.spin_ky_min.value(), self.spin_ky_max.value(), self.spin_ky_steps.value()
 
             self.sim_intensity = results['intensity_broadened']
-            self.sim_E_axis = np.linspace(e_min, e_max, e_steps)
-            self.sim_kx = np.linspace(kx_min, kx_max, kx_steps)
-            self.sim_ky = np.linspace(ky_min, ky_max, ky_steps)
             
-            self.energy_slider.setRange(0, e_steps - 1)
-            fermi_idx = np.abs(self.sim_E_axis).argmin()
-            self.energy_slider.setEnabled(True)
-            self.energy_slider.setValue(fermi_idx)
+            # --- PATCH: DYNAMIC DIMENSION DETECTION ---
+            # Read the actual dimensions returned by the backend, ignoring UI spinboxes if they were bypassed
+            nx, ny, ne = self.sim_intensity.shape
             
-            self.update_plot_slice(fermi_idx)
+            self.sim_E_axis = np.linspace(e_min, e_max, ne)
+            self.sim_kx = np.linspace(kx_min, kx_max, nx)
+            self.sim_ky = np.linspace(ky_min, ky_max, ny)
+            
+            if ny == 1 or nx == 1:
+                # It is a 2D Band Dispersion Map (Energy vs Momentum)
+                self.energy_slider.setEnabled(False)
+                self.update_plot_slice(index=None)
+            else:
+                # It is a 3D Cube (Constant Energy Contours)
+                self.energy_slider.setRange(0, ne - 1)
+                fermi_idx = np.abs(self.sim_E_axis).argmin()
+                self.energy_slider.setEnabled(True)
+                self.energy_slider.setValue(fermi_idx)
+                
+                self.update_plot_slice(fermi_idx)
         else:
             QMessageBox.critical(self, "Simulation Error", f"An error occurred in the physics router:\n{message}")
             self.ax.set_title("Simulation Failed")
             self.canvas.draw()
 
-    def update_plot_slice(self, index):
+    def update_plot_slice(self, index=None):
         if not hasattr(self, 'sim_intensity'):
             return
-        
-        E_val = self.sim_E_axis[index]
-        self.energy_label.setText(f"Binding Energy: {E_val:.3f} eV")
-        
-        slice_2d = self.sim_intensity[:, :, index].T 
-        
-        slice_max = np.max(slice_2d) if np.max(slice_2d) > 0 else 1.0
-        norm_slice = slice_2d / slice_max
-        gamma_corrected = np.power(norm_slice, self.gamma_spin.value())
-        
+            
+        nx, ny, ne = self.sim_intensity.shape
         self.ax.clear()
-        self.ax.pcolormesh(self.sim_kx, self.sim_ky, gamma_corrected, shading='auto', cmap='afmhot', 
-                           vmin=self.vmin_spin.value(), vmax=self.vmax_spin.value())
-        self.ax.set_aspect('equal')
-        self.ax.set_title(f"Constant Energy Contour: {E_val:.2f} eV")
-        self.ax.set_xlabel(r"$k_x$ ($\mathrm{\AA}^{-1}$)")
-        self.ax.set_ylabel(r"$k_y$ ($\mathrm{\AA}^{-1}$)")
-        
+
+        # --- ROUTE 1: PLOT BAND DISPERSION (E vs k) ---
+        if ny == 1 or nx == 1:
+            self.energy_label.setText(f"Band Dispersion Map")
+            
+            if ny == 1:
+                slice_2d = self.sim_intensity[:, 0, :].T  
+                x_axis = self.sim_kx
+                x_label = r"$k_x$ ($\mathrm{\AA}^{-1}$)"
+            else:
+                slice_2d = self.sim_intensity[0, :, :].T  
+                x_axis = self.sim_ky
+                x_label = r"$k_y$ ($\mathrm{\AA}^{-1}$)"
+                
+            slice_max = np.max(slice_2d) if np.max(slice_2d) > 0 else 1.0
+            norm_slice = slice_2d / slice_max
+            gamma_corrected = np.power(norm_slice, self.gamma_spin.value())
+            
+            self.ax.pcolormesh(x_axis, self.sim_E_axis, gamma_corrected, shading='auto', cmap='afmhot', 
+                               vmin=self.vmin_spin.value(), vmax=self.vmax_spin.value())
+            
+            self.ax.set_aspect('auto')  # Free the aspect ratio for bands
+            self.ax.set_title("Simulated ARPES Band Dispersion")
+            self.ax.set_xlabel(x_label)
+            self.ax.set_ylabel("Binding Energy (eV)")
+
+        # --- ROUTE 2: PLOT CONSTANT ENERGY CONTOUR (kx vs ky) ---
+        else:
+            if index is None: 
+                index = self.energy_slider.value()
+                
+            E_val = self.sim_E_axis[index]
+            self.energy_label.setText(f"Binding Energy: {E_val:.3f} eV")
+            
+            slice_2d = self.sim_intensity[:, :, index].T 
+            
+            slice_max = np.max(slice_2d) if np.max(slice_2d) > 0 else 1.0
+            norm_slice = slice_2d / slice_max
+            gamma_corrected = np.power(norm_slice, self.gamma_spin.value())
+            
+            self.ax.pcolormesh(self.sim_kx, self.sim_ky, gamma_corrected, shading='auto', cmap='afmhot', 
+                               vmin=self.vmin_spin.value(), vmax=self.vmax_spin.value())
+            
+            self.ax.set_aspect('equal') # Lock aspect ratio for Fermi surfaces
+            self.ax.set_title(f"Constant Energy Contour: {E_val:.2f} eV")
+            self.ax.set_xlabel(r"$k_x$ ($\mathrm{\AA}^{-1}$)")
+            self.ax.set_ylabel(r"$k_y$ ($\mathrm{\AA}^{-1}$)")
+            
         self.figure.subplots_adjust(left=0.15, right=0.9, top=0.9, bottom=0.15)
         self.canvas.draw()
     

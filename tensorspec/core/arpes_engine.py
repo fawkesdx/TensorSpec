@@ -1,6 +1,7 @@
 import numpy as np
 from tensorspec.core.arpes.one_step.chinook_wrapper import ChinookWrapper
 from tensorspec.core.arpes.three_step import ThreeStepWrapper
+from tensorspec.core.arpes.one_step.kkr_wrapper import KKRWrapper
 
 class ARPESEngineRouter:
     """
@@ -15,7 +16,7 @@ class ARPESEngineRouter:
         
         # Placeholders for future hierarchical engine implementations      
         # self.engine_b2 = KMapWrapper()         
-        # self.engine_b3 = KKRWrapper()     
+        self.engine_b3 = KKRWrapper()  
 
     def run_simulation(self, model_choice, crystal_data, experiment_kwargs):
         # 1. Fetch the Fermi level that the DFT suite already calculated
@@ -34,6 +35,7 @@ class ARPESEngineRouter:
         elif model_choice == 'B2':
             raise NotImplementedError("kMap Tomography (Option B2) is not yet implemented.")
         elif model_choice == 'B3':
-            raise NotImplementedError("SPR-KKR Multiple Scattering (Option B3) is not yet implemented.")
+            # Route to the true Ab-Initio Multiple Scattering Model
+            return self.engine_b3.run_simulation(crystal_data, experiment_kwargs)
         else:
             raise ValueError(f"Unknown model choice: {model_choice}")

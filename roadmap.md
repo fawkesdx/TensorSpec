@@ -17,6 +17,7 @@ Grand App
 	- [x] Draw polyhedra/planes connecting atoms instead of just sticks (deletable).
 	- [x] CDW Mode: Define atom shifts (dx, dy, dz) and propagate simulated distortions.
 	- [x] Brillouin Zone Engine: Bulk BZ, Cleaving surface BZ, kz slicing, and surface termination projections. (Completed: Tab 4 is fully operational, generating the Wigner-Seitz cell, the hovering surface plane, and exporting them natively.)
+	- [ ] ML Interatomic Potential (MLIP) Relaxation: Fast real-space atomic force relaxation for stacked/cleaved heterostructures (CHGNet / M3GNet integration via matgl).
 - DFT Suite
 	- [x] Establish Data Pipeline: Pull crystal structure from `workspace.py` (drawn from Crystal Viewer Suite) to perform bulk band structure calculations.
 	- [x] Core Math: High-Symmetry K-Path Generator (calculate k-points between high symmetry nodes like Gamma, M, K).
@@ -30,9 +31,12 @@ Grand App
 		- [x] GUI component for defining pseudo_dir, k-mesh, and functionals (PBE, LDA, HSE).
 		- [x] Local subprocess execution runner with thread-safety.
 		- [x] Parse resulting wannier90_hr.dat back into the Tight Binding engine.
-	- [ ] Slab creation for surface slab calculations (drawn from the structure from the crystal suite).
-	- [ ] Semi-infinite structure setup for Green's function calculation (drawn from the crystal suite).
+		- [ ] Slab creation for surface slab calculations (drawn from the structure from the crystal suite).
+		- [ ] Semi-infinite structure setup for Green's function calculation (drawn from the crystal suite).
 		- [ ] Define which termination to stop at so we know which band belongs to the surface.
+		-	[ ] Toggle for Wannier90 Hybridization (Atomic Projections vs. Maximally Localized).
+		- [ ] Ab-Initio Band Structure Plotter (Parse and overlay raw QE XML eigenvalues).
+		- [ ] Ab-initio Relaxation Pipeline: Support for structural optimization (`relax` and `vc-relax`) input generation and execution inside the Quantum ESPRESSO runner.
 - ARPES Suite
 	- [x] Standalone Kinematics Engine: Convert experimental angles/energies to k_parallel and k_z
 	- [x] Hierarchical Simulation Engine Selector (GUI Dropdown & Factory Router)
