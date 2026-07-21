@@ -262,6 +262,11 @@ class CrystalViewerSuite(QWidget):
         hkl_layout.addWidget(QLabel("Layers:"))
         self.spin_exf_layers = QSpinBox(); self.spin_exf_layers.setRange(1, 10); self.spin_exf_layers.setValue(1)
         hkl_layout.addWidget(self.spin_exf_layers)
+        
+        hkl_layout.addWidget(QLabel("Vacuum (Å):"))
+        self.spin_exf_vacuum = QDoubleSpinBox(); self.spin_exf_vacuum.setRange(0.0, 100.0); self.spin_exf_vacuum.setValue(15.0)
+        hkl_layout.addWidget(self.spin_exf_vacuum)
+        
         hkl_layout.addWidget(QLabel("Plane [h k l]:"))
         self.spin_exf_h = QSpinBox(); self.spin_exf_h.setRange(-10, 10); self.spin_exf_h.setValue(0)
         self.spin_exf_k = QSpinBox(); self.spin_exf_k.setRange(-10, 10); self.spin_exf_k.setValue(0)
@@ -494,6 +499,7 @@ class CrystalViewerSuite(QWidget):
         else:
             # Read directly from our new persistent UI boxes
             num_layers = self.spin_exf_layers.value()
+            vacuum_thickness = self.spin_exf_vacuum.value()
             h = self.spin_exf_h.value()
             k = self.spin_exf_k.value()
             l = self.spin_exf_l.value()
@@ -509,7 +515,7 @@ class CrystalViewerSuite(QWidget):
                 import warnings
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    slabgen = SlabGenerator(bulk_struct, miller_index=hkl, min_slab_size=safe_thickness, min_vacuum_size=25.0, center_slab=True)
+                    slabgen = SlabGenerator(bulk_struct, miller_index=hkl, min_slab_size=safe_thickness, min_vacuum_size=vacuum_thickness, center_slab=True)
                     slabs = slabgen.get_slabs()
                     
                 if not slabs: raise ValueError(f"Could not generate slabs for plane {hkl}")
@@ -554,21 +560,28 @@ class CrystalViewerSuite(QWidget):
                     sites_to_keep.extend([raw_slab[idx] for idx in indices])
                 
                 
-                # Reconstruct the structure safely
+                # Reconstruct the structure safely with dynamic vacuum
+                final_coords_temp = [s.coords for s in sites_to_keep]
+                z_vals = [c[2] for c in final_coords_temp]
+                slab_thickness = max(z_vals) - min(z_vals) if z_vals else 0.0
+                total_c = slab_thickness + vacuum_thickness
+
                 new_matrix = raw_slab.lattice.matrix.copy()
-                new_matrix[2] = [0, 0, 25.0] 
+                new_matrix[2] = [0, 0, total_c] 
                 from pymatgen.core import Lattice
                 new_lat = Lattice(new_matrix)
                 
-                final_coords = [s.coords for s in sites_to_keep]
-                z_vals = [c[2] for c in final_coords]
                 z_center = (max(z_vals) + min(z_vals)) / 2.0
-                final_coords = [[c[0], c[1], c[2] - z_center + 12.5] for c in final_coords]
+                final_coords = [[c[0], c[1], c[2] - z_center + (total_c / 2.0)] for c in final_coords_temp]
                 
                 mono_struct = Structure(new_lat, [s.specie for s in sites_to_keep], final_coords, coords_are_cartesian=True)
                 
                 name = fname.split('/')[-1].replace('.cif', '') + f" ({num_layers}-Layer {hkl_str.replace(' ', '')})"
                 self.append_stack_layer(name, mono_struct)
+                
+                # --- NEW: Set the tight slab as active so we don't push the 500A dummy box! ---
+                self.current_structure = mono_struct
+                self.refresh_render()
             except Exception as e:
                 QMessageBox.critical(self, "Exfoliation Error", str(e))
 

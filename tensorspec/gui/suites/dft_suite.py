@@ -3,7 +3,7 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QPushButton, QGroupBox, QComboBox, QMessageBox, 
-                               QInputDialog, QSplitter)
+                               QInputDialog, QSplitter, QScrollArea, QFileDialog)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -40,7 +40,7 @@ class DFTSuite(QWidget):
         # --- Left Panel: Controls ---
         control_panel = QWidget()
         control_layout = QVBoxLayout(control_panel)
-        control_panel.setFixedWidth(380)
+        # (setFixedWidth removed to allow the QSplitter to resize horizontally)
         
         # 1. Workspace Integration Panel
         ws_group = QGroupBox("Crystal Structure (Workspace)")
@@ -74,8 +74,13 @@ class DFTSuite(QWidget):
         self.btn_push_bands.setStyleSheet("background-color: #5cb85c; color: white; font-weight: bold; padding: 8px;")
         self.btn_push_bands.setEnabled(False) # Disabled until calculation is done
         
+        # --- NEW: Ab-Initio Plotter Button ---
+        self.btn_load_qe_bands = QPushButton("📊 Load QE Ab-Initio Bands (XML)")
+        self.btn_load_qe_bands.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold; padding: 8px;")
+        
         control_layout.addWidget(self.btn_calculate)
         control_layout.addWidget(self.btn_push_bands)
+        control_layout.addWidget(self.btn_load_qe_bands)
         control_layout.addStretch()
         
         # --- Right Panel: Band Structure Canvas ---
@@ -83,9 +88,15 @@ class DFTSuite(QWidget):
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111)
         
+        # Wrap the control panel in a scroll area to fix the vertical lock
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(control_panel)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setMinimumWidth(320) # Prevents the panel from being crushed completely
+
         # Create the Draggable Splitter
         main_splitter = QSplitter(Qt.Horizontal)
-        main_splitter.addWidget(control_panel)
+        main_splitter.addWidget(scroll_area) # Add the scroll area instead of the raw panel
         main_splitter.addWidget(self.canvas)
         
         # Set initial width ratio (380px for the left panel, the rest for the canvas)
@@ -98,6 +109,9 @@ class DFTSuite(QWidget):
         self.btn_ws_refresh.clicked.connect(self.refresh_workspace_list)
         self.btn_ws_load.clicked.connect(self.load_workspace_structure)
         self.btn_push_bands.clicked.connect(self.push_bands_to_workspace)
+        
+        # --- NEW: Connect Ab-Initio Plotter ---
+        self.btn_load_qe_bands.clicked.connect(self.load_qe_xml_bands)
         
         # Connect spin box for live plotting updates using the panel reference
         self.tb_panel.spin_iso.valueChanged.connect(self.update_2d_plot)
@@ -319,6 +333,7 @@ class DFTSuite(QWidget):
             'basis': found_basis,
             'H_dict': found_h_dict,
             'tb_model': found_tb_model,
+            'fermi_energy': fermi_energy,  # <--- ADD THIS EXACT LINE
             'title': title
         }
         
@@ -483,6 +498,37 @@ class DFTSuite(QWidget):
         
         dim_str_display = "2D Mesh" if self.active_bands_data.get('is_2d') else "1D Path"
         QMessageBox.information(self, "Success", f"Band structure '{name}' ({dim_str_display}) pushed to Workspace!\nYou can now load it in the ARPES Suite.")
+
+    def load_qe_xml_bands(self):
+        """Loads and overlays raw Quantum ESPRESSO bands onto the current plot."""
+        fname, _ = QFileDialog.getOpenFileName(self, 'Open QE XML File', '', "XML files (*.xml);;All files (*.*)")
+        if not fname:
+            return
+
+        try:
+            qe_k_dist, qe_eigenvals, qe_fermi = self.engine.parse_qe_xml(fname)
+
+            # Scale the QE x-axis to perfectly align with the PyMatgen tight-binding axis
+            if hasattr(self, 'active_bands_data') and not self.active_bands_data.get('is_2d'):
+                tb_k_dist = self.active_bands_data.get('k_dist')
+                if tb_k_dist is not None and len(tb_k_dist) > 0 and qe_k_dist[-1] > 0:
+                    qe_k_dist = qe_k_dist * (tb_k_dist[-1] / qe_k_dist[-1])
+
+            num_bands = qe_eigenvals.shape[1]
+            label_added = False
+            
+            # Plot the solid black DFT bands behind the current bands (zorder=0)
+            for b in range(num_bands):
+                lbl = "Ab-Initio (QE)" if not label_added else None
+                self.ax.plot(qe_k_dist, qe_eigenvals[:, b] - qe_fermi, color='black', linewidth=1.5, zorder=0, label=lbl)
+                label_added = True
+
+            self.ax.legend(loc='upper right')
+            self.canvas.draw()
+            QMessageBox.information(self, "Success", f"Successfully loaded and overlaid {num_bands} Ab-Initio bands from QE.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to parse QE XML:\n{str(e)}")
     
     def closeEvent(self, event):
         print("close suite DFT Suite")

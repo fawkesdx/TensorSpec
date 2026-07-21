@@ -62,15 +62,26 @@ class ChinookTightBindingEngine:
         Format: [n][l][projection]
         CRITICAL: Must strictly match Wannier90's internal orbital ordering!
         """
-        if element_symbol in ["V", "W", "Mo", "Ta", "Ti"]:
-            # W90 d-orbital order: dz2, dxz, dyz, dx2-y2, dxy
-            return ["32ZR", "32xz", "32yz", "32XY", "32xy"] 
-        elif element_symbol in ["Te", "Se", "S", "O"]:
-            # W90 p-orbital order: s, pz, px, py
-            return ["50", "51z", "51x", "51y"]
+        from pymatgen.core import Element
+        
+        # Strip out any oxidation states or numbers (e.g., convert "Te2-" to "Te")
+        clean_symbol = ''.join([c for c in element_symbol if c.isalpha()])
+        el = Element(clean_symbol)
+        
+        # Determine the principal quantum number (n) based on the periodic table row
+        n = el.row
+        
+        # Wannier90 strictly orders s;p;d projections as: s, pz, px, py, dz2, dxz, dyz, dx2-y2, dxy
+        s_orbs = [f"{n}0"]
+        p_orbs = [f"{n}1z", f"{n}1x", f"{n}1y"]
+        # d-orbitals are always (n-1) in the valence shell (e.g., 6s -> 5d)
+        d_orbs = [f"{n-1}2ZR", f"{n-1}2xz", f"{n-1}2yz", f"{n-1}2XY", f"{n-1}2xy"]
+        
+        # Mirror the exact projection logic from qe_generator.py
+        if el.is_transition_metal or el.number > 30:
+            return s_orbs + p_orbs + d_orbs
         else:
-            # Default fallback (Carbon-like)
-            return ["20", "21z", "21x", "21y"]
+            return s_orbs + p_orbs
 
     def export_chinook_dictionary(self, shells=None, onsite_e=0.0, use_soc=False, soc_strength=0.5, tb_mode="Slater-Koster (Rigorous)"):
         if not self.crystal_structure:
@@ -234,7 +245,15 @@ class ChinookTightBindingEngine:
         try:
             print("\n--- CHINOOK BUILD STEPS ---")
             basis = build_lib.gen_basis(basis_args)
-            print(f"1. Successfully built basis! (Total Orbitals: {len(basis)})")
+            
+            # --- RESTORE SPINS FOR ARPES MATRIX ELEMENTS ---
+            if w90_filepath and use_soc:
+                orbs_list = basis if isinstance(basis, list) else getattr(basis, 'orbitals', [])
+                for idx, b_obj in enumerate(orbs_list):
+                    # Wannier90 perfectly halves the matrix: spin-up first, spin-down second
+                    b_obj.spin = 1.0 if idx < (len(orbs_list) // 2) else -1.0
+                    
+            print(f"1. Successfully built basis! (Total Orbitals: {len(getattr(basis, 'orbitals', basis))})")
 
             # --- DEEP ORBITAL DEBUG ---
             print("\n--- DEEP ORBITAL DEBUG ---")
@@ -397,10 +416,11 @@ class ChinookTightBindingEngine:
             
         a_mat = self.crystal_structure.lattice.matrix
         
-        # --- NATIVE LATTICE ALIGNMENT ---
+        # --- NATIVE LATTICE ALIGNMENT & FERMI SHIFT ---
         # QE defines a different basis (a1, a2) than PyMatgen for hexagonal cells.
         # We find the integer transformation matrix T to perfectly map the W90 cells back to PyMatgen.
         T_mat = np.eye(3)
+        ef = 0.0  # NEW: Initialize Fermi Level
         work_dir = os.path.dirname(w90_filepath)
         scf_out = os.path.join(work_dir, "scf.out")
         if os.path.exists(scf_out):
@@ -410,7 +430,14 @@ class ChinookTightBindingEngine:
                 with open(scf_out, 'r') as f:
                     lines_scf = f.readlines()
                 for k_idx, line in enumerate(lines_scf):
-                    if "lattice parameter (alat)" in line:
+                    # --- NEW: Extract Fermi Energy from QE Log ---
+                    if "the Fermi energy is" in line:
+                        ef = float(line.split('is')[1].split('ev')[0].strip())
+                    elif "highest occupied, lowest unoccupied" in line:
+                        parts = line.split(':')[-1].split()
+                        ef = (float(parts[0]) + float(parts[1])) / 2.0
+                        
+                    elif "lattice parameter (alat)" in line:
                         alat_bohr = float(line.split('=')[1].split()[0])
                         alat_ang = alat_bohr * 0.5291772109
                     elif "crystal axes: (cart. coord. in units of alat)" in line:
@@ -455,6 +482,10 @@ class ChinookTightBindingEngine:
             i, j = int(parts[3]) - 1, int(parts[4]) - 1 
             t_real, t_imag = float(parts[5]), float(parts[6])
             
+            # --- NEW: Shift on-site energies so Fermi Level is exactly 0.0 eV ---
+            if rx == 0 and ry == 0 and rz == 0 and i == j:
+                t_real -= ef
+            
             # --- 2. APPLY DEGENERACY WEIGHT ---
             t_ij = complex(t_real, t_imag) / float(weight)
             
@@ -465,8 +496,9 @@ class ChinookTightBindingEngine:
                 
                 # --- 3. FIX INTRACELL PHASE BUG ---
                 # Convert Wannier gauge to Bloch gauge by including the precise atomic positions
-                tau_i = flat_pos[i]
-                tau_j = flat_pos[j]
+                # Modulo mapping allows 108 spinor indices to safely reuse the 54 physical coordinates
+                tau_i = flat_pos[i % len(flat_pos)]
+                tau_j = flat_pos[j % len(flat_pos)]
                 
                 # True physical hopping vector: R + tau_j - tau_i
                 R_cart = np.dot(R_pm, a_mat)
@@ -475,7 +507,22 @@ class ChinookTightBindingEngine:
                 explicit_hopping.append([i, j, dR_cart[0], dR_cart[1], dR_cart[2], t_ij])
                 
         if use_soc:
-            spin_dict = {'bool': True, 'soc': True, 'lam': {i: 0.0 for i in range(len(flat_atoms))}}
+            # --- CRITICAL FIX: BYPASS CHINOOK'S SOC DUPLICATOR ---
+            # Wannier90 already generated the full spinor matrix.
+            # If we tell Chinook 'soc': True, it will duplicate indices and crash!
+            # Instead, we manually double the basis arrays here and hide SOC from Chinook.
+            n_orbs = len(flat_atoms)
+            flat_atoms = flat_atoms + [a + n_orbs for a in flat_atoms]
+            
+            new_Z = {}
+            for idx in range(len(flat_atoms)):
+                new_Z[idx] = flat_Z[idx % n_orbs]
+            flat_Z = new_Z
+            
+            flat_pos = flat_pos + flat_pos
+            flat_orbs = flat_orbs + flat_orbs
+            
+            spin_dict = {'bool': False, 'soc': False}
         else:
             spin_dict = {'bool': False, 'soc': False}
         

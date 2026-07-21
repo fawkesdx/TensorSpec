@@ -13,8 +13,8 @@ class QEInputGenerator:
         self.prefix = "tensorspec_run"
         self.app_pseudo_dir = "./pseudo" 
         
-    def _generate_atomic_species(self, out_dir: str) -> str:
-        """Extracts unique elements, finds their UPF files, and copies them to the run directory."""
+    def _generate_atomic_species(self, out_dir: str, use_soc: bool = False) -> str:
+        """Extracts unique elements, finds their UPF files based on SOC toggle, and copies them to the run directory."""
         species = []
         os.makedirs(self.app_pseudo_dir, exist_ok=True)
         
@@ -28,16 +28,30 @@ class QEInputGenerator:
             pseudo_name = None
             pattern = re.compile(rf"^{symbol}[._].*\.upf$", re.IGNORECASE)
             
-            for file in os.listdir(self.app_pseudo_dir):
-                if pattern.match(file):
-                    pseudo_name = file
-                    break
-                    
-            if pseudo_name is None:
+            # 1. Find all matching elements first
+            element_files = [f for f in os.listdir(self.app_pseudo_dir) if pattern.match(f)]
+            
+            if not element_files:
                 raise FileNotFoundError(
                     f"Missing pseudopotential for {symbol}! "
                     f"Please place a {symbol} UPF file in '{self.app_pseudo_dir}'."
                 )
+                
+            # 2. Filter based on SOC Physics
+            if use_soc:
+                for f in element_files:
+                    if "FR" in f.upper() or "REL" in f.upper():
+                        pseudo_name = f
+                        break
+                if pseudo_name is None:
+                    raise ValueError(f"SOC is enabled, but no FR or REL pseudopotential found for {symbol}!")
+            else:
+                for f in element_files:
+                    if "FR" not in f.upper() and "REL" not in f.upper():
+                        pseudo_name = f
+                        break
+                if pseudo_name is None:
+                    pseudo_name = element_files[0] # Fallback if only one exists
             
             shutil.copy2(os.path.join(self.app_pseudo_dir, pseudo_name), 
                          os.path.join(run_pseudo_dir, pseudo_name))
@@ -65,7 +79,7 @@ class QEInputGenerator:
         nat = len(self.structure)
         ntyp = len(self.structure.composition.elements)
 
-        atomic_species_str = self._generate_atomic_species(out_dir)
+        atomic_species_str = self._generate_atomic_species(out_dir, use_soc)
         
         # Use the UI toggle to inject SOC
         soc_flags = "\n  noncolin = .true.\n  lspinorb = .true." if use_soc else ""
@@ -114,7 +128,7 @@ K_POINTS {{automatic}}
         nat = len(self.structure)
         ntyp = len(self.structure.composition.elements)
         
-        atomic_species_str = self._generate_atomic_species(out_dir)
+        atomic_species_str = self._generate_atomic_species(out_dir, use_soc)
         
         kpts = self._generate_explicit_kpoints(kmesh)
         kpts_qe = "\n".join([f"{k}  1.0" for k in kpts])
@@ -161,12 +175,15 @@ K_POINTS {{crystal}}
             f.write(nscf_content)
         return nscf_path
 
-    def write_wannier90_input(self, out_dir: str, kmesh: tuple = (6, 6, 6), num_wann: int = 12, use_soc: bool = False):
+    def write_wannier90_input(self, out_dir: str, kmesh: tuple = (6, 6, 6), num_wann: int = 12, use_soc: bool = False, mlwf_mode: bool = False):
         """Generates a base wannier90.win file for extracting the tight binding Hamiltonian."""
         win_path = os.path.join(out_dir, "wannier90.win")
         
         kpts = self._generate_explicit_kpoints(kmesh)
         kpts_win = "\n".join(kpts)
+        
+        # Determine localization iterations based on user choice
+        iterations = 100 if mlwf_mode else 0
         
         proj_lines = []
         for el in self.structure.composition.elements:
@@ -179,10 +196,10 @@ K_POINTS {{crystal}}
         # Use the UI toggle to inject SOC
         spinor_str = "spinors = true\n" if use_soc else ""
         
-        # change back the num_iter = 100 and apply wanniertool symmetrizer after that before chinook!!
         win_content = f"""num_wann = {num_wann}
-num_iter = 0
+num_iter = {iterations}
 num_print_cycles = 10
+
 write_hr = true
 write_xyz = true
 use_ws_distance = true
@@ -196,7 +213,7 @@ begin unit_cell_cart
 end unit_cell_cart
 
 begin atoms_frac
-{chr(10).join([f" {site.species_string}  {site.frac_coords[0]:.6f}  {site.frac_coords[1]:.6f}  {site.frac_coords[2]:.6f}" for site in self.structure])}
+{chr(10).join([f" {site.specie.symbol}  {site.frac_coords[0]:.6f}  {site.frac_coords[1]:.6f}  {site.frac_coords[2]:.6f}" for site in self.structure])}
 end atoms_frac
 
 mp_grid = {kmesh[0]} {kmesh[1]} {kmesh[2]}
@@ -262,7 +279,8 @@ end kpoints
         positions = ["ATOMIC_POSITIONS {crystal}"]
         for site in self.structure:
             coords = "  ".join([f"{c:.6f}" for c in site.frac_coords])
-            positions.append(f" {site.species_string}  {coords}")
+            # Use pure element symbol (e.g. 'Te') instead of string with oxidation state (e.g. 'Te2-')
+            positions.append(f" {site.specie.symbol}  {coords}")
         return "\n".join(positions)
     
     def _detect_soc(self) -> bool:
