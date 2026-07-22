@@ -104,6 +104,13 @@ class TensorSpecMainBrowser(QMainWindow):
         self.metadata_inspector.setPlaceholderText("Select a workspace item to view properties...")
         right_layout.addWidget(self.metadata_inspector)
         
+        # --- NEW: Launch Viewer Button ---
+        self.btn_launch_viewer = QPushButton("📊 Launch Data Viewer for Selected Item")
+        self.btn_launch_viewer.setStyleSheet("font-weight: bold; padding: 10px; background-color: #2b5c8f; color: white;")
+        self.btn_launch_viewer.setEnabled(False)  # Disabled until an item is selected
+        self.btn_launch_viewer.clicked.connect(self.launch_standalone_viewer)
+        right_layout.addWidget(self.btn_launch_viewer)
+        
         main_splitter.addWidget(right_widget)
         
         # Adjust initial splitter sizes (35% left, 65% right)
@@ -136,9 +143,38 @@ class TensorSpecMainBrowser(QMainWindow):
     def on_item_selected(self, item, column):
         """Triggers preview update in the Inspector Panel upon clicking a variable."""
         var_name = item.text(0)
+        self.current_selected_var = var_name  # Track the current selection
+        
         if var_name in self.workspace_data:
+            # This is your mock data from the startup method
             meta_text = self.workspace_data[var_name]["metadata"]
             self.metadata_inspector.setText(f"Variable: {var_name}\n" + "-"*40 + f"\n{meta_text}")
+            self.btn_launch_viewer.setEnabled(False) # Cannot view mock text data
+        else:
+            # This is real data pulled from the global_workspace
+            self.metadata_inspector.setText(f"Workspace Item: {var_name}\n" + "-"*40 + "\nData object ready for inspection.")
+            self.btn_launch_viewer.setEnabled(True)  # Enable the launcher!
+
+    def launch_standalone_viewer(self):
+        """Spawns the agnostic N-Dimensional Viewer panel as a floating window."""
+        if not hasattr(self, 'current_selected_var'): 
+            return
+            
+        # Create a floating wrapper window to hold the panel
+        self.viewer_window = QMainWindow()
+        self.viewer_window.setWindowTitle(f"TensorSpec Data Viewer - {self.current_selected_var}")
+        self.viewer_window.resize(950, 750)
+        
+        # Instantiate your new reusable panel
+        self.active_viewer_panel = DataViewerPanel()
+        self.viewer_window.setCentralWidget(self.active_viewer_panel)
+        
+        # NOTE: Once we add a 'pull_tensor_data()' method to global_workspace, 
+        # we will fetch the data here and pass it in like this:
+        # data_tensor = global_workspace.pull_tensor_data(self.current_selected_var)
+        # self.active_viewer_panel.load_data(data_tensor)
+        
+        self.viewer_window.show()
         
     def launch_dft_suite(self):
         """Spawns the DFT & Tight Binding Suite window."""
