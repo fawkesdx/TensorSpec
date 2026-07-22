@@ -3,7 +3,7 @@
 When assisting with this repository, strictly adhere to the following rules:
 
 1.  **Snippet-Only Output:** NEVER output the entire codebase or full script unless explicitly asked to generate a brand new file. Only output the exact classes, functions, or UI blocks that need to be updated or added.
-2.  **Contextual Placement:** Always clearly state exactly *where* the provided code block should be inserted or what existing code it replaces (e.g., "Replace the `draw_structure` function" or "Insert this below line 42").
+2.  **Contextual Placement:** Always clearly state exactly *where* the provided code block should be inserted or what existing code it replaces (e.g., "Replace the `draw_structure` function" or "Insert this below line 42"). if you lose context, always ask what file to be uploaded for better reference.
 3.  **No Silent Deletions:** Do not remove existing features, buttons, or imports unless specifically instructed to refactor them out. 
 4.  **Acknowledge Roadmap:** Always refer back to `ROADMAP.md` to ensure UI additions fit into the planned Tabbed architecture. If the new path emerges during the development, always refer back to the roadmap.md and tell me to update which part into what. do not make a new roadmap from scratch.
 5.  **Strict Modularity & Separation of Concerns:** Never write monolithic single-file suites. New features and refactored components must strictly separate logic into three distinct layers:
@@ -64,7 +64,9 @@ tensorspec/
     ├── __init__.py
     ├── components/           # Reusable, isolated UI panels to prevent monolithic suites
     │   ├── __init__.py
-    │   └── dft_panels.py     # Holds QEGeneratorPanel and TightBindingPanel
+    │   ├── dft_panels.py          # Holds QEGeneratorPanel and TightBindingPanel
+    │   ├── crystal_panel.py       # Modular tabs for the Crystal Suite (View, BZ, CDW, etc.)
+    │   └── data_viewer_panel.py   # Universal N-Dimensional viewer for active Workspace tensors
     ├── main_browser.py       # THE BIG GUI: Global Data Workspace Explorer & Suite Launcher Ribbon
     └── suites/               # The 6 independent roadmap suites + ML integration
         ├── __init__.py

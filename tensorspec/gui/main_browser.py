@@ -14,6 +14,8 @@ from tensorspec.gui.suites.crystal_suite import CrystalViewerSuite
 from tensorspec.gui.suites.arpes_suite import ARPESSuite
 from tensorspec.gui.suites.dft_suite import DFTSuite
 
+from tensorspec.gui.components.data_viewer_panel import DataViewerPanel
+
 from tensorspec.core.workspace import global_workspace
 from PySide6.QtWidgets import QPushButton
 
