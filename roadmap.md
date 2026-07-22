@@ -4,7 +4,7 @@ General Rule for the App
 - [] 
 Grand App
 - Crystal viewer Suite
-	- [x] **Refactor Architectural Modularity:** Decouple monolithic `crystal_viewer.py` into modular architecture (`core/crystallography.py`, `plotting/pyvista_engine.py`, `plotting/matplotlib_engine.py`, and `gui/crystal_tabs/`).
+	- [x] **Refactor Architectural Modularity:** Decouple monolithic `crystal_viewer.py` into modular architecture (`core/crystallography.py`, `plotting/pyvista_engine.py`, `plotting/matplotlib_engine.py`, and `gui/components/crystal_panel.py`).
 	- [x] File loader panel & "Draw" button.
 	- [x] Define Miller indices for bounding the drawing. Define number of unit cells.
 	- [x] Draw atoms as spheres scaled to atomic radii.

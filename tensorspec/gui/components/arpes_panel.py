@@ -2,7 +2,7 @@ import numpy as np
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QComboBox, QPushButton, QDoubleSpinBox, 
                                QFormLayout, QGroupBox, QMessageBox, QSlider, 
-                               QSpinBox, QScrollArea, QApplication)
+                               QSpinBox, QScrollArea, QApplication,QInputDialog)
 from PySide6.QtCore import Qt, QThread, Signal
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -244,6 +244,19 @@ class ARPESPanel(QWidget):
         main_sim_layout.addWidget(plot_panel, stretch=1)
         self.update_schematic()
 
+        # Run Button
+        self.run_sim_btn = QPushButton("🚀 Run ARPES Simulation")
+        self.run_sim_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #2b5c8f; color: white;")
+        self.run_sim_btn.clicked.connect(self.trigger_simulation)
+        control_layout.addWidget(self.run_sim_btn)
+        
+        # --- NEW: Save Button ---
+        self.save_data_btn = QPushButton("💾 Save Simulated Data")
+        self.save_data_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #2e7d32; color: white;")
+        self.save_data_btn.setEnabled(False) # Disabled until a simulation finishes
+        self.save_data_btn.clicked.connect(self.save_current_simulation)
+        control_layout.addWidget(self.save_data_btn)
+
     def update_schematic(self, *args):
         self.draw_hemisphere_schematic(
             self.manip_theta_spin.value(),
@@ -440,6 +453,8 @@ class ARPESPanel(QWidget):
         self.run_sim_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #2b5c8f; color: white;")
 
         if success:
+            self.save_data_btn.setEnabled(True)  # <--- NEW: Enable the save button
+            
             e_min, e_max, e_steps = self.spin_e_min.value(), self.spin_e_max.value(), self.spin_e_steps.value()
             kx_min, kx_max, kx_steps = self.spin_kx_min.value(), self.spin_kx_max.value(), self.spin_kx_steps.value()
             ky_min, ky_max, ky_steps = self.spin_ky_min.value(), self.spin_ky_max.value(), self.spin_ky_steps.value()
@@ -527,6 +542,42 @@ class ARPESPanel(QWidget):
             
         self.figure.subplots_adjust(left=0.15, right=0.9, top=0.9, bottom=0.15)
         self.canvas.draw()
+    
+
+    def save_current_simulation(self):
+        if not hasattr(self, 'sim_intensity'):
+            return
+            
+        # Prompt the user for a dataset name
+        name, ok = QInputDialog.getText(self, "Save Simulation", "Enter dataset name (e.g., WTe2_75eV_CR):")
+        
+        if ok and name:
+            # Gather the metadata from the UI
+            metadata = {
+                'crystal': self.ws_combo.currentText(),
+                'photon_energy': self.photon_energy_spin.value(),
+                'work_function': self.work_function_spin.value(),
+                'temperature': self.temperature_spin.value(),
+                'polarization': self.polarization_combo.currentText(),
+                'manip_theta': self.manip_theta_spin.value(),
+                'manip_azi': self.manip_azi_spin.value(),
+                'manip_tilt': self.manip_tilt_spin.value(),
+                'slit_angle': self.slit_angle_spin.value()
+            }
+            
+            # Save via workspace
+            try:
+                global_workspace.save_simulated_arpes(
+                    name, 
+                    self.sim_intensity, 
+                    self.sim_kx, 
+                    self.sim_ky, 
+                    self.sim_E_axis, 
+                    metadata
+                )
+                QMessageBox.information(self, "Success", f"Data successfully saved as '{name}'")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to save data:\n{e}")
     
     def refresh_workspace(self):
         self.ws_combo.clear()

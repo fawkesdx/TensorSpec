@@ -130,7 +130,7 @@ class CrystalViewerSuite(QWidget):
         splitter.addWidget(left_container)
         
         # --- NEW: Import and Mount Modular Tab 1 ---
-        from tensorspec.gui.crystal_tabs.tab_view import TabViewEdit
+        from tensorspec.gui.components.crystal_panel import TabViewEdit
         self.tab_view = TabViewEdit(self)
         self.tabs.addTab(self.tab_view, "1. View & Edit")
         
