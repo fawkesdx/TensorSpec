@@ -28,6 +28,8 @@ tensorspec/
 │   ├── io/                   # Dedicated file loaders
 │   │   ├── __init__.py
 │   │   ├── arpes_loaders.py  # Readers for MAESTRO, i05 Diamond, SIS/ADRESS SLS, Lorea Alba, Bloch MaxIV 
+|   |   └── loaders/
+|   |   |   └── maestro_loader.py
 │   │   └── peem_loaders.py   # TIF stack & sequence folder loaders 
 │   ├── dft_engine.py         # MAIN ROUTER: Routes calculation to chinook_tb or qe_generator
 │   ├── dft/                  # Nested folder for separated DFT physics engines

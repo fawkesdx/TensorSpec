@@ -52,6 +52,10 @@ uncertainties==3.2.3
 urllib3==2.6.3
 vtk==9.3.0
 zipp==3.23.1
+setuptools<70.0.0
+h5py
+xarray
+
 
 
 # --- ARPES SIMULATION ENGINES ---

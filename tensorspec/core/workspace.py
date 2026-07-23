@@ -5,6 +5,7 @@ Strictly pure Python logic. Zero GUI/Plotting imports.
 import numpy as np
 from pathlib import Path
 from tensorspec.core.data_models import TensorData
+from tensorspec.core.data_tree import DataTreeBuilder
 
 class WorkspaceManager:
     def __init__(self):
@@ -116,6 +117,47 @@ class WorkspaceManager:
                 data_type="Simulated ARPES",
                 metadata=data['metadata'].item() if 'metadata' in data else {}
             )
+    def push_spectroscopy_data(self, name: str, tensor_data: TensorData):
+        """
+        Converts raw TensorData into a strict xarray.DataTree and stores it in memory.
+        """
+        tree = DataTreeBuilder.build_from_tensor(name, tensor_data)
+        self._data[name] = {
+            'type': 'spectroscopy_tree',
+            'tree': tree
+        }
+        print(f"DataTree '{name}' successfully pushed to Global Workspace.")
+
+    def pull_tensor_data(self, name: str, node: str = "/raw") -> TensorData:
+        """
+        Extracts a specific node from a stored DataTree and packages it back 
+        into a TensorData object for the DataViewerPanel to consume.
+        """
+        item = self._data.get(name)
+        if not item or item.get('type') != 'spectroscopy_tree':
+            return None
+            
+        tree = item['tree']
+        if node not in tree:
+            print(f"Error: Node '{node}' does not exist in dataset '{name}'.")
+            return None
+            
+        # Extract the Dataset from the target node
+        ds = tree[node].to_dataset() if hasattr(tree[node], 'to_dataset') else tree[node]
+        if "data" not in ds:
+            return None
+            
+        da = ds["data"]
+        
+        # Package it back to our universal mathematical format
+        return TensorData(
+            value=da.values,
+            axes=[da.coords[dim].values for dim in da.dims],
+            labels=list(da.dims),
+            units=[da.coords[dim].attrs.get("units", "") for dim in da.dims],
+            data_type=da.attrs.get("long_name", "Unknown"),
+            metadata=ds.attrs
+        )
 
 # Instantiate the global singleton to be imported across the application
 global_workspace = WorkspaceManager()
