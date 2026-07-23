@@ -2,7 +2,7 @@ import numpy as np
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QComboBox, QPushButton, QDoubleSpinBox, 
                                QFormLayout, QGroupBox, QMessageBox, QSlider, 
-                               QSpinBox, QScrollArea, QApplication,QInputDialog)
+                               QSpinBox, QScrollArea, QApplication,QInputDialog, QSplitter)
 from PySide6.QtCore import Qt, QThread, Signal
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -10,6 +10,7 @@ from matplotlib.figure import Figure
 
 from tensorspec.core.arpes_engine import ARPESEngineRouter
 from tensorspec.core.workspace import global_workspace
+from tensorspec.core.data_models import TensorData
 
 class ARPESRunnerThread(QThread):
     """Runs the heavy 2D matrix element loop in the background to prevent UI freezing."""
@@ -44,7 +45,10 @@ class ARPESPanel(QWidget):
         self._setup_ui()
 
     def _setup_ui(self):
-        main_sim_layout = QHBoxLayout(self)
+        # Use QSplitter instead of QHBoxLayout for resizable panels
+        main_sim_layout = QVBoxLayout(self)
+        self.main_splitter = QSplitter(Qt.Horizontal)
+        main_sim_layout.addWidget(self.main_splitter)
         
         # --- LEFT PANEL: CONTROLS ---
         control_panel = QWidget()
@@ -171,19 +175,13 @@ class ARPESPanel(QWidget):
         
         control_layout.addWidget(domain_group)
         
-        # Run Button
-        self.run_sim_btn = QPushButton("🚀 Run ARPES Simulation")
-        self.run_sim_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #2b5c8f; color: white;")
-        self.run_sim_btn.clicked.connect(self.trigger_simulation)
-        control_layout.addWidget(self.run_sim_btn)
-        
-        control_layout.addStretch() 
+        control_layout.addStretch()
         
         scroll_area = QScrollArea()
         scroll_area.setWidget(control_panel)
         scroll_area.setWidgetResizable(True)
-        scroll_area.setMinimumWidth(400) 
-        main_sim_layout.addWidget(scroll_area, stretch=0)
+        scroll_area.setMinimumWidth(350) 
+        self.main_splitter.addWidget(scroll_area)
 
         # --- MIDDLE PANEL: SCHEMATIC VIEWER ---
         schematic_panel = QWidget()
@@ -193,7 +191,7 @@ class ARPESPanel(QWidget):
         
         self.ax_schematic = self.schematic_figure.add_subplot(111, projection='3d')
         schematic_layout.addWidget(self.schematic_canvas)
-        main_sim_layout.addWidget(schematic_panel, stretch=1)
+        self.main_splitter.addWidget(schematic_panel)
 
         self.incidence_angle_spin.valueChanged.connect(self.update_schematic)
         self.polarization_combo.currentTextChanged.connect(self.update_schematic)
@@ -215,12 +213,24 @@ class ARPESPanel(QWidget):
         plot_layout.addWidget(self.canvas, stretch=1)
         
         slider_layout = QHBoxLayout()
-        self.energy_label = QLabel("Binding Energy: 0.00 eV")
-        self.energy_label.setFixedWidth(150)
+        self.energy_label = QLabel("Binding Energy (eV):")
+        
+        # New QDoubleSpinBox for keyboard input
+        self.energy_spinbox = QDoubleSpinBox()
+        self.energy_spinbox.setDecimals(3)
+        self.energy_spinbox.setSingleStep(0.01)
+        self.energy_spinbox.setEnabled(False)
+        self.energy_spinbox.setKeyboardTracking(False) # Only update when Enter is pressed or focus is lost
+        
         self.energy_slider = QSlider(Qt.Horizontal)
         self.energy_slider.setEnabled(False)
-        self.energy_slider.valueChanged.connect(self.update_plot_slice)
+        
+        # Connect both widgets to sync and update the plot
+        self.energy_slider.valueChanged.connect(self._sync_slider_to_spinbox)
+        self.energy_spinbox.valueChanged.connect(self._sync_spinbox_to_slider)
+        
         slider_layout.addWidget(self.energy_label)
+        slider_layout.addWidget(self.energy_spinbox)
         slider_layout.addWidget(self.energy_slider)
         plot_layout.addLayout(slider_layout)
         
@@ -241,7 +251,11 @@ class ARPESPanel(QWidget):
         self.vmax_spin.valueChanged.connect(lambda: self.update_plot_slice(self.energy_slider.value()))
         self.gamma_spin.valueChanged.connect(lambda: self.update_plot_slice(self.energy_slider.value()))
         
-        main_sim_layout.addWidget(plot_panel, stretch=1)
+        self.main_splitter.addWidget(plot_panel)
+        
+        # Set initial relative sizes for the splitter panels (e.g., 30% left, 35% middle, 35% right)
+        self.main_splitter.setSizes([350, 400, 400])
+        
         self.update_schematic()
 
         # Run Button
@@ -250,12 +264,19 @@ class ARPESPanel(QWidget):
         self.run_sim_btn.clicked.connect(self.trigger_simulation)
         control_layout.addWidget(self.run_sim_btn)
         
-        # --- NEW: Save Button ---
-        self.save_data_btn = QPushButton("💾 Save Simulated Data")
-        self.save_data_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #2e7d32; color: white;")
-        self.save_data_btn.setEnabled(False) # Disabled until a simulation finishes
-        self.save_data_btn.clicked.connect(self.save_current_simulation)
-        control_layout.addWidget(self.save_data_btn)
+        # --- NEW: Save & Push Buttons ---
+        self.btn_push_workspace = QPushButton("📊 Push to Workspace")
+        self.btn_push_workspace.setStyleSheet("font-weight: bold; padding: 10px; background-color: #E67E22; color: white;")
+        self.btn_push_workspace.setEnabled(False)
+        self.btn_push_workspace.clicked.connect(self.push_arpes_to_workspace)
+        
+        self.btn_save_disk = QPushButton("💾 Save to Disk (.npz)")
+        self.btn_save_disk.setStyleSheet("font-weight: bold; padding: 10px; background-color: #D35400; color: white;")
+        self.btn_save_disk.setEnabled(False)
+        self.btn_save_disk.clicked.connect(self.save_arpes_to_disk)
+        
+        control_layout.addWidget(self.btn_push_workspace)
+        control_layout.addWidget(self.btn_save_disk)
 
     def update_schematic(self, *args):
         self.draw_hemisphere_schematic(
@@ -453,7 +474,8 @@ class ARPESPanel(QWidget):
         self.run_sim_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #2b5c8f; color: white;")
 
         if success:
-            self.save_data_btn.setEnabled(True)  # <--- NEW: Enable the save button
+            self.btn_push_workspace.setEnabled(True)
+            self.btn_save_disk.setEnabled(True)
             
             e_min, e_max, e_steps = self.spin_e_min.value(), self.spin_e_max.value(), self.spin_e_steps.value()
             kx_min, kx_max, kx_steps = self.spin_kx_min.value(), self.spin_kx_max.value(), self.spin_kx_steps.value()
@@ -472,19 +494,49 @@ class ARPESPanel(QWidget):
             if ny == 1 or nx == 1:
                 # It is a 2D Band Dispersion Map (Energy vs Momentum)
                 self.energy_slider.setEnabled(False)
+                self.energy_spinbox.setEnabled(False)
                 self.update_plot_slice(index=None)
             else:
                 # It is a 3D Cube (Constant Energy Contours)
                 self.energy_slider.setRange(0, ne - 1)
+                
+                # Setup Spinbox Range
+                self.energy_spinbox.setRange(self.sim_E_axis[0], self.sim_E_axis[-1])
+                
                 fermi_idx = np.abs(self.sim_E_axis).argmin()
                 self.energy_slider.setEnabled(True)
+                self.energy_spinbox.setEnabled(True)
+                
+                # Block signals to prevent double-firing during initialization
+                self.energy_slider.blockSignals(True)
+                self.energy_spinbox.blockSignals(True)
                 self.energy_slider.setValue(fermi_idx)
+                self.energy_spinbox.setValue(self.sim_E_axis[fermi_idx])
+                self.energy_slider.blockSignals(False)
+                self.energy_spinbox.blockSignals(False)
                 
                 self.update_plot_slice(fermi_idx)
         else:
             QMessageBox.critical(self, "Simulation Error", f"An error occurred in the physics router:\n{message}")
             self.ax.set_title("Simulation Failed")
             self.canvas.draw()
+
+    def _sync_slider_to_spinbox(self, index):
+        """Updates the spinbox text when the slider moves."""
+        if not hasattr(self, 'sim_E_axis'): return
+        self.energy_spinbox.blockSignals(True)
+        self.energy_spinbox.setValue(self.sim_E_axis[index])
+        self.energy_spinbox.blockSignals(False)
+        self.update_plot_slice(index)
+
+    def _sync_spinbox_to_slider(self, val):
+        """Finds the nearest array index when the user types a value in the spinbox."""
+        if not hasattr(self, 'sim_E_axis'): return
+        nearest_idx = (np.abs(self.sim_E_axis - val)).argmin()
+        self.energy_slider.blockSignals(True)
+        self.energy_slider.setValue(nearest_idx)
+        self.energy_slider.blockSignals(False)
+        self.update_plot_slice(nearest_idx)
 
     def update_plot_slice(self, index=None):
         if not hasattr(self, 'sim_intensity'):
@@ -524,9 +576,9 @@ class ARPESPanel(QWidget):
                 index = self.energy_slider.value()
                 
             E_val = self.sim_E_axis[index]
-            self.energy_label.setText(f"Binding Energy: {E_val:.3f} eV")
+            # Label update removed; spinbox handles display now
             
-            slice_2d = self.sim_intensity[:, :, index].T 
+            slice_2d = self.sim_intensity[:, :, index].T
             
             slice_max = np.max(slice_2d) if np.max(slice_2d) > 0 else 1.0
             norm_slice = slice_2d / slice_max
@@ -544,28 +596,48 @@ class ARPESPanel(QWidget):
         self.canvas.draw()
     
 
-    def save_current_simulation(self):
-        if not hasattr(self, 'sim_intensity'):
-            return
-            
-        # Prompt the user for a dataset name
-        name, ok = QInputDialog.getText(self, "Save Simulation", "Enter dataset name (e.g., WTe2_75eV_CR):")
+    def get_simulation_metadata(self):
+        """Helper to grab all current UI parameters for saving."""
+        return {
+            'crystal': self.ws_combo.currentText(),
+            'photon_energy': self.photon_energy_spin.value(),
+            'work_function': self.work_function_spin.value(),
+            'temperature': self.temperature_spin.value(),
+            'polarization': self.polarization_combo.currentText(),
+            'manip_theta': self.manip_theta_spin.value(),
+            'manip_azi': self.manip_azi_spin.value(),
+            'manip_tilt': self.manip_tilt_spin.value(),
+            'slit_angle': self.slit_angle_spin.value()
+        }
+
+    def push_arpes_to_workspace(self):
+        if not hasattr(self, 'sim_intensity'): return
         
+        name, ok = QInputDialog.getText(self, "Push to Workspace", "Enter dataset name (e.g., WTe2_75eV_CR):")
         if ok and name:
-            # Gather the metadata from the UI
-            metadata = {
-                'crystal': self.ws_combo.currentText(),
-                'photon_energy': self.photon_energy_spin.value(),
-                'work_function': self.work_function_spin.value(),
-                'temperature': self.temperature_spin.value(),
-                'polarization': self.polarization_combo.currentText(),
-                'manip_theta': self.manip_theta_spin.value(),
-                'manip_azi': self.manip_azi_spin.value(),
-                'manip_tilt': self.manip_tilt_spin.value(),
-                'slit_angle': self.slit_angle_spin.value()
-            }
-            
-            # Save via workspace
+            try:
+                # Transpose dimensions for the viewer (kx, ky, E) -> (E, kx, ky)
+                tensor_value = np.transpose(self.sim_intensity, (2, 0, 1))
+                
+                sim_tensor = TensorData(
+                    value=tensor_value,
+                    axes=[self.sim_E_axis, self.sim_kx, self.sim_ky],
+                    labels=["Energy", "kx (Slit)", "ky (Deflection)"],
+                    units=["eV", "1/A", "1/A"],
+                    data_type="Simulated ARPES Matrix Elements",
+                    metadata=self.get_simulation_metadata()
+                )
+                
+                global_workspace.push_spectroscopy_data(name, sim_tensor)
+                QMessageBox.information(self, "Success", f"Data pushed to Workspace as '{name}'.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to push data:\n{e}")
+
+    def save_arpes_to_disk(self):
+        if not hasattr(self, 'sim_intensity'): return
+        
+        name, ok = QInputDialog.getText(self, "Save to Disk", "Enter file name (e.g., WTe2_75eV_CR):")
+        if ok and name:
             try:
                 global_workspace.save_simulated_arpes(
                     name, 
@@ -573,9 +645,9 @@ class ARPESPanel(QWidget):
                     self.sim_kx, 
                     self.sim_ky, 
                     self.sim_E_axis, 
-                    metadata
+                    self.get_simulation_metadata()
                 )
-                QMessageBox.information(self, "Success", f"Data successfully saved as '{name}'")
+                QMessageBox.information(self, "Success", f"Data safely saved to disk as '{name}.npz'.")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save data:\n{e}")
     
