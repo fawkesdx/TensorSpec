@@ -17,17 +17,26 @@ class QERunnerThread(QThread):
         self.out_dir = out_dir
 
     def run(self):
-        script_path = os.path.join(self.out_dir, "run_pipeline.sh")
+        is_win = os.name == 'nt'
+        script_name = "run_pipeline.ps1" if is_win else "run_pipeline.sh"
+        script_path = os.path.join(self.out_dir, script_name)
+        
         try:
-            # 1. Save the GUI text box content as a bash script
+            # 1. Save the GUI text box content as the appropriate script type
             with open(script_path, "w") as f:
                 f.write(self.script_content)
             
-            os.chmod(script_path, 0o755)
+            # 2. Configure the execution command based on the OS
+            if not is_win:
+                os.chmod(script_path, 0o755)
+                cmd = ["/bin/bash", script_name]
+            else:
+                # Bypass execution policy locally just for this script run
+                cmd = ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", script_name]
             
-            # 2. Execute the bash script inside the target directory
+            # 3. Execute the script inside the target directory
             process = subprocess.Popen(
-                ["/bin/bash", "run_pipeline.sh"],
+                cmd,
                 cwd=self.out_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -185,18 +194,44 @@ class QEGeneratorPanel(QWidget):
             
             mpi_cmd = f"mpirun -np {self.spin_cores.value()} " if self.chk_mpi.isChecked() else ""
             
-            # Auto-populate portable bash script with exact commands
-            script_text = (
-                "#!/bin/bash\n"
-                "set -e\n"
-                "export OMP_NUM_THREADS=1\n\n"
-                "# Edit this script to run specific parts of the pipeline\n"
-                f"{mpi_cmd}{pw_exec} -ndiag 1 -in scf.in | tee scf.out\n"
-                f"{mpi_cmd}{pw_exec} -ndiag 1 -in nscf.in | tee nscf.out\n"
-                f"{wan_exec} -pp wannier90\n"
-                f"{mpi_cmd}{pw2wan_exec} -in pw2wan.in | tee pw2wan.out\n"
-                f"{wan_exec} wannier90\n"
-            )
+            # Auto-populate portable script with exact commands based on Operating System
+            if os.name == 'nt':
+                # Windows native PowerShell formatting
+                script_text = (
+                    "$env:OMP_NUM_THREADS=1\n\n"
+                    "# ==================================================================\n"
+                    "# ADVANCED: HSE HYBRID FUNCTIONAL SWITCH\n"
+                    "# By default, this script runs a standard PBE calculation.\n"
+                    "# To run HSE, remove the '#' from the two replacement commands below.\n"
+                    "# ==================================================================\n"
+                    f"# (Get-Content scf.in) -replace '&SYSTEM', \"&SYSTEM`n    input_dft = 'hse',`n    nqx1 = {kmesh[0]}, nqx2 = {kmesh[1]}, nqx3 = {kmesh[2]},\" | Set-Content scf.in\n"
+                    f"# (Get-Content nscf.in) -replace '&SYSTEM', \"&SYSTEM`n    input_dft = 'hse',`n    nqx1 = {kmesh[0]}, nqx2 = {kmesh[1]}, nqx3 = {kmesh[2]},\" | Set-Content nscf.in\n\n"
+                    "# Edit this script to run specific parts of the pipeline\n"
+                    f"{mpi_cmd}{pw_exec} -ndiag 1 -in scf.in | Tee-Object -FilePath scf.out\n"
+                    f"{mpi_cmd}{pw_exec} -ndiag 1 -in nscf.in | Tee-Object -FilePath nscf.out\n"
+                    f"{wan_exec} -pp wannier90\n"
+                    f"{mpi_cmd}{pw2wan_exec} -in pw2wan.in | Tee-Object -FilePath pw2wan.out\n"
+                    f"{wan_exec} wannier90\n"
+                )
+            else:
+                # Mac / Linux native Bash formatting using a robust Python one-liner!
+                script_text = (
+                    "#!/bin/bash\n"
+                    "set -e\n"
+                    "export OMP_NUM_THREADS=1\n\n"
+                    "# ==================================================================\n"
+                    "# ADVANCED: HSE HYBRID FUNCTIONAL SWITCH\n"
+                    "# By default, this script runs a standard PBE calculation.\n"
+                    "# To run HSE, just uncomment (remove the '#') from the python command below.\n"
+                    "# ==================================================================\n"
+                    f"# python -c \"for f in ['scf.in','nscf.in']: d=open(f).read(); open(f,'w').write(d.replace('&SYSTEM','&SYSTEM\\n    input_dft=\\'hse\\',\\n    nqx1={kmesh[0]}, nqx2={kmesh[1]}, nqx3={kmesh[2]},'))\"\n\n"
+                    "# Edit this script to run specific parts of the pipeline\n"
+                    f"{mpi_cmd}{pw_exec} -ndiag 1 -in scf.in | tee scf.out\n"
+                    f"{mpi_cmd}{pw_exec} -ndiag 1 -in nscf.in | tee nscf.out\n"
+                    f"{wan_exec} -pp wannier90\n"
+                    f"{mpi_cmd}{pw2wan_exec} -in pw2wan.in | tee pw2wan.out\n"
+                    f"{wan_exec} wannier90\n"
+                )
             
             self.script_editor.setPlainText(script_text)
             
