@@ -333,3 +333,60 @@ class PyVistaCrystalBackend:
         elif preset == 'z': self.plotter.view_xy()
         elif preset == 'iso': self.plotter.view_isometric()
         self.plotter.render()
+
+    def draw_analytical_orbitals(self, supercell, orbital_type: str = "d_z2", scale_mod: float = 1.0):
+        """Generates analytical 3D spherical harmonics anchored to atomic coordinates."""
+        import pyvista as pv
+        import numpy as np
+        
+        # 1. Generate base spherical mesh
+        sphere = pv.Sphere(theta_resolution=60, phi_resolution=60)
+        x, y, z = sphere.points.T
+        r = np.sqrt(x**2 + y**2 + z**2)
+        theta = np.arccos(np.clip(z / r, -1.0, 1.0))
+        phi = np.arctan2(y, x)
+        
+        # 2. Evaluate Real Spherical Harmonics (Y_l^m)
+        if orbital_type == "s":
+            Y = np.ones_like(theta)
+        elif orbital_type == "p_z":
+            Y = np.cos(theta)
+        elif orbital_type == "p_x":
+            Y = np.sin(theta) * np.cos(phi)
+        elif orbital_type == "p_y":
+            Y = np.sin(theta) * np.sin(phi)
+        elif orbital_type == "d_z2":
+            Y = 3 * np.cos(theta)**2 - 1
+        elif orbital_type == "d_x2-y2":
+            Y = np.sin(theta)**2 * np.cos(2 * phi)
+        elif orbital_type == "d_xy":
+            Y = np.sin(theta)**2 * np.sin(2 * phi)
+        elif orbital_type == "d_xz":
+            Y = np.sin(theta) * np.cos(theta) * np.cos(phi)
+        elif orbital_type == "d_yz":
+            Y = np.sin(theta) * np.cos(theta) * np.sin(phi)
+        else:
+            Y = np.ones_like(theta)
+            
+        # 3. Shape the mesh lobes and assign phase colors (+/-)
+        sphere.points *= np.abs(Y)[:, np.newaxis]
+        sphere.point_data["phase"] = np.sign(Y)
+        
+        # 4. Glyph the orbital onto every target atom
+        coords = supercell.cart_coords
+        poly = pv.PolyData(coords)
+        
+        # Scale to match atomic radii visually
+        glyphs = poly.glyph(geom=sphere, factor=scale_mod * 1.5, scale=False, orient=False)
+        
+        # Render with a diverging colormap (Red = Positive phase, Blue = Negative phase)
+        actor = self.plotter.add_mesh(
+            glyphs, 
+            scalars="phase", 
+            cmap="bwr", 
+            show_scalar_bar=False, 
+            smooth_shading=True,
+            opacity=0.85,
+            pbr=True, metallic=0.3, roughness=0.4
+        )
+        return actor
