@@ -257,7 +257,12 @@ class DFTSuite(QWidget):
                 soc_strength=soc_val,
                 w90_filepath=w90_file,
                 cutoffs=ui_cutoffs,
-                tb_mode=self.tb_panel.combo_tb_mode.currentText()
+                tb_mode=self.tb_panel.combo_tb_mode.currentText(),
+                orbital_shifts={
+                    '0': self.tb_panel.spin_onsite_s.value(),
+                    '1': self.tb_panel.spin_onsite_p.value(),
+                    '2': self.tb_panel.spin_onsite_d.value()
+                }
             )
             # --- UNIVERSAL FERMI ENERGY SHIFT ---
             fermi_energy = 0.0
