@@ -125,6 +125,28 @@ class TightBindingPanel(QWidget):
         self.spin_onsite.setRange(-10.0, 10.0); self.spin_onsite.setValue(0.0); self.spin_onsite.setSingleStep(0.1)
         tb_form.addRow("On-site E (eV):", self.spin_onsite)
 
+        # --- NEW: Orbital-Specific Energy Shifts ---
+        self.spin_onsite_s = QDoubleSpinBox()
+        self.spin_onsite_s.setRange(-50.0, 50.0); self.spin_onsite_s.setValue(-10.0); self.spin_onsite_s.setSingleStep(0.5)
+        self.spin_onsite_s.setToolTip("s-orbital on-site energy (eV)")
+
+        self.spin_onsite_p = QDoubleSpinBox()
+        self.spin_onsite_p.setRange(-50.0, 50.0); self.spin_onsite_p.setValue(-2.0); self.spin_onsite_p.setSingleStep(0.5)
+        self.spin_onsite_p.setToolTip("p-orbital on-site energy (eV)")
+
+        self.spin_onsite_d = QDoubleSpinBox()
+        self.spin_onsite_d.setRange(-50.0, 50.0); self.spin_onsite_d.setValue(0.0); self.spin_onsite_d.setSingleStep(0.5)
+        self.spin_onsite_d.setToolTip("d-orbital on-site energy (eV)")
+
+        orb_layout = QHBoxLayout()
+        orb_layout.addWidget(QLabel("s:"))
+        orb_layout.addWidget(self.spin_onsite_s)
+        orb_layout.addWidget(QLabel("p:"))
+        orb_layout.addWidget(self.spin_onsite_p)
+        orb_layout.addWidget(QLabel("d:"))
+        orb_layout.addWidget(self.spin_onsite_d)
+        tb_form.addRow("Orbital Shifts:", orb_layout)
+
         # --- NEW: Energy Zoom Controls ---
         self.spin_emin = QDoubleSpinBox()
         self.spin_emin.setRange(-50.0, 50.0); self.spin_emin.setValue(-6.0); self.spin_emin.setSingleStep(0.5)

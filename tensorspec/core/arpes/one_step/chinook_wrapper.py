@@ -103,11 +103,17 @@ class ChinookWrapper:
             self.tb_model = build_lib.gen_TB(basis, h_dict)
 
         # 2. Extract the true on-site energy
-        self.fermi_shift = -tb_dict.get('fermi_energy', 0.0)
+        # The TensorSpec DFT engine ALWAYS centers the Hamiltonian at 0.0 eV natively.
+        self.fermi_shift = 0.0
+
+        # --- ADD THESE DEBUG LINES ---
+        print("\n[LOG 4 - CHINOOK WRAPPER]")
+        print(f"tb_dict['fermi_energy'] extracted: {tb_dict.get('fermi_energy', 'MISSING')}")
+        print(f"Calculated self.fermi_shift applied to axis: {self.fermi_shift}")
+        # -----------------------------
         
         # 3. Safely extract Reciprocal Lattice Vectors (B_matrix)
         # Chinook TB_model does not store these natively, so we pull them from the workspace dict
-        import numpy as np
         if 'structure' in tb_dict:
             self.B_matrix = tb_dict['structure'].lattice.reciprocal_lattice.matrix
         elif 'recip_matrix' in tb_dict:
@@ -223,7 +229,9 @@ class ChinookWrapper:
         
         # We NO LONGER ask self.tb_model for its non-existent 'avec' attribute.
         # We use the securely extracted B_matrix from build_model()
-        Z_surf, Y_surf = CrystalEngine.get_hkl_surface_frame(hkl, self.B_matrix, azimuthal_ref=None)
+        
+        # --- FIX: Lock the 0-degree azimuthal baseline to the pure Cartesian Y-axis ---
+        Z_surf, Y_surf = CrystalEngine.get_hkl_surface_frame(hkl, self.B_matrix, azimuthal_ref=np.array([0.0, 1.0, 0.0]))
         
         # Construct X_surf to complete the Right-Handed basis (cross product of Y and Z)
         X_surf = np.cross(Y_surf, Z_surf)
@@ -325,19 +333,18 @@ class ChinookWrapper:
             
             output_maps = np.real(exp.spectral())
             
-            # --- RESTORED: Your original robust unpacking logic ---
-            if output_maps.ndim == 4 and output_maps.shape[0] == 2:
-                intensity_3d = output_maps[1].reshape((num_x, num_y, num_e), order='C')
-            elif output_maps.ndim == 2:
-                intensity_3d = output_maps.reshape((num_x, num_y, num_e), order='C')
-            else:
-                # Fallback for flattened 1D arrays (the 32000 -> 16000 case)
-                expected_size = num_x * num_y * num_e
-                if output_maps.size == 2 * expected_size:
-                    output_maps = np.sum(output_maps.reshape((2, expected_size)), axis=0)
+            # --- RESTORED: CORRECT ARRAY UNPACKING ---
+            expected_size = num_x * num_y * num_e
+            
+            # 1. Sum the spin dimensions safely if they exist
+            if output_maps.size == 2 * expected_size:
+                output_maps = np.sum(output_maps.reshape((2, expected_size)), axis=0)
+            elif output_maps.ndim == 4 and output_maps.shape[0] == 2:
+                output_maps = np.sum(output_maps, axis=0)
                 
-                intensity_3d = output_maps.reshape((num_x, num_y, num_e), order='C')
-            # ------------------------------------------------------
+            # 2. Chinook natively stores data as (Nk, Ne). Reshape directly to (Nx, Ny, Ne)!
+            intensity_3d = output_maps.reshape((num_x, num_y, num_e), order='C')
+            # -----------------------------------------
                 
             if not is_full: # Dipole Only
                 # --- FIX: Include the Z-component and use the aligned Bulk Frame ---

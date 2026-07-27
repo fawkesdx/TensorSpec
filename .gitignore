@@ -5,3 +5,7 @@ qe_workspace
 tensorspec_v1
 .DS_Store
 out
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class

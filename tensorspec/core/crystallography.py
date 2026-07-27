@@ -374,7 +374,14 @@ class CrystalEngine:
         if azimuthal_ref is not None:
             up_vector = azimuthal_ref - np.dot(azimuthal_ref, normal) * normal
         else:
-            default_up = np.array([0.0, 0.0, 1.0]) if abs(normal[2]) < 0.99 else np.array([1.0, 0.0, 0.0])
+            # --- FIX: Lock the default azimuthal frame to the reciprocal lattice ---
+            b_star = recip_matrix[1]
+            a_star = recip_matrix[0]
+            
+            # Use b* as the default "up" direction. If the surface normal is parallel to b*, fallback to a*.
+            b_star_norm = b_star / np.linalg.norm(b_star)
+            default_up = b_star if abs(np.dot(b_star_norm, normal)) < 0.99 else a_star
+            
             up_vector = default_up - np.dot(default_up, normal) * normal
             
         up_vector = up_vector / np.linalg.norm(up_vector)
