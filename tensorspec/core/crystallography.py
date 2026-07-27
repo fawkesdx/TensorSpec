@@ -353,3 +353,30 @@ class CrystalEngine:
             "silhouette_3d": silhouette_3d.tolist(),
             "projected_bounds": surf_vertices_3d.tolist()
         }
+
+    @staticmethod
+    def get_hkl_surface_frame(hkl, recip_matrix, azimuthal_ref=None):
+        """
+        Calculates the orthogonal surface basis for a given (h, k, l) cleavage plane.
+        Returns the normal vector (z-axis) and the up vector (y-axis) for camera or simulation alignment.
+        """
+        import numpy as np
+        h, k, l = hkl
+        
+        # 1. Calculate surface normal
+        normal = h * recip_matrix[0] + k * recip_matrix[1] + l * recip_matrix[2]
+        dist = np.linalg.norm(normal)
+        if dist == 0:
+            return np.array([0.0, 0.0, 1.0]), np.array([0.0, 1.0, 0.0])
+        normal = normal / dist
+        
+        # 2. Calculate the azimuthal 'up' vector
+        if azimuthal_ref is not None:
+            up_vector = azimuthal_ref - np.dot(azimuthal_ref, normal) * normal
+        else:
+            default_up = np.array([0.0, 0.0, 1.0]) if abs(normal[2]) < 0.99 else np.array([1.0, 0.0, 0.0])
+            up_vector = default_up - np.dot(default_up, normal) * normal
+            
+        up_vector = up_vector / np.linalg.norm(up_vector)
+        
+        return normal, up_vector

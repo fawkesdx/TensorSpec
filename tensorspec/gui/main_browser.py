@@ -352,12 +352,12 @@ class TensorSpecMainBrowser(QMainWindow):
         """Pulls the actual active data from global_workspace and populates the tree."""
         self.data_tree_widget.clear()
         
-        # Render mock data
+        # Render mock data safely using .get()
         for name, info in self.workspace_data.items():
             item = QTreeWidgetItem(self.data_tree_widget)
             item.setText(0, name)
-            item.setText(1, info["type"])
-            item.setText(2, info["dims"])
+            item.setText(1, info.get("type", "Unknown"))
+            item.setText(2, str(info.get("dims", "N/A")))
 
         # Fetch Crystal Structures
         for name in global_workspace.list_crystal_structures():
@@ -390,7 +390,7 @@ class TensorSpecMainBrowser(QMainWindow):
         self.current_selected_var = var_name
         
         if var_name in self.workspace_data:
-            meta_text = self.workspace_data[var_name]["metadata"]
+            meta_text = self.workspace_data[var_name].get("metadata", "No metadata available for this object.")
             self.metadata_inspector.setText(f"Variable: {var_name}\n" + "-"*40 + f"\n{meta_text}")
             self.btn_launch_viewer.setEnabled(False) # Cannot view mock string data
         else:

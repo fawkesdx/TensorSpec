@@ -333,8 +333,11 @@ class DFTSuite(QWidget):
             'basis': found_basis,
             'H_dict': found_h_dict,
             'tb_model': found_tb_model,
-            'fermi_energy': fermi_energy,  # <--- ADD THIS EXACT LINE
-            'title': title
+            'fermi_energy': fermi_energy,
+            'title': title,
+            # --- NEW: EXPLICITLY PACK LATTICE VECTORS ---
+            'structure': self.engine.crystal_structure,
+            'recip_matrix': self.engine.crystal_structure.lattice.reciprocal_lattice.matrix if self.engine.crystal_structure else None
         }
         
         if is_2d:

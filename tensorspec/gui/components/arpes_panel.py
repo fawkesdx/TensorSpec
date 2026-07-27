@@ -2,7 +2,8 @@ import numpy as np
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QComboBox, QPushButton, QDoubleSpinBox, 
                                QFormLayout, QGroupBox, QMessageBox, QSlider, 
-                               QSpinBox, QScrollArea, QApplication,QInputDialog, QSplitter)
+                               QSpinBox, QScrollArea, QApplication,QInputDialog, QSplitter,
+                               QCheckBox) # <-- Added QCheckBox here
 from PySide6.QtCore import Qt, QThread, Signal
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -121,14 +122,30 @@ class ARPESPanel(QWidget):
         self.matrix_element_combo = QComboBox()
         self.matrix_element_combo.addItems(["Full Matrix Elements", "Polarization Dipole Only", "Bare Spectral Function (ME Off)"])
         
+
         beam_layout.addRow("Manipulator Θ (Lab Z):", self.manip_theta_spin)
         beam_layout.addRow("Manipulator Azimuth:", self.manip_azi_spin)
         beam_layout.addRow("Manipulator Tilt:", self.manip_tilt_spin)
+
+        # --- ADD THIS INSIDE _setup_ui() (e.g., right before beam_layout.addRow("Manipulator Θ...")) ---
+        hkl_layout = QHBoxLayout()
+        self.spin_h = QSpinBox(); self.spin_h.setRange(-10, 10); self.spin_h.setValue(0)
+        self.spin_k = QSpinBox(); self.spin_k.setRange(-10, 10); self.spin_k.setValue(0)
+        self.spin_l = QSpinBox(); self.spin_l.setRange(-10, 10); self.spin_l.setValue(1)
+        
+        hkl_layout.addWidget(self.spin_h)
+        hkl_layout.addWidget(self.spin_k)
+        hkl_layout.addWidget(self.spin_l)
+        
+        beam_layout.addRow("Cleavage Plane [h k l]:", hkl_layout)
+        # ---------------------------------------------------------------------------------------------
         beam_layout.addRow("Beam Incidence (Lab):", self.incidence_angle_spin)
         beam_layout.addRow("Polarization:", self.polarization_combo)
         beam_layout.addRow("Pol. Angle (Arbitrary):", self.lin_pol_angle_spin)
         beam_layout.addRow("Intensity Mode:", self.matrix_element_combo)
         control_layout.addWidget(beam_group)
+
+        
         
         # 4. Analyzer Domain & Resolution
         domain_group = QGroupBox("4. Analyzer Domain & Resolution")
@@ -239,13 +256,22 @@ class ARPESPanel(QWidget):
         self.vmax_spin = QDoubleSpinBox(); self.vmax_spin.setRange(0.0, 1.0); self.vmax_spin.setValue(1.0); self.vmax_spin.setSingleStep(0.05)
         self.gamma_spin = QDoubleSpinBox(); self.gamma_spin.setRange(0.1, 5.0); self.gamma_spin.setValue(1.0); self.gamma_spin.setSingleStep(0.1)
         
+        # --- NEW: BZ OVERLAY TOGGLE ---
+        self.chk_overlay_bz = QCheckBox("Overlay Surface BZ")
+        self.chk_overlay_bz.setStyleSheet("font-weight: bold; color: #0F6A8B;")
+        self.chk_overlay_bz.stateChanged.connect(lambda: self.update_plot_slice())
+        # ------------------------------
+
         contrast_layout.addWidget(QLabel("Min:"))
         contrast_layout.addWidget(self.vmin_spin)
         contrast_layout.addWidget(QLabel("Max:"))
         contrast_layout.addWidget(self.vmax_spin)
         contrast_layout.addWidget(QLabel("γ (Gamma):"))
         contrast_layout.addWidget(self.gamma_spin)
+        contrast_layout.addWidget(self.chk_overlay_bz) # <-- Added here
         plot_layout.addLayout(contrast_layout)
+
+        
         
         self.vmin_spin.valueChanged.connect(lambda: self.update_plot_slice(self.energy_slider.value()))
         self.vmax_spin.valueChanged.connect(lambda: self.update_plot_slice(self.energy_slider.value()))
@@ -448,6 +474,11 @@ class ARPESPanel(QWidget):
             'manip_theta': self.manip_theta_spin.value(),
             'manip_azimuth': self.manip_azi_spin.value(),
             'manip_tilt': self.manip_tilt_spin.value(),
+            
+            # --- ADD THIS NEW LINE ---
+            'hkl': (self.spin_h.value(), self.spin_k.value(), self.spin_l.value()),
+            # -------------------------
+
             'k_bounds': {'X': [kx_min, kx_max, kx_steps], 'Y': [ky_min, ky_max, ky_steps], 'E': [e_min, e_max, e_steps]},
             'se_width': self.ui_se_spinbox.value(),
             'res_E': self.ui_res_e_spinbox.value(),
@@ -576,7 +607,6 @@ class ARPESPanel(QWidget):
                 index = self.energy_slider.value()
                 
             E_val = self.sim_E_axis[index]
-            # Label update removed; spinbox handles display now
             
             slice_2d = self.sim_intensity[:, :, index].T
             
@@ -592,6 +622,11 @@ class ARPESPanel(QWidget):
             self.ax.set_xlabel(r"$k_x$ ($\mathrm{\AA}^{-1}$)")
             self.ax.set_ylabel(r"$k_y$ ($\mathrm{\AA}^{-1}$)")
             
+            # --- NEW: TRIGGER BZ OVERLAY ---
+            if getattr(self, 'chk_overlay_bz', None) and self.chk_overlay_bz.isChecked():
+                self._draw_bz_overlay()
+            # -------------------------------
+            
         self.figure.subplots_adjust(left=0.15, right=0.9, top=0.9, bottom=0.15)
         self.canvas.draw()
     
@@ -600,6 +635,7 @@ class ARPESPanel(QWidget):
         """Helper to grab all current UI parameters for saving."""
         return {
             'crystal': self.ws_combo.currentText(),
+            'hkl': (self.spin_h.value(), self.spin_k.value(), self.spin_l.value()), # <-- Added
             'photon_energy': self.photon_energy_spin.value(),
             'work_function': self.work_function_spin.value(),
             'temperature': self.temperature_spin.value(),
@@ -658,3 +694,53 @@ class ARPESPanel(QWidget):
             self.ws_combo.addItems(bands)
         else:
             self.ws_combo.addItem("No band structures available")
+    
+    def _draw_bz_overlay(self):
+        """Fetches the 3D Brillouin Zone, projects it to the hkl surface, and rotates it onto the (kx, ky) plot axes."""
+        target_crystal = self.ws_combo.currentText()
+        band_data = global_workspace.pull_band_structure(target_crystal)
+        
+        # Ensure the DFT suite provided the structure and reciprocal matrix
+        if not band_data or 'structure' not in band_data or 'recip_matrix' not in band_data:
+            return
+
+        structure = band_data['structure']
+        recip_matrix = band_data['recip_matrix']
+        
+        from tensorspec.core.crystallography import CrystalEngine
+        import numpy as np
+        
+        # 1. Calculate the 3D Bulk Brillouin Zone vertices
+        bz_data = CrystalEngine.calculate_brillouin_zone(structure)
+        if not bz_data: return
+        
+        # 2. Recreate the exact hkl -> Sample Frame rotation matrix used by Chinook
+        hkl = (self.spin_h.value(), self.spin_k.value(), self.spin_l.value())
+        Z_surf, Y_surf = CrystalEngine.get_hkl_surface_frame(hkl, recip_matrix, azimuthal_ref=None)
+        X_surf = np.cross(Y_surf, Z_surf)
+        
+        # R_bulk_to_hkl projects 3D Bulk vectors into the (kx, ky, kz) sample frame
+        R_hkl_to_bulk = np.column_stack((X_surf, Y_surf, Z_surf))
+        R_bulk_to_hkl = np.linalg.inv(R_hkl_to_bulk)
+        
+        # 3. Calculate the 2D projected boundary silhouette
+        scaled_points = np.array(bz_data["points"])
+        surf_data = CrystalEngine.calculate_surface_projection(scaled_points, structure, hkl[0], hkl[1], hkl[2])
+        
+        if surf_data:
+            # The silhouette vertices are returned in the 3D Bulk Cartesian frame
+            proj_bounds_bulk = np.array(surf_data["projected_bounds"])
+            
+            # Rotate the vertices into the ARPES (kx, ky) Frame
+            bounds_sample = proj_bounds_bulk @ R_bulk_to_hkl.T
+            
+            kx_poly = bounds_sample[:, 0]
+            ky_poly = bounds_sample[:, 1]
+            
+            # Close the polygon loop so the drawn line connects the last vertex back to the first
+            kx_poly = np.append(kx_poly, kx_poly[0])
+            ky_poly = np.append(ky_poly, ky_poly[0])
+            
+            # Overlay on the plot
+            self.ax.plot(kx_poly, ky_poly, color='cyan', linestyle='-', linewidth=1.5, label="Projected Surface BZ")
+            self.ax.legend(loc='upper right', fontsize=8, facecolor='black', edgecolor='white', labelcolor='white')
