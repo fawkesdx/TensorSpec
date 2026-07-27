@@ -10,11 +10,23 @@ try:
     import chinook.electron_configs as econ  
     import chinook.radint_lib as radint_lib  # <-- New import to patch the cutoff bug
     
-    # --- PATCH 1: CHINOOK'S MISSING ATOMIC DATABASE ---
+    # --- PATCH 1: CHINOOK'S MISSING ATOMIC DATABASE & NOISY PRINTS ---
+    import sys
+    import io
+    
     original_Z_eff = econ.Z_eff
+    _dummy_stream = io.StringIO() # A permanent black hole for Chinook's print statements
     
     def patched_Z_eff(Z, orb):
-        result = original_Z_eff(Z, orb)
+        # 1. Temporarily hijack stdout to trap Chinook's hardcoded error messages
+        old_stdout = sys.stdout
+        sys.stdout = _dummy_stream
+        try:
+            result = original_Z_eff(Z, orb)
+        finally:
+            # Restore normal printing immediately after
+            sys.stdout = old_stdout
+            
         if result is None:
             # Complete Slater's Rule effective charges for heavy elements (Rows 5 & 6)
             z_eff_db = {
@@ -69,11 +81,12 @@ class ChinookWrapper:
     def __init__(self):
         self.tb_model = None
         self.fermi_shift = 0.0
+        self.B_matrix = None  # <-- Add this line
 
     def build_model(self, tb_dict):
         """
         Safely loads the tight-binding model directly from the workspace and 
-        extracts the physical on-site energy shift without modifying the model.
+        extracts the physical on-site energy shift and reciprocal lattice.
         """
         if not CHINOOK_AVAILABLE:
             print("Chinook not installed. Running in Dummy Mode.")
@@ -89,8 +102,25 @@ class ChinookWrapper:
                 raise ValueError("CRITICAL: Workspace missing Tight-Binding params.")
             self.tb_model = build_lib.gen_TB(basis, h_dict)
 
-        # 2. Extract the true on-site energy (Reads directly from QE now!)
+        # 2. Extract the true on-site energy
         self.fermi_shift = -tb_dict.get('fermi_energy', 0.0)
+        
+        # 3. Safely extract Reciprocal Lattice Vectors (B_matrix)
+        # Chinook TB_model does not store these natively, so we pull them from the workspace dict
+        import numpy as np
+        if 'structure' in tb_dict:
+            self.B_matrix = tb_dict['structure'].lattice.reciprocal_lattice.matrix
+        elif 'recip_matrix' in tb_dict:
+            self.B_matrix = tb_dict['recip_matrix']
+        elif 'avec' in tb_dict:
+            A_matrix = np.array(tb_dict['avec'])
+            self.B_matrix = 2 * np.pi * np.linalg.inv(A_matrix).T
+        elif hasattr(self.tb_model, 'Kobj') and self.tb_model.Kobj is not None and hasattr(self.tb_model.Kobj, 'avec'):
+            A_matrix = np.array(self.tb_model.Kobj.avec)
+            self.B_matrix = 2 * np.pi * np.linalg.inv(A_matrix).T
+        else:
+            print("WARNING: No lattice vectors found in Tight-Binding dictionary. Falling back to Simple Cubic.")
+            self.B_matrix = 2 * np.pi * np.eye(3)
 
     def run_simulation(self, experiment_kwargs):
         """
@@ -164,32 +194,64 @@ class ChinookWrapper:
         
         k_slit_flat = K_SLIT.flatten(order='C')
         k_defl_flat = K_DEFL.flatten(order='C')
-        k_norm_flat = np.zeros_like(k_slit_flat)
-        
         # Apply the Analyzer Slit Angle mathematically in the Lab Frame
         slit_rad = np.radians(experiment_kwargs.get('slit_angle', 0.0))
         k_lab_x = k_slit_flat * np.cos(slit_rad) - k_defl_flat * np.sin(slit_rad)
         k_lab_z = k_slit_flat * np.sin(slit_rad) + k_defl_flat * np.cos(slit_rad)
-        k_lab_y = k_norm_flat
         
-        K_LAB = np.vstack([k_lab_x, k_lab_y, k_lab_z])
+        # --- FIX: EXACT 3D KINEMATICS & SURFACE REFRACTION ---
+        E_kin = max(hv - W, 0.1)
+        k_vac_sq = 0.262465 * E_kin
         
-        # Transform the detector pixels directly into the Sample's coordinate frame
-        K_SAMPLE = R_inv @ K_LAB  # Shape: (3, N)
+        # 1. Calculate momentum along the analyzer axis (Lab Y) in vacuum
+        k_lab_y_sq = k_vac_sq - (k_lab_x**2 + k_lab_z**2)
+        k_lab_y = np.sqrt(np.clip(k_lab_y_sq, 0.0, None))
+        
+        K_LAB_VAC = np.vstack([k_lab_x, k_lab_y, k_lab_z])
+        
+        # 2. Rotate from Lab Frame onto the Macroscopic Sample Surface
+        K_SAMPLE = R_inv @ K_LAB_VAC 
+        
+        # 3. Apply the Inner Potential (V0) acceleration ONLY normal to the surface (Sample Z)
+        K_SAMPLE[2] = np.sqrt(K_SAMPLE[2]**2 + 0.262465 * V0)
+        # -----------------------------------------------------
+        
+        # --- 4.5 hkl CLEAVAGE PLANE PROJECTION ---
+        hkl = experiment_kwargs.get('hkl', (0, 0, 1)) # Default to (001) surface
+        
+        from tensorspec.core.crystallography import CrystalEngine
+        
+        # We NO LONGER ask self.tb_model for its non-existent 'avec' attribute.
+        # We use the securely extracted B_matrix from build_model()
+        Z_surf, Y_surf = CrystalEngine.get_hkl_surface_frame(hkl, self.B_matrix, azimuthal_ref=None)
+        
+        # Construct X_surf to complete the Right-Handed basis (cross product of Y and Z)
+        X_surf = np.cross(Y_surf, Z_surf)
+        
+        # Rotation matrix mapping the (kx, ky) cleavage plane to the 3D Bulk Cartesian frame
+        R_hkl_to_bulk = np.column_stack((X_surf, Y_surf, Z_surf))
+        
+        # Map to Bulk Cartesian Frame for Hamiltonian diagonalization
+        K_BULK = R_hkl_to_bulk @ K_SAMPLE
+        
+        # --- FIX 1: Rotate Polarization Vector into Bulk Frame ---
+        # The atomic orbitals are defined in the bulk frame, so the incident light pulse 
+        # must be rotated to match, otherwise dipole selection rules will be physically misaligned!
+        A_bulk = R_hkl_to_bulk @ A_sample
         
         is_bare = "Off" in me_mode
         is_full = "Full" in me_mode
 
-        # Feed the exact transformed 1D momentum list to Chinook
+        # Feed the experiment dictionary
         arpes_dict = {
-            'cube': kb,  # Required to keep __init__ from throwing a fit and aborting
-            'ang': 0.0,  # We leave this at 0 because K_SAMPLE handles the sample rotation natively
+            'cube': kb,  
+            'ang': 0.0,  
             'E': np.linspace(kb['E'][0] - self.fermi_shift, kb['E'][1] - self.fermi_shift, num_e),
             'hv': hv,
             'W': W,
             'V0': V0,
             'T': T,
-            'pol': A_sample,
+            'pol': A_bulk,  # <-- Pass the corrected 3D polarization vector
             'ME': is_full,
             'SE': ['constant', se_width],
             'resolution': {'E': res_e, 'k': res_k}
@@ -198,60 +260,89 @@ class ChinookWrapper:
         # 5. Execute Simulation
         try:
             exp = experiment(self.tb_model, arpes_dict)
+            exp.ME = is_full
             
-            # 1. THE CACHE KILLER
+            # THE CACHE KILLER
             if hasattr(exp.TB, 'H'): del exp.TB.H
             if hasattr(exp.TB, 'Eband'): del exp.TB.Eband
             if hasattr(exp.TB, 'evec'): del exp.TB.evec
             
-            # 2. Initialize basis rotation
+            # Initialize basis rotation and custom K_BULK mesh
             exp.basis = exp.rot_basis()
-            
-            # 3. Inject K_SAMPLE mesh
             class CustomMesh:
                 def __init__(self, k):
                     self.kpts = k
+            exp.TB.Kobj = CustomMesh(K_BULK.T)
+            exp.k = K_BULK.T 
             
-            exp.TB.Kobj = CustomMesh(K_SAMPLE.T)
-            exp.k = K_SAMPLE.T 
-            
-            # 4. Generate matrices & diagonalize
+            # Generate matrices & diagonalize
             exp.val, exp.vec = exp.TB.solve_H()
             
-            # 5. BUILD THE COMPLETE SCAFFOLDING 
-            # We anticipate ALL variables diagonalize() normally builds so datacube() runs flawlessly.
+            # =====================================================================
+            # --- SUPERCHARGE BYPASS FOR BARE SPECTRAL FUNCTION ---
+            # =====================================================================
+            if is_bare:
+                gamma = se_width / 2.0
+                
+                # --- FIX: Grab the energy axis directly from our dictionary ---
+                energy_axis = arpes_dict['E']
+                
+                # Vectorized Lorentzian Broadening
+                # Broadcasting: (Nk, Nbands, 1) against (1, 1, Ne) -> (Nk, Nbands, Ne)
+                diff = exp.val[:, :, np.newaxis] - energy_axis[np.newaxis, np.newaxis, :]
+                spectral_weight = (gamma / np.pi) / (diff**2 + gamma**2)
+                
+                # Sum over all bands to get total intensity
+                intensity_flat = np.sum(spectral_weight, axis=1)
+                
+                # Reshape directly back to the 3D detector grid
+                intensity_3d = intensity_flat.reshape((num_x, num_y, num_e), order='C')
+                
+                return {'intensity_broadened': intensity_3d}
+            # =====================================================================
+            
+            # --- FULL MATRIX ELEMENTS ROUTE (Standard Chinook Pipeline) ---
             exp.Eb = exp.val.flatten()
-            exp.Ev = exp.vec  # <-- THE MISSING WAVEFUNCTION ALIAS
+            exp.Ev = exp.vec  
             exp.X = np.zeros((num_y, num_x))
             exp.Y = np.zeros((num_y, num_x))
             
-            # Calculate photoemission angles
-            k_para = np.sqrt(exp.k[:, 0]**2 + exp.k[:, 1]**2)
-            k_vac = np.sqrt(0.262465 * max(hv - W, 1.0))
+            # --- FIX: ALIGN FINAL STATE PLANE WAVE TO THE BULK FRAME ---
+            # We must construct the outgoing photoelectron in the exact same 
+            # coordinate system as the initial state orbitals and light polarization.
+            k_bulk_para = np.sqrt(K_BULK[0]**2 + K_BULK[1]**2)
+            k_bulk_norm = np.sqrt(K_BULK[0]**2 + K_BULK[1]**2 + K_BULK[2]**2)
             
-            exp.ph = np.arctan2(exp.k[:, 1], exp.k[:, 0])
-            exp.th = np.arcsin(np.clip(k_para / k_vac, -1.0, 1.0))
+            # Prevent division by zero precisely at the Gamma point
+            k_bulk_norm[k_bulk_norm == 0] = 1e-10 
             
-            # 6. SURGICAL STRIKE: Muzzle the mesh generator
+            exp.ph = np.arctan2(K_BULK[1], K_BULK[0])
+            exp.th = np.arcsin(np.clip(k_bulk_para / k_bulk_norm, -1.0, 1.0))
+            # -----------------------------------------------------------
+            
             exp.diagonalize = lambda *args, **kwargs: None
-            
-            # 7. Run datacube natively to generate self.Mk
             exp.datacube()
             
-            # 8. Compute the final ARPES spectral function!
             output_maps = np.real(exp.spectral())
             
-            # Unpack the calculated intensities back into the (Slit x Deflector x Energy) grid
+            # --- RESTORED: Your original robust unpacking logic ---
             if output_maps.ndim == 4 and output_maps.shape[0] == 2:
                 intensity_3d = output_maps[1].reshape((num_x, num_y, num_e), order='C')
             elif output_maps.ndim == 2:
                 intensity_3d = output_maps.reshape((num_x, num_y, num_e), order='C')
             else:
-                intensity_3d = output_maps.reshape((num_x, num_y, num_e), order='C')
+                # Fallback for flattened 1D arrays (the 32000 -> 16000 case)
+                expected_size = num_x * num_y * num_e
+                if output_maps.size == 2 * expected_size:
+                    output_maps = np.sum(output_maps.reshape((2, expected_size)), axis=0)
                 
-            # Geometric Matrix Element Toggles (Polarization Dipole mode)
-            if not is_bare and not is_full:
-                dipole_factor = np.abs(A_sample[0]*K_SAMPLE[0] + A_sample[1]*K_SAMPLE[1])**2
+                intensity_3d = output_maps.reshape((num_x, num_y, num_e), order='C')
+            # ------------------------------------------------------
+                
+            if not is_full: # Dipole Only
+                # --- FIX: Include the Z-component and use the aligned Bulk Frame ---
+                dipole_dot = A_bulk[0]*K_BULK[0] + A_bulk[1]*K_BULK[1] + A_bulk[2]*K_BULK[2]
+                dipole_factor = np.abs(dipole_dot)**2
                 dipole_factor = dipole_factor.reshape(num_x, num_y, order='C')
                 intensity_3d = intensity_3d * dipole_factor[:, :, np.newaxis]
                 
