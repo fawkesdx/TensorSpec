@@ -26,18 +26,33 @@ class ChinookTightBindingEngine:
                     'C-C_nn': -2.7,      # Standard graphene t1 is ~ -2.7 eV
                     'C-C_nnn': -0.2,     # t2 is ~ -0.2 eV
                     'C-C_third': 0.0
-                }
+                },
+                # Carbon: p-orbitals form the Dirac cone at E=0, s-orbitals are deep
+                'onsite': {'0': -8.0, '1': 0.0} 
             },
             'WTe2': {
                 'orbitals': ['W', 'Te'],
                 'sk_base': {
                     'W-W': -1.5, 'W-Te': -1.2, 'Te-Te_in_plane': -0.8,
-                    'Te-Te_interlayer': -0.3 # New proxy for out-of-plane hopping
-                } 
+                    'Te-Te_interlayer': -0.3 
+                },
+                'onsite': {'0': -10.0, '1': -2.0, '2': 0.0}
+            },
+            'TaIrTe4': {
+                'orbitals': ['Ta', 'Ir', 'Te'],
+                'sk_base': {'M-M': -1.3, 'M-Te': -1.1, 'Te-Te': -0.7}, # Proxy Slater-Koster bonds
+                'onsite': {'0': -10.0, '1': -2.0, '2': 0.0} 
+            },
+            'MoTe2': {
+                'orbitals': ['Mo', 'Te'],
+                'sk_base': {'Mo-Mo': -1.4, 'Mo-Te': -1.2, 'Te-Te': -0.8},
+                'onsite': {'0': -10.0, '1': -1.5, '2': 0.0}
             },
             'VTe2': {
                 'orbitals': ['V', 'Te'],
-                'sk_base': {'V-V': -1.3, 'V-Te': -1.1, 'Te-Te': -0.7}
+                'sk_base': {'V-V': -1.3, 'V-Te': -1.1, 'Te-Te': -0.7},
+                # VTe2: V d-bands at Fermi level, Te p-bands shifted down
+                'onsite': {'0': -10.0, '1': -2.0, '2': 0.0}
             }
         }
 
@@ -83,7 +98,7 @@ class ChinookTightBindingEngine:
         else:
             return s_orbs + p_orbs
 
-    def export_chinook_dictionary(self, shells=None, onsite_e=0.0, use_soc=False, soc_strength=0.5, tb_mode="Slater-Koster (Rigorous)"):
+    def export_chinook_dictionary(self, shells=None, onsite_e=0.0, use_soc=False, soc_strength=0.5, tb_mode="Slater-Koster (Rigorous)", orbital_shifts=None):
         if not self.crystal_structure:
             raise ValueError("No structure loaded in DFT engine to export.")
 
@@ -138,19 +153,20 @@ class ChinookTightBindingEngine:
         # --- NATIVE CHINOOK SLATER-KOSTER MODE ---
         V_dict = {}
         
-        # 1. On-site energies (e.g., '32xy' for Atom 0, n=3, l=2)
+        formula = self.crystal_structure.composition.reduced_formula
+        mat_props = self.materials_db.get(formula, self.materials_db['VTe2'])
+        
+        # Priority: UI Overrides -> Database -> Hardcoded defaults
+        onsite_db = orbital_shifts if orbital_shifts else mat_props.get('onsite', {'0': -10.0, '1': -2.0, '2': 0.0})
+        
+        # 1. On-site energies dynamically mapped per angular momentum (l)
         for i, site in enumerate(self.crystal_structure):
             for orb in self._get_orbital_basis(site.species_string):
                 n, l = orb[0], orb[1]
-                if l == '0':
-                    # Push s-orbitals deep below the Fermi level (-10.0 eV)
-                    V_dict[f"{i}{n}{l}"] = onsite_e - 10.0 
-                elif l == '1':
-                    # Pull p-orbitals (Te) slightly down so they hybridize nicely
-                    V_dict[f"{i}{n}{l}"] = onsite_e - 2.0
-                elif l == '2':
-                    # Keep d-orbitals (V) right at the Fermi level
-                    V_dict[f"{i}{n}{l}"] = onsite_e
+                
+                # Fetch the specific orbital energy from the database, apply the global UI shift (onsite_e)
+                base_energy = onsite_db.get(l, 0.0)
+                V_dict[f"{i}{n}{l}"] = onsite_e + base_energy
 
         sorted_shells = sorted(shells, key=lambda x: x[1]) if shells else []
         cutoff_max = sorted_shells[-1][1] if sorted_shells else 10.0
@@ -208,7 +224,7 @@ class ChinookTightBindingEngine:
             'spin': spin_dict
         }
 
-    def solve_bands(self, k_points, custom_hopping=None, onsite_e=0.0, use_soc=False, soc_strength=0.5, w90_filepath=None, cutoffs=None, tb_mode="Simple Scalar"):
+    def solve_bands(self, k_points, custom_hopping=None, onsite_e=0.0, use_soc=False, soc_strength=0.5, w90_filepath=None, cutoffs=None, tb_mode="Simple Scalar", orbital_shifts=None):
         if build_lib is None or klib is None:
             raise ImportError("Chinook is not installed properly. Cannot calculate bands.")
         if not self.crystal_structure:
@@ -229,7 +245,8 @@ class ChinookTightBindingEngine:
                 onsite_e=onsite_e,
                 use_soc=use_soc, 
                 soc_strength=soc_strength,
-                tb_mode=tb_mode 
+                tb_mode=tb_mode,
+                orbital_shifts=orbital_shifts
             )
 
             basis_args = {
