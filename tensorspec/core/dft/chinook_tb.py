@@ -544,7 +544,7 @@ class ChinookTightBindingEngine:
             spin_dict = {'bool': False, 'soc': False}
         
         tb_dict = {
-            'type': 'list', 
+            'type': 'list',
             'list': explicit_hopping, 
             'H': explicit_hopping,
             'a': a_mat.tolist(), 
