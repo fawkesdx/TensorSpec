@@ -280,7 +280,6 @@ class DFTSuite(QWidget):
                                     fermi_energy = float(line.split()[4])
                         if fermi_energy != 0.0:
                             break
-                            
             eigenvalues = eigenvalues - fermi_energy
             
             soc_title_tag = " (with SOC)" if is_soc and not w90_file else ""
@@ -326,6 +325,7 @@ class DFTSuite(QWidget):
         if found_tb_model is not None:
             if found_basis is None: found_basis = getattr(found_tb_model, 'basis', None)
             if found_h_dict is None: found_h_dict = getattr(found_tb_model, 'H_dict', None)
+            
 
         # 4. Cache data for pushing
         self.active_bands_data = {
