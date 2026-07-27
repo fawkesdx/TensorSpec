@@ -350,6 +350,12 @@ class DFTSuite(QWidget):
         else:
             self.active_bands_data.update({'k_dist': k_dist, 'node_idx': node_idx, 'labels': labels})
         self.btn_push_bands.setEnabled(True)
+        
+        # --- ADD THESE DEBUG LINES ---
+        print("\n[LOG 1 - DFT SUITE]")
+        print(f"Fermi Energy packed into dict: {self.active_bands_data.get('fermi_energy')}")
+        print(f"e_fermi packed into dict: {self.active_bands_data.get('e_fermi', 'NOT DEFINED')}")
+        # -----------------------------
 
         # 5. Render Plot
         if hasattr(self, 'cbar') and self.cbar is not None:

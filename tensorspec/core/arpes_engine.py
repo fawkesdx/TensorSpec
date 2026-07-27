@@ -19,13 +19,13 @@ class ARPESEngineRouter:
         self.engine_b3 = KKRWrapper()  
 
     def run_simulation(self, model_choice, crystal_data, experiment_kwargs):
-        # 1. Fetch the Fermi level that the DFT suite already calculated
-        # Assuming the band_data object passed from DFT holds this info
-        e_fermi = crystal_data.get('e_fermi', 0.0) 
-        
+        # --- ADD THESE DEBUG LINES ---
+        print("\n[LOG 3 - ENGINE ROUTER]")
+        print(f"crystal_data['fermi_energy'] incoming: {crystal_data.get('fermi_energy', 'MISSING')}")
+        print(f"crystal_data['e_fermi'] incoming: {crystal_data.get('e_fermi', 'MISSING')}")
+        # -----------------------------
         if model_choice == 'B1':
-            # 2. Inject the Fermi shift into the Chinook model BEFORE solving
-            experiment_kwargs['e_fermi'] = e_fermi
+            # The wrapper already extracts 'fermi_energy' directly from crystal_data natively.
             self.engine_b1.build_model(crystal_data)
             return self.engine_b1.run_simulation(experiment_kwargs)
             
