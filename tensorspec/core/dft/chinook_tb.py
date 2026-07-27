@@ -460,24 +460,11 @@ class ChinookTightBindingEngine:
         
         idx = 0
         for i, site in enumerate(self.crystal_structure):
-            # 1. Grab all the orbital strings for this atom
-            atom_orbs = self._get_orbital_basis(site.species_string)
-            
-            # 2. Feed them into Chinook's native generator to attach spherical harmonics
-            temp_args = {
-                'atoms': [i], 
-                'Z': {i: site.specie.number}, 
-                'pos': [np.array(site.coords, dtype=float)], 
-                'orbs': [atom_orbs]
-            }
-            temp_basis = build_lib.gen_basis(temp_args)
-            
-            # 3. Extract the fully baked orbital objects instead of raw strings
-            for b_obj in (temp_basis if isinstance(temp_basis, list) else temp_basis.orbitals):
+            for orb in self._get_orbital_basis(site.species_string):
                 flat_atoms.append(idx)
                 flat_Z[idx] = site.specie.number
                 flat_pos.append(np.array(site.coords, dtype=float))
-                flat_orbs.append(b_obj) # <-- CRITICAL: Pushing the full orbital object!
+                flat_orbs.append([orb]) 
                 idx += 1
 
         explicit_hopping = []
