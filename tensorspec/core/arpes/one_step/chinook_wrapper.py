@@ -103,8 +103,7 @@ class ChinookWrapper:
             self.tb_model = build_lib.gen_TB(basis, h_dict)
 
         # 2. Extract the true on-site energy
-        # The TensorSpec DFT engine ALWAYS centers the Hamiltonian at 0.0 eV natively.
-        self.fermi_shift = 0.0
+        self.fermi_shift = tb_dict.get('fermi_energy', 0.0)
 
         # --- ADD THESE DEBUG LINES ---
         print("\n[LOG 4 - CHINOOK WRAPPER]")
@@ -254,7 +253,7 @@ class ChinookWrapper:
         arpes_dict = {
             'cube': kb,  
             'ang': 0.0,  
-            'E': np.linspace(kb['E'][0] - self.fermi_shift, kb['E'][1] - self.fermi_shift, num_e),
+            'E': np.linspace(kb['E'][0], kb['E'][1], num_e),
             'hv': hv,
             'W': W,
             'V0': V0,
@@ -286,6 +285,13 @@ class ChinookWrapper:
             # Generate matrices & diagonalize
             exp.val, exp.vec = exp.TB.solve_H()
             
+            # --- NEW: Shift Eigenvalues Natively ---
+            # We shift the resulting eigenvalues down to E=0.
+            # This guarantees that Chinook's native Fermi-Dirac distributions
+            # and our Bare Spectral Function bypass work flawlessly.
+            exp.val = exp.val - self.fermi_shift
+            # ---------------------------------------
+            
             # =====================================================================
             # --- SUPERCHARGE BYPASS FOR BARE SPECTRAL FUNCTION ---
             # =====================================================================
@@ -302,6 +308,18 @@ class ChinookWrapper:
                 
                 # Sum over all bands to get total intensity
                 intensity_flat = np.sum(spectral_weight, axis=1)
+                
+                # --- NEW: Apply Fermi-Dirac Distribution ---
+                # Boltzmann constant in eV/K
+                kb = 8.617333262e-5 
+                
+                # Clip the exponent to safely prevent np.exp() overflow at high binding energies
+                # T is already parsed from experiment_kwargs earlier in the function
+                exponent = np.clip(energy_axis / (kb * T), -100.0, 100.0)
+                fermi_dirac = 1.0 / (np.exp(exponent) + 1.0)
+                
+                # Multiply the flat intensity matrix (Nk, Ne) by the 1D Fermi-Dirac array (Ne,)
+                intensity_flat = intensity_flat * fermi_dirac
                 
                 # Reshape directly back to the 3D detector grid
                 intensity_3d = intensity_flat.reshape((num_x, num_y, num_e), order='C')

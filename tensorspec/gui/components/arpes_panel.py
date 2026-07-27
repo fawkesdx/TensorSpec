@@ -460,16 +460,8 @@ class ARPESPanel(QWidget):
             print(">> WARNING: No pre-calculated band structure found.")
             return
         
-        # --- FERMI ENERGY SHIFT CORRECTION ---
-        fermi_shift = band_data.get('fermi_energy', 0.0)
-        e_min_calc = e_min + fermi_shift
-        e_max_calc = e_max + fermi_shift
-
         print("\n[LOG 2 - ARPES PANEL]")
         print(f"Dictionary keys pulled: {list(band_data.keys())}")
-        print(f"fermi_energy applied to bounds: {fermi_shift} eV")
-        # -------------------------------------
-            
         print(">> SUCCESS: Band structure loaded. Routing to Matrix Element Engine...")
         
         experiment_kwargs = {
@@ -486,8 +478,8 @@ class ARPESPanel(QWidget):
             'manip_tilt': self.manip_tilt_spin.value(),
             'hkl': (self.spin_h.value(), self.spin_k.value(), self.spin_l.value()),
 
-            # Shifted bounds sent to the solver engine
-            'k_bounds': {'X': [kx_min, kx_max, kx_steps], 'Y': [ky_min, ky_max, ky_steps], 'E': [e_min_calc, e_max_calc, e_steps]},
+            # Send standard relative bounds (e.g., -2.0 to 0.5) to the engine
+            'k_bounds': {'X': [kx_min, kx_max, kx_steps], 'Y': [ky_min, ky_max, ky_steps], 'E': [e_min, e_max, e_steps]},
             'se_width': self.ui_se_spinbox.value(),
             'res_E': self.ui_res_e_spinbox.value(),
             'res_k': self.ui_res_k_spinbox.value(),
