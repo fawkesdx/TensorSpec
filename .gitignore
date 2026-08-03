@@ -10,3 +10,7 @@ out
 __pycache__/
 *.py[cod]
 *$py.class
+mock_data_output/
+old_working_py/
+currentproblem
+currentproblem2
