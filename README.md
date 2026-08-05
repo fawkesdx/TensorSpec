@@ -1,4 +1,7 @@
 # TensorSpec
+
+> **⚠️ DEVELOPMENT BRANCH:** This branch (`HTML_einstein_app`) is actively developing the web-based HTML version of TensorSpec. For the legacy local desktop application, please clone the `legacy-desktop` branch.
+
 ## Prerequisites
 * **Python 3.11 or 3.12** (Python 3.9 and 3.10 are not supported due to modern dependency requirements).
 * A virtual environment is highly recommended.
@@ -39,3 +42,10 @@ A dedicated module for attaching ML routines to experimental data:
 * Dimensionality reduction (PCA/NMF) for hyperspectral datasets.
 * Deep learning-based image analysis.
 * Transfer learning-based model.
+
+## How to Run the Web Application
+
+TensorSpec is now a web-based application. To launch the interface (either on your local machine or hosted on a cluster), run the following command:
+
+```bash
+streamlit run run_web.py

@@ -9,7 +9,7 @@ When assisting with this repository, strictly adhere to the following rules:
 5.  **Strict Modularity & Separation of Concerns:** Never write monolithic single-file suites. New features and refactored components must strictly separate logic into three distinct layers:
     * **Core Math & Physics Engine (`tensorspec/core/`):** Pure Python/NumPy/PyMatgen logic (e.g., symmetry parsing, Moiré math, ARPES momentum transformations). Zero GUI or plotting imports allowed.
     * **Rendering & Visualization Backends (`tensorspec/plotting/`):** Dedicated wrapper classes for PyVista, Matplotlib, or PyQtGraph engines.
-    * **UI Controllers (`tensorspec/gui/`):** PySide6 layout definitions, widgets, and signal/slot connection routing.
+    * **UI Controllers (`tensorspec/gui/`):** Streamlit layouts, web components, and session state routing.
     * if a long monolithic files need to be separated, always tell me which block to be moved where instead of giving me the whole code so I can follow the logic. when separating files, I want you to tell me what to copy from the old file and what to paste in the new file. I only want to move what I know exist in the old files so we dont lose any feature.
 6.  **Hierarchical Data Architecture:** All multi-dimensional spectroscopic data containers must adopt the **Hierarchical Tree Model** (via `xarray.DataTree` aligned with NeXus/HDF5 standards). Never store disconnected arrays. Every data object must structure its nodes as:
     * `/raw`: Immutable experimental intensity matrices, hardware coordinates, and metadata (`attrs`).
@@ -56,7 +56,7 @@ tensorspec/
 │   │   ├── matplotlib_engine.py # Safe CPU rendering for 1D lines & static 2D maps
 │   │   ├── pyvista_engine.py    # Fast GPU rendering for 3D crystal structures & volumes
 │   │   └── pyqtgraph_engine.py  # High-speed real-time 2D image rendering (optional but recommended)
-│   └── viewers/               # Reusable Qt widgets for suites to embed
+│   └── viewers/               # Reusable Streamlit web components for suites to embed
 │       ├── __init__.py
 │       ├── viewer_1d.py       # LineViewer: 1D spectra, stack overlays, peak fit plotting
 │       ├── viewer_2d.py       # ImageViewer: 2D heatmap, contrast levels, live EDC/MDC crosshairs

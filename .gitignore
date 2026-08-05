@@ -14,3 +14,6 @@ mock_data_output/
 old_working_py/
 currentproblem
 currentproblem2
+
+# Streamlit local configuration and cache
+.streamlit/
