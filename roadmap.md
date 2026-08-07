@@ -13,7 +13,7 @@ re-implementation in HTML. Do not treat a checked box as a finished screen.
     - [x] Slice 1 — Session backbone: FastAPI app, per-session workspace, live variable tree
     - [x] Slice 2a — Crystal Suite Tab 1: CIF load, geometry as JSON, three.js viewport
     - [x] Slice 2b — Crystal Suite Tabs 2-4: CDW modulator, stack & twist, Brillouin zone
-          (bulk HKL exfoliator deferred; core exists, Qt path only for now)
+          (includes bulk vdW / HKL exfoliator on Tab 3)
     - [x] Slice 3a — ARPES viewer: server-side slicing, crosshair, EDC/MDC/orthogonal curves
     - [x] Slice 3b — ARPES viewer extras: multi-panel snap grid, cross-dataset crosshair sync,
           profile export (CSV/PDF), and the matrix-element simulator tab
