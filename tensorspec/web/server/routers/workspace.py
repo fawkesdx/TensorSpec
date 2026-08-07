@@ -7,6 +7,7 @@ from __future__ import annotations
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException
 
+from tensorspec.core.crystallography import CrystalEngine
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.workspace import WorkspaceManager
 from tensorspec.web.server.schemas import (
@@ -19,7 +20,7 @@ from tensorspec.web.server.session import Session, current_session
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
-VIEWABLE_TYPES = {"spectroscopy_tree"}
+VIEWABLE_TYPES = {"spectroscopy_tree", "crystal_structure"}
 
 
 def _pull_raw(workspace: WorkspaceManager, name: str):
@@ -31,6 +32,9 @@ def _describe(name: str, item: dict, workspace: WorkspaceManager) -> tuple[str, 
     item_type = item.get("type", "Unknown")
 
     if item_type == "crystal_structure":
+        structure = item.get("structure")
+        if structure is not None:
+            return "Crystal Structure", f"{structure.composition.reduced_formula}, {len(structure)} sites"
         return "Crystal Structure", "3D Basis Vectors"
 
     if item_type == "band_structure":
@@ -85,6 +89,18 @@ def get_item(name: str, session: Session = Depends(current_session)) -> ItemDeta
             }
     elif raw_type == "band_structure":
         metadata = {"High Symmetry Labels": ", ".join(map(str, item.get("labels", [])))}
+    elif raw_type == "crystal_structure":
+        structure = item.get("structure")
+        if structure is not None:
+            lattice = structure.lattice
+            metadata = {
+                "Formula": structure.composition.reduced_formula,
+                "Space Group": CrystalEngine.get_symmetry_info(structure)["spacegroup"],
+                "Sites": str(len(structure)),
+                "a, b, c (A)": f"{lattice.a:.4f}, {lattice.b:.4f}, {lattice.c:.4f}",
+                "alpha, beta, gamma": f"{lattice.alpha:.2f}, {lattice.beta:.2f}, {lattice.gamma:.2f}",
+                "Volume (A^3)": f"{lattice.volume:.3f}",
+            }
 
     return ItemDetail(
         name=name,

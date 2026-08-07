@@ -3,7 +3,7 @@ import os
 import json
 import warnings
 import numpy as np
-from scipy.spatial import ConvexHull
+from scipy.spatial import ConvexHull, KDTree
 from pymatgen.core import Structure, Lattice
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.core.surface import SlabGenerator
@@ -50,6 +50,41 @@ class CrystalEngine:
             return {"spacegroup": spg_symbol, "volume_ratio": ratio}
         except Exception:
             return {"spacegroup": "N/A", "volume_ratio": 1}
+
+    @staticmethod
+    def compute_bonds(structure: Structure, thresh_multiplier: float = 1.15,
+                      search_radius: float = 4.0, max_atoms: int = 500000) -> dict:
+        """
+        Determines which atom pairs are bonded using a KDTree neighbour search
+        gated by summed atomic radii. Pure geometry: returns index pairs and
+        separations so any renderer (PyVista, three.js, exporters) can draw them.
+
+        Returns arrays i, j, distances, and vectors (j minus i), all aligned.
+        Empty arrays mean no bonds, including when the cell exceeds max_atoms.
+        """
+        empty = {"i": np.array([], dtype=int), "j": np.array([], dtype=int),
+                 "distances": np.array([]), "vectors": np.empty((0, 3))}
+
+        if len(structure) > max_atoms:
+            return empty
+
+        coords = structure.cart_coords
+        radii = np.array([s.specie.atomic_radius if s.specie.atomic_radius else 1.2 for s in structure])
+
+        pairs = KDTree(coords).query_pairs(r=search_radius)
+        if not pairs:
+            return empty
+
+        pairs_arr = np.array(list(pairs))
+        i_idx, j_idx = pairs_arr[:, 0], pairs_arr[:, 1]
+        vecs = coords[j_idx] - coords[i_idx]
+        dists = np.linalg.norm(vecs, axis=1)
+
+        rad_sums = (radii[i_idx] + radii[j_idx]) * thresh_multiplier
+        mask = (dists > 0.5) & (dists <= rad_sums)
+
+        return {"i": i_idx[mask], "j": j_idx[mask],
+                "distances": dists[mask], "vectors": vecs[mask]}
 
     @staticmethod
     def apply_cdw_distortion(supercell: Structure, target_el: str, q_vec: tuple, amp_vec: tuple, phase_deg: float) -> Structure:

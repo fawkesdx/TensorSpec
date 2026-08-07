@@ -8,6 +8,17 @@
     <link rel="stylesheet" href="../../static/css/base.css">
     <link rel="stylesheet" href="../../static/css/layout.css">
     <link rel="stylesheet" href="../../static/css/suite.css">
+
+    <!-- three.js addons import the bare specifier "three"; this maps it to the
+         vendored copy. Import maps must be declared before any module script. -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "/static/vendor/three/three.module.min.js",
+            "three/addons/": "/static/vendor/three/"
+        }
+    }
+    </script>
 </head>
 
 <body>
@@ -17,7 +28,7 @@
             <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
             <h1 class="suite-header__title">Crystal Suite</h1>
             <div class="suite-header__spacer"></div>
-            <span class="badge">Static shell &mdash; not wired to core</span>
+            <span class="badge" id="cr-session-badge">Connecting&hellip;</span>
         </header>
 
         <div class="suite-body suite-body--split">
@@ -41,9 +52,10 @@
 
                         <!-- Tab 1 -->
                         <section class="tab-panel">
-                            <button type="button" class="btn btn--block" disabled>&#128194; Load CIF File</button>
-                            <p class="status-line">No file loaded</p>
-                            <p class="hint"><em>Space Group: N/A</em></p>
+                            <input type="file" id="cr-file" accept=".cif" hidden>
+                            <button type="button" class="btn btn--block" id="cr-load">&#128194; Load CIF File</button>
+                            <p class="status-line" id="cr-status">No file loaded</p>
+                            <p class="hint"><em id="cr-spacegroup">Space Group: N/A</em></p>
 
                             <div class="form-row form-row--stacked">
                                 <label for="cr-backend">Graphics Backend:</label>
@@ -62,9 +74,9 @@
                                 <div class="form-row">
                                     <label>Supercell (X,Y,Z):</label>
                                     <div class="inline">
-                                        <input class="field field--num" type="number" min="1" max="20" step="1" value="1">
-                                        <input class="field field--num" type="number" min="1" max="20" step="1" value="1">
-                                        <input class="field field--num" type="number" min="1" max="20" step="1" value="1">
+                                        <input class="field field--num" id="cr-nx" type="number" min="1" max="20" step="1" value="1">
+                                        <input class="field field--num" id="cr-ny" type="number" min="1" max="20" step="1" value="1">
+                                        <input class="field field--num" id="cr-nz" type="number" min="1" max="20" step="1" value="1">
                                     </div>
                                 </div>
                                 <div class="form-row">
@@ -339,15 +351,16 @@
             <section class="panel">
                 <div class="panel__header">
                     <h2 class="panel__title">3D Viewport</h2>
-                    <span class="badge">PyVista / Matplotlib</span>
+                    <span class="badge" id="cr-legend">three.js (WebGL)</span>
                 </div>
                 <div class="panel__body" style="padding:12px">
-                    <div class="canvas">
-                        <div class="canvas__glyph" aria-hidden="true">&#9672;</div>
-                        <p class="canvas__title">3D Render Canvas</p>
-                        <p class="canvas__meta">Atoms, bonds, polyhedra, unit-cell boxes, cut planes, and the
-                            Brillouin zone render here. Interactive rotation and the eraser brush act on this
-                            surface.</p>
+                    <div class="viewport" id="cr-viewport">
+                        <div class="canvas" id="cr-placeholder">
+                            <div class="canvas__glyph" aria-hidden="true">&#9672;</div>
+                            <p class="canvas__title">3D Render Canvas</p>
+                            <p class="canvas__meta">Load a CIF file to render atoms, bonds, and the unit cell.
+                                Drag to rotate, scroll to zoom, right-drag to pan.</p>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -356,8 +369,8 @@
 
         <footer class="statusbar">
             <div class="statusbar__group">
-                <span>Static shell &mdash; Phase 2</span>
-                <span>Rendering not connected</span>
+                <span id="cr-stat-atoms">0 atoms</span>
+                <span id="cr-stat-bonds">0 bonds</span>
             </div>
             <div class="statusbar__group">
                 <span>Crystal Suite</span>
@@ -365,6 +378,9 @@
         </footer>
 
     </div>
+
+    <script src="../../static/js/api.js"></script>
+    <script type="module" src="../../static/js/crystal_suite.js"></script>
 </body>
 
 </html>
