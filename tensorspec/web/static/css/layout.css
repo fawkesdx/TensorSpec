@@ -1,0 +1,239 @@
+/* TensorSpec - application shell layout.
+   Mirrors the Qt main browser: menubar, suite ribbon, workspace tree,
+   floating-window registry, and metadata inspector. */
+
+.app {
+    display: grid;
+    grid-template-rows: auto auto 1fr auto;
+    height: 100vh;
+}
+
+/* --- Menu bar --- */
+
+.menubar {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-4);
+    padding: 0 var(--sp-3);
+    height: 34px;
+    background: var(--bg-panel-alt);
+    border-bottom: 1px solid var(--border);
+}
+
+.menubar__brand {
+    font-size: var(--fs-md);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.menubar__brand span {
+    color: var(--accent);
+}
+
+.menubar__menu {
+    display: flex;
+    gap: var(--sp-1);
+}
+
+/* --- Suite launcher ribbon --- */
+
+.ribbon {
+    display: flex;
+    align-items: stretch;
+    gap: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+}
+
+.ribbon__label {
+    display: flex;
+    align-items: center;
+    padding-right: var(--sp-3);
+    margin-right: var(--sp-1);
+    border-right: 1px solid var(--border);
+    font-size: var(--fs-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+    white-space: nowrap;
+}
+
+.suite-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-1);
+    min-width: 92px;
+    padding: var(--sp-2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: var(--fs-sm);
+    text-align: center;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+a.suite-btn {
+    text-decoration: none;
+}
+
+.suite-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--border-strong);
+}
+
+.suite-btn:disabled {
+    color: var(--text-dim);
+    cursor: not-allowed;
+}
+
+.suite-btn__glyph {
+    font-size: 18px;
+    line-height: 1;
+}
+
+.suite-btn__name {
+    line-height: 1.2;
+}
+
+/* --- Workspace: sidebar + inspector --- */
+
+.workspace {
+    display: grid;
+    grid-template-columns: minmax(320px, 38%) 1fr;
+    gap: var(--sp-3);
+    padding: var(--sp-3);
+    min-height: 0;
+}
+
+.sidebar {
+    display: grid;
+    grid-template-rows: 1fr auto;
+    gap: var(--sp-3);
+    min-height: 0;
+}
+
+/* --- Workspace variable tree --- */
+
+.tree {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-sm);
+}
+
+.tree thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--bg-panel-alt);
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.tree tbody td {
+    padding: var(--sp-2) var(--sp-3);
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+}
+
+.tree tbody tr:hover {
+    background: var(--bg-hover);
+}
+
+.tree tbody tr[aria-selected="true"] {
+    background: var(--bg-selected);
+}
+
+.tree__name {
+    font-family: var(--font-mono);
+    color: var(--text);
+    white-space: nowrap;
+}
+
+.tree__type {
+    color: var(--text-muted);
+}
+
+.tree__dims {
+    font-family: var(--font-mono);
+    font-size: var(--fs-xs);
+    color: var(--text-dim);
+}
+
+/* --- Floating window registry --- */
+
+.window-registry {
+    max-height: 180px;
+}
+
+.window-registry__list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.window-registry__list li {
+    padding: var(--sp-2) var(--sp-3);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+}
+
+/* --- Inspector --- */
+
+.inspector__footer {
+    flex: 0 0 auto;
+    padding: var(--sp-3);
+    border-top: 1px solid var(--border);
+    background: var(--bg-panel-alt);
+}
+
+.inspector__note {
+    margin: var(--sp-2) 0 0;
+    color: var(--text-dim);
+    font-size: var(--fs-xs);
+    text-align: center;
+}
+
+/* --- Status bar --- */
+
+.statusbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-3);
+    padding: 0 var(--sp-3);
+    height: 26px;
+    background: var(--bg-panel-alt);
+    border-top: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: var(--fs-xs);
+}
+
+.statusbar__group {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+}
+
+/* --- Narrow viewports --- */
+
+@media (max-width: 900px) {
+    .workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr 1fr;
+    }
+}

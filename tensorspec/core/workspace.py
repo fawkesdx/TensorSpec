@@ -8,13 +8,18 @@ from tensorspec.core.data_models import TensorData
 from tensorspec.core.data_tree import DataTreeBuilder
 
 class WorkspaceManager:
-    def __init__(self):
+    def __init__(self, project_dir=None):
         # The primary dictionary holding all datasets (CIFs, DataTrees, etc.)
         self._data = {}
         
-        # Set up a default root directory for the project to prevent saving errors
-        self.project_dir = Path.cwd() / "TensorSpec_Workspace"
+        # Set up a root directory for the project to prevent saving errors.
+        # Served sessions pass their own directory so users never share files.
+        self.project_dir = Path(project_dir) if project_dir else Path.cwd() / "TensorSpec_Workspace"
         self.project_dir.mkdir(parents=True, exist_ok=True)
+
+    def list_items(self):
+        """Returns {name: type} for every object currently held in memory."""
+        return {name: item.get('type', 'Unknown') for name, item in self._data.items()}
 
     def push_crystal_structure(self, name, basis_vectors):
         """
@@ -128,7 +133,7 @@ class WorkspaceManager:
         }
         print(f"DataTree '{name}' successfully pushed to Global Workspace.")
 
-    def pull_tensor_data(self, name: str, node: str = "/raw") -> TensorData:
+    def pull_tensor_data(self, name: str, node: str = "raw") -> TensorData:
         """
         Extracts a specific node from a stored DataTree and packages it back 
         into a TensorData object for the DataViewerPanel to consume.
@@ -138,6 +143,8 @@ class WorkspaceManager:
             return None
             
         tree = item['tree']
+        # DataTree matches bare child names, so accept "raw", "/raw", or "/raw/".
+        node = node.strip("/")
         if node not in tree:
             print(f"Error: Node '{node}' does not exist in dataset '{name}'.")
             return None

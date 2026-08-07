@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TensorSpec - ARPES Suite</title>
+    <link rel="stylesheet" href="../../static/css/base.css">
+    <link rel="stylesheet" href="../../static/css/layout.css">
+    <link rel="stylesheet" href="../../static/css/suite.css">
+</head>
+
+<body>
+    <div class="suite">
+
+        <header class="suite-header">
+            <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
+            <h1 class="suite-header__title">ARPES Suite</h1>
+            <div class="suite-header__spacer"></div>
+            <span class="badge">Static shell &mdash; not wired to core</span>
+        </header>
+
+        <div class="tabs">
+            <input class="tab-radio" type="radio" name="arpes-tabs" id="t1" checked>
+            <input class="tab-radio" type="radio" name="arpes-tabs" id="t2">
+
+            <nav class="tab-bar">
+                <label for="t1">Matrix Element Simulator</label>
+                <label for="t2">Data Viewer</label>
+            </nav>
+
+            <div class="tab-body">
+
+                <!-- Tab 1: Matrix Element Simulator -->
+                <section class="tab-panel" style="padding:0">
+                    <div class="suite-body suite-body--triple" style="min-height:78vh">
+
+                        <!-- Controls -->
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Simulation Parameters</h2>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+
+                                <fieldset class="fieldset">
+                                    <legend>0. Crystal Structure &amp; Bands (Workspace)</legend>
+                                    <div class="inline">
+                                        <select class="field">
+                                            <option>No band structures available</option>
+                                        </select>
+                                        <button type="button" class="btn" disabled>&#128260; Refresh</button>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>1. Simulation Engine Selector</legend>
+                                    <div class="form-row">
+                                        <label for="ar-model">Physics Model:</label>
+                                        <select class="field" id="ar-model">
+                                            <option>Option B1: One-Step Model (Chinook TB)</option>
+                                            <option>Option B2: Bare Spectral Function (ME Off)</option>
+                                            <option>Option B3: Full Multiple Scattering (SPR-KKR)</option>
+                                            <option>Option A: Phenomenological Three-Step Model</option>
+                                        </select>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>2. Final State &amp; Thermodynamics</legend>
+                                    <div class="form-row">
+                                        <label for="ar-hv">Photon (hv):</label>
+                                        <input class="field" id="ar-hv" type="number" min="5" max="2000" step="1" value="90.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-phi">Work Func (&#934;):</label>
+                                        <input class="field" id="ar-phi" type="number" min="0" max="10" step="1" value="4.5">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-v0">Inner Pot (V0):</label>
+                                        <input class="field" id="ar-v0" type="number" min="0" max="30" step="1" value="15.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-temp">Temperature:</label>
+                                        <input class="field" id="ar-temp" type="number" min="0.1" max="1000" step="1" value="10.0">
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>3. Beam &amp; Manipulator Geometry</legend>
+                                    <div class="form-row">
+                                        <label for="ar-theta">Manipulator &#920; (Lab Z):</label>
+                                        <input class="field" id="ar-theta" type="number" min="-180" max="180" step="1" value="0.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-azi">Manipulator Azimuth:</label>
+                                        <input class="field" id="ar-azi" type="number" min="-180" max="180" step="1" value="0.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-tilt">Manipulator Tilt:</label>
+                                        <input class="field" id="ar-tilt" type="number" min="-90" max="90" step="1" value="0.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label>Cleavage Plane [h k l]:</label>
+                                        <div class="inline">
+                                            <input class="field field--num" type="number" min="-10" max="10" value="0">
+                                            <input class="field field--num" type="number" min="-10" max="10" value="0">
+                                            <input class="field field--num" type="number" min="-10" max="10" value="1">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-inc">Beam Incidence (Lab):</label>
+                                        <input class="field" id="ar-inc" type="number" min="0" max="90" step="1" value="55.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-pol">Polarization:</label>
+                                        <select class="field" id="ar-pol">
+                                            <option>Linear Horizontal (p-pol)</option>
+                                            <option>Linear Vertical (s-pol)</option>
+                                            <option>Linear Arbitrary</option>
+                                            <option>Circular Right (CR)</option>
+                                            <option>Circular Left (CL)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-polang">Pol. Angle (Arbitrary):</label>
+                                        <input class="field" id="ar-polang" type="number" min="0" max="360" step="1" value="45.0">
+                                    </div>
+                                    <p class="hint">Pol. Angle is shown only for the Linear Arbitrary polarization.</p>
+                                    <div class="form-row">
+                                        <label for="ar-int">Intensity Mode:</label>
+                                        <select class="field" id="ar-int">
+                                            <option>Full Matrix Elements</option>
+                                            <option>Polarization Dipole Only</option>
+                                            <option>Bare Spectral Function (ME Off)</option>
+                                        </select>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>4. Analyzer Domain &amp; Resolution</legend>
+                                    <div class="form-row">
+                                        <label for="ar-slitsize">Analyzer Slit Size:</label>
+                                        <input class="field" id="ar-slitsize" type="number" min="0.1" max="5" step="0.1" value="0.5">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-slitang">Analyzer Slit Angle:</label>
+                                        <input class="field" id="ar-slitang" type="number" min="-180" max="180" step="1" value="0.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-defl">Deflector Angle:</label>
+                                        <input class="field" id="ar-defl" type="number" min="-15" max="15" step="1" value="0.0">
+                                    </div>
+
+                                    <h3 class="section-heading">Domain</h3>
+                                    <div class="form-row form-row--stacked">
+                                        <label>kx (Slit):</label>
+                                        <div class="inline">
+                                            <label>Min:</label>
+                                            <input class="field field--num" type="number" min="-10" max="10" step="0.1" value="-2.0">
+                                            <label>Max:</label>
+                                            <input class="field field--num" type="number" min="-10" max="10" step="0.1" value="2.0">
+                                            <label>Pts:</label>
+                                            <input class="field field--num" type="number" min="10" max="1000" step="10" value="40">
+                                        </div>
+                                    </div>
+                                    <div class="form-row form-row--stacked">
+                                        <label>ky (Deflect):</label>
+                                        <div class="inline">
+                                            <label>Min:</label>
+                                            <input class="field field--num" type="number" min="-10" max="10" step="0.1" value="-2.0">
+                                            <label>Max:</label>
+                                            <input class="field field--num" type="number" min="-10" max="10" step="0.1" value="2.0">
+                                            <label>Pts:</label>
+                                            <input class="field field--num" type="number" min="10" max="1000" step="10" value="40">
+                                        </div>
+                                    </div>
+                                    <div class="form-row form-row--stacked">
+                                        <label>E:</label>
+                                        <div class="inline">
+                                            <label>Min:</label>
+                                            <input class="field field--num" type="number" min="-10" max="10" step="0.1" value="-2.0">
+                                            <label>Max:</label>
+                                            <input class="field field--num" type="number" min="-10" max="10" step="0.1" value="0.5">
+                                            <label>Pts:</label>
+                                            <input class="field field--num" type="number" min="10" max="1000" step="10" value="40">
+                                        </div>
+                                    </div>
+
+                                    <h3 class="section-heading">Resolution</h3>
+                                    <div class="form-row">
+                                        <label for="ar-se">Peak Linewidth (SE):</label>
+                                        <input class="field" id="ar-se" type="number" min="0.001" max="1" step="0.01" value="0.010">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-de">Energy Resolution (dE):</label>
+                                        <input class="field" id="ar-de" type="number" min="0.001" max="1" step="0.01" value="0.020">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-dk">Momentum Resolution (dk):</label>
+                                        <input class="field" id="ar-dk" type="number" min="0.001" max="1" step="0.01" value="0.020">
+                                    </div>
+                                </fieldset>
+
+                                <button type="button" class="btn btn--primary" disabled>&#128640; Run ARPES Simulation</button>
+                                <button type="button" class="btn btn--block" disabled>&#128202; Push to Workspace</button>
+                                <button type="button" class="btn btn--block" disabled>&#128190; Save to Disk (.npz)</button>
+                            </div>
+                        </section>
+
+                        <!-- Geometry schematic -->
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Experimental Geometry Schematic</h2>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="canvas">
+                                    <div class="canvas__glyph" aria-hidden="true">&#9683;</div>
+                                    <p class="canvas__title">3D Schematic Canvas</p>
+                                    <p class="canvas__meta">Lab X (Side), Lab Y (Forward), Lab Z (Vertical) with sample
+                                        axes, incident light and E-field, detector plane, analyzer slit, and deflector
+                                        cut.</p>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Intensity plot -->
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Simulated ARPES Intensity</h2>
+                            </div>
+                            <div class="panel__body" style="padding:12px; display:flex; flex-direction:column; gap:12px">
+                                <div class="canvas" style="flex:1 1 auto; min-height:220px">
+                                    <div class="canvas__glyph" aria-hidden="true">&#9635;</div>
+                                    <p class="canvas__title">2D Intensity Canvas</p>
+                                    <p class="canvas__meta">Band dispersion cuts and constant-energy contours, with the
+                                        projected surface BZ overlay when enabled.</p>
+                                </div>
+                                <div>
+                                    <div class="form-row">
+                                        <label for="ar-be">Binding Energy (eV):</label>
+                                        <input class="field" id="ar-be" type="number" step="0.01" value="0.000" disabled>
+                                    </div>
+                                    <input type="range" min="0" max="100" value="50" disabled style="margin-bottom:8px">
+                                    <div class="inline" style="margin-bottom:8px">
+                                        <label>Min:</label>
+                                        <input class="field field--num" type="number" min="0" max="1" step="0.05" value="0.00">
+                                        <label>Max:</label>
+                                        <input class="field field--num" type="number" min="0" max="1" step="0.05" value="1.00">
+                                        <label>&#947; (Gamma):</label>
+                                        <input class="field field--num" type="number" min="0.1" max="5" step="0.1" value="1.0">
+                                    </div>
+                                    <label class="check"><input type="checkbox"> Overlay Surface BZ</label>
+                                </div>
+                            </div>
+                        </section>
+
+                    </div>
+                </section>
+
+                <!-- Tab 2: Data Viewer -->
+                <section class="tab-panel" style="padding:0">
+                    <div class="suite-body suite-body--split" style="min-height:78vh">
+
+                        <!-- Fetcher sidebar -->
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">ARPES Workspace Memory</h2>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <button type="button" class="btn btn--primary" disabled>&#128194; Load ARPES Data...</button>
+                                <h3 class="section-heading">ARPES Workspace Memory:</h3>
+                                <ul class="window-registry__list">
+                                    <li class="empty-state">No datasets in workspace</li>
+                                </ul>
+                                <button type="button" class="btn btn--block" disabled style="margin-top:12px">&#128260; Refresh List</button>
+                                <p class="hint">Double-clicking a dataset loads it into the dashboard on the right.</p>
+                            </div>
+                        </section>
+
+                        <!-- Viewer dashboard -->
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Dynamic Cross-Correlated Dashboard</h2>
+                                <span class="badge">1 panel</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+
+                                <div class="inline" style="margin-bottom:8px">
+                                    <label>X:</label>
+                                    <select class="field" style="width:auto">
+                                        <option>kx (Slit) (1/A)</option>
+                                    </select>
+                                    <label>Y:</label>
+                                    <select class="field" style="width:auto">
+                                        <option>Energy (eV)</option>
+                                    </select>
+                                    <label class="check" style="margin:0"><input type="checkbox"> XY Profiles</label>
+                                    <select class="field" style="width:auto">
+                                        <option>Raw (Sum)</option>
+                                        <option>Mean</option>
+                                        <option>Normalized to Max</option>
+                                    </select>
+                                    <button type="button" class="btn" disabled>&#128065; Toggle UI</button>
+                                    <button type="button" class="btn" disabled>&#10005;</button>
+                                    <label class="check" style="margin:0"
+                                        title="Lock crosshairs across all open windows with matching axes."><input
+                                            type="checkbox"> &#128279; Sync</label>
+                                </div>
+
+                                <div class="inline" style="margin-bottom:12px">
+                                    <label>&#916;X:</label>
+                                    <input class="field field--num" type="number" min="0" max="100" value="0">
+                                    <input type="range" min="0" max="100" value="0" style="width:50px">
+                                    <label>&#916;Y:</label>
+                                    <input class="field field--num" type="number" min="0" max="100" value="0">
+                                    <input type="range" min="0" max="100" value="0" style="width:50px">
+                                    <span style="color:var(--text-dim)">|</span>
+                                    <label class="check" style="margin:0"><input type="checkbox"> Extract Orthogonal:</label>
+                                    <select class="field" style="width:auto" disabled>
+                                        <option>ky (Deflection) (1/A)</option>
+                                    </select>
+                                </div>
+
+                                <div class="viewer-grid">
+                                    <div class="canvas">
+                                        <div class="canvas__glyph" aria-hidden="true">&#9635;</div>
+                                        <p class="canvas__title">Main Slice</p>
+                                        <p class="canvas__meta">2D colormap with cyan crosshair and &#916;X/&#916;Y
+                                            integration window.</p>
+                                    </div>
+                                    <div class="canvas">
+                                        <p class="canvas__meta">Y profile</p>
+                                    </div>
+                                    <div class="canvas">
+                                        <p class="canvas__meta">X profile</p>
+                                    </div>
+                                    <div class="canvas">
+                                        <p class="canvas__meta">Ortho</p>
+                                    </div>
+                                </div>
+
+                                <h3 class="section-heading">Dimension Sliders</h3>
+                                <div class="form-row">
+                                    <label>Energy:</label>
+                                    <div class="inline" style="flex:1">
+                                        <input class="field field--num" type="number" step="0.001" value="0.000">
+                                        <input type="range" min="0" max="100" value="50" style="flex:1">
+                                    </div>
+                                </div>
+                                <p class="hint">One row is generated per tensor dimension not assigned to X or Y.
+                                    Right-click a panel for snap, de-snap, and reattach actions (Phase 3).</p>
+
+                            </div>
+                        </section>
+
+                    </div>
+                </section>
+
+            </div>
+        </div>
+
+        <footer class="statusbar">
+            <div class="statusbar__group">
+                <span>Static shell &mdash; Phase 2</span>
+                <span>Physics router not connected</span>
+            </div>
+            <div class="statusbar__group">
+                <span>ARPES Suite</span>
+            </div>
+        </footer>
+
+    </div>
+</body>
+
+</html>

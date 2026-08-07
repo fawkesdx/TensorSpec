@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TensorSpec - PEEM Suite</title>
+    <link rel="stylesheet" href="../../static/css/base.css">
+    <link rel="stylesheet" href="../../static/css/layout.css">
+    <link rel="stylesheet" href="../../static/css/suite.css">
+</head>
+
+<body>
+    <div class="suite">
+
+        <header class="suite-header">
+            <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
+            <h1 class="suite-header__title">PEEM Suite</h1>
+            <div class="suite-header__spacer"></div>
+            <span class="badge">Planned &mdash; no engine yet</span>
+        </header>
+
+        <div class="suite-body suite-body--split">
+
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">Stack Processing</h2>
+                </div>
+                <div class="panel__body" style="padding:12px">
+
+                    <p class="hint">This suite has no Python engine yet. The controls below trace the workflow recorded
+                        in <code>roadmap.md</code> so the layout is settled before <code>core/peem_engine.py</code> is
+                        written.</p>
+
+                    <fieldset class="fieldset">
+                        <legend>1. Load</legend>
+                        <button type="button" class="btn btn--block" disabled>&#128194; Load TIF Stack</button>
+                        <button type="button" class="btn btn--block" disabled>&#128193; Load Folder Sequence</button>
+                        <p class="status-line">No stack loaded</p>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>2. Contrast Pairing</legend>
+                        <div class="form-row">
+                            <label for="peem-mode">Pair Mode:</label>
+                            <select class="field" id="peem-mode">
+                                <option>Auto-detect from filenames</option>
+                                <option>CP / CM (circular)</option>
+                                <option>LH / LV (linear)</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn btn--block" disabled>&#129521; Stack Pairs Together</button>
+                        <button type="button" class="btn btn--block" disabled>&#9878; Separate Pairs</button>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>3. Drift Correction</legend>
+                        <div class="form-row">
+                            <label for="peem-algo">Algorithm:</label>
+                            <select class="field" id="peem-algo">
+                                <option>Cross-correlation</option>
+                                <option>Phase correlation</option>
+                                <option>Manual offset</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label for="peem-ref">Reference Frame:</label>
+                            <input class="field" id="peem-ref" type="number" min="0" value="0">
+                        </div>
+                        <div class="form-row">
+                            <label for="peem-search">Search Radius (px):</label>
+                            <input class="field" id="peem-search" type="number" min="1" max="200" value="20">
+                        </div>
+                        <button type="button" class="btn btn--block" disabled>&#127919; Apply Drift Correction</button>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>4. Background &amp; Analysis</legend>
+                        <label class="check"><input type="checkbox" checked> Apply background subtraction to all frames</label>
+                        <button type="button" class="btn btn--block" disabled>&#9660; Subtract Background</button>
+                        <button type="button" class="btn btn--block" disabled>&#931; Run Sum Rule Analysis (CP/CM)</button>
+                        <p class="hint">Sum rule analysis requires a paired CP/CM stack.</p>
+                    </fieldset>
+
+                    <button type="button" class="btn btn--primary" disabled>&#128229; Push Stack to Workspace</button>
+
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">Image Stack Viewer</h2>
+                </div>
+                <div class="panel__body" style="padding:12px; display:flex; flex-direction:column; gap:12px">
+                    <div class="canvas" style="flex:1 1 auto">
+                        <div class="canvas__glyph" aria-hidden="true">&#9635;</div>
+                        <p class="canvas__title">PEEM Image Canvas</p>
+                        <p class="canvas__meta">Frame viewer with (x, y, z, Time) navigation, drift overlay, and
+                            asymmetry maps.</p>
+                    </div>
+                    <div>
+                        <h3 class="section-heading">Planned capabilities (roadmap)</h3>
+                        <ul class="planned">
+                            <li>Loader for TIF file stacks</li>
+                            <li>Loader for sequences of TIF files from a folder</li>
+                            <li>Stack CP/CM or LH/LV together depending on the files</li>
+                            <li>Drift correction options once stacked</li>
+                            <li>Separate CP/CM or LH/LV after processing</li>
+                            <li>Background subtraction applied to all frames</li>
+                            <li>Sum rule analysis for CP/CM data</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+        <footer class="statusbar">
+            <div class="statusbar__group">
+                <span>Static shell &mdash; Phase 2</span>
+                <span>Engine not implemented</span>
+            </div>
+            <div class="statusbar__group">
+                <span>PEEM Suite</span>
+            </div>
+        </footer>
+
+    </div>
+</body>
+
+</html>
