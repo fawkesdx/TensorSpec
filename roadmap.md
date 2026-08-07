@@ -15,8 +15,13 @@ re-implementation in HTML. Do not treat a checked box as a finished screen.
     - [x] Slice 2b — Crystal Suite Tabs 2-4: CDW modulator, stack & twist, Brillouin zone
           (bulk HKL exfoliator deferred; core exists, Qt path only for now)
     - [x] Slice 3a — ARPES viewer: server-side slicing, crosshair, EDC/MDC/orthogonal curves
-    - [ ] Slice 3b — ARPES viewer extras: multi-panel snap grid, cross-dataset crosshair sync,
+    - [x] Slice 3b — ARPES viewer extras: multi-panel snap grid, cross-dataset crosshair sync,
           profile export (CSV/PDF), and the matrix-element simulator tab
+          - [x] Multi-panel viewer with Qt-style spawn Up/Down/Left/Right + detach/reattach
+          - [x] Cross-dataset crosshair sync by matching axis labels (same-page panels)
+          - [x] Profile CSV export (includes orthogonal curve when enabled)
+          - [x] Profile PDF/SVG via server matplotlib; client PNG composite of canvases
+          - [x] Matrix-element simulator: Option A + B1 via job queue (crystal → 2D TB mesh)
     - [x] Slice 4a — DFT Suite: tight-binding band structures solved server-side and plotted
     - [x] Slice 4b — QE pipeline: input generation, downloadable HPC bundle, job queue,
           live log stream. Commands are argv lists from a server allowlist; the browser

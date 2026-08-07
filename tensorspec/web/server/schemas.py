@@ -325,3 +325,75 @@ class MoireResult(BaseModel):
     n_cells: int | None = None
     matrix: list[list[float]] | None = None
     envelope: list[list[float]] | None = None
+
+
+class AxisBound(BaseModel):
+    min: float = Field(default=-2.0, ge=-20, le=20)
+    max: float = Field(default=2.0, ge=-20, le=20)
+    steps: int = Field(default=40, ge=1, le=80)
+
+
+class ArpesSimRequest(BaseModel):
+    """Option A / B1 matrix-element simulation parameters.
+
+    Bounds keep shared-server sims finite. The crystal must already live in the
+    caller's session workspace; bands are rebuilt as a 2D mesh inside the job.
+    """
+
+    crystal_name: str = Field(min_length=1, max_length=64)
+    model: Literal["A", "B1"] = "A"
+    store_as: str = Field(default="simulated_arpes", min_length=1, max_length=64)
+
+    photon_energy: float = Field(default=90.0, ge=5, le=2000)
+    work_function: float = Field(default=4.5, ge=0, le=10)
+    inner_potential: float = Field(default=15.0, ge=0, le=30)
+    temperature: float = Field(default=10.0, ge=0.1, le=1000)
+    incidence_angle: float = Field(default=55.0, ge=0, le=90)
+    polarization: str = Field(default="Linear Horizontal (p-pol)", max_length=64)
+    lin_pol_angle: float = Field(default=45.0, ge=0, le=360)
+    matrix_element_mode: str = Field(default="Full Matrix Elements", max_length=64)
+
+    manip_theta: float = Field(default=0.0, ge=-180, le=180)
+    manip_azimuth: float = Field(default=0.0, ge=-180, le=180)
+    manip_tilt: float = Field(default=0.0, ge=-90, le=90)
+    h: int = Field(default=0, ge=-10, le=10)
+    k: int = Field(default=0, ge=-10, le=10)
+    l: int = Field(default=1, ge=-10, le=10)
+    slit_angle: float = Field(default=0.0, ge=-180, le=180)
+
+    kx: AxisBound = Field(default_factory=AxisBound)
+    ky: AxisBound = Field(default_factory=AxisBound)
+    energy: AxisBound = Field(default_factory=lambda: AxisBound(min=-2.0, max=0.5, steps=40))
+
+    se_width: float = Field(default=0.010, ge=0.001, le=1)
+    res_E: float = Field(default=0.020, ge=0.001, le=1)
+    res_k: float = Field(default=0.020, ge=0.001, le=1)
+
+    # TB mesh used to feed Option A (and to build the B1 model).
+    mesh_resolution: int = Field(default=20, ge=4, le=40)
+    hoppings: list[float] = Field(default=[2.7, 0.0, 0.0, -0.3], max_length=8)
+    cutoffs: list[float] = Field(default=[1.6, 2.6, 3.1, 4.5], max_length=8)
+    onsite_e: float = Field(default=0.0, ge=-10, le=10)
+    tb_mode: Literal["Simple Scalar (Isotropic)", "Slater-Koster (Rigorous)"] = (
+        "Simple Scalar (Isotropic)"
+    )
+
+
+class ArpesSimPushRequest(BaseModel):
+    name: str = Field(default="", max_length=64)
+
+
+class FigureExportRequest(BaseModel):
+    """Server-side matplotlib PDF/SVG of the current slice + profiles."""
+
+    x_idx: int = Field(ge=0, le=16)
+    y_idx: int = Field(ge=0, le=16)
+    fixed: dict[int, int] = Field(default_factory=dict)
+    x_center: int = Field(default=0, ge=0, le=4096)
+    y_center: int = Field(default=0, ge=0, le=4096)
+    dx: int = Field(default=0, ge=0, le=1024)
+    dy: int = Field(default=0, ge=0, le=1024)
+    mode: Literal["sum", "mean", "normalized"] = "sum"
+    include_profiles: bool = True
+    fmt: Literal["pdf", "svg"] = "pdf"
+    title: str = Field(default="", max_length=120)
