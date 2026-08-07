@@ -1,26 +1,39 @@
-"""DFT endpoints: tight-binding band structures from session crystals.
+"""DFT endpoints: tight-binding bands and the Quantum ESPRESSO pipeline.
 
-Delegates to `core.dft.band_service`; no physics lives here. Quantum ESPRESSO
-execution is deliberately absent from this module -- it belongs behind a job
-queue with a solver allowlist, not on a synchronous request.
+Band structures still run synchronously. QE runs go through the job queue:
+inputs are generated into the session workspace, commands are built from the
+server allowlist, and stdout is streamed over a WebSocket. No user-supplied
+shell text is ever executed.
 """
 from __future__ import annotations
 
+import io
 import time
+import zipfile
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 
 from tensorspec.core.dft import band_service
+from tensorspec.core.dft import qe_pipeline
+from tensorspec.core.dft.qe_pipeline import PipelineParams, SolverPaths
 from tensorspec.core.dft_engine import DFTEngineRouter
-from tensorspec.web.server.schemas import BandRequest, BandResult, StructureOption
-from tensorspec.web.server.session import Session, current_session
+from tensorspec.web.server.config import load_solver_config
+from tensorspec.web.server.jobs import get_job_queue
+from tensorspec.web.server.schemas import (
+    BandRequest,
+    BandResult,
+    JobInfo,
+    QEGenerateResponse,
+    QERequest,
+    SolverStatus,
+    StructureOption,
+)
+from tensorspec.web.server.session import Session, current_session, session_store
 
 router = APIRouter(prefix="/api/dft", tags=["dft"])
 
-# Rough cost of dense diagonalisation: one k-point costs about n_orbitals^3.
-# This budget keeps a synchronous request to a few seconds; heavier runs are
-# what the job queue is for.
 DIAGONALISATION_BUDGET = 5e8
 
 
@@ -48,7 +61,6 @@ def _orbital_count(engine, structure, use_soc: bool) -> int:
 
 
 def _display_label(label: str) -> str:
-    """PyMatgen returns matplotlib mathtext; the browser wants plain text."""
     return (
         label.replace("$\\Gamma$", "\u0393")
         .replace("\\Gamma", "\u0393")
@@ -56,9 +68,82 @@ def _display_label(label: str) -> str:
     )
 
 
+def _solver_status() -> SolverStatus:
+    try:
+        cfg = load_solver_config()
+        cfg.require_exists()
+        return SolverStatus(
+            available=True,
+            pw=str(cfg.pw),
+            wannier90=str(cfg.wannier90),
+            pw2wannier90=str(cfg.pw2wannier90),
+            mpirun=str(cfg.mpirun) if cfg.mpirun else None,
+            pseudo_dir=str(cfg.pseudo_dir),
+            max_mpi_ranks=cfg.max_mpi_ranks,
+        )
+    except Exception as exc:
+        return SolverStatus(
+            available=False,
+            max_mpi_ranks=8,
+            detail=str(exc),
+        )
+
+
+def _params_from_request(request: QERequest, max_mpi_ranks: int) -> PipelineParams:
+    return PipelineParams(
+        ecutwfc=request.ecutwfc,
+        nbnd=request.nbnd,
+        kx=request.kx,
+        ky=request.ky,
+        kz=request.kz,
+        use_soc=request.use_soc,
+        mlwf_mode=request.mlwf_mode,
+        use_mpi=request.use_mpi,
+        mpi_ranks=min(request.mpi_ranks, max_mpi_ranks),
+    )
+
+
+def _prepare_run(
+    session: Session,
+    crystal_name: str,
+    request: QERequest,
+    *,
+    relative_outdir: bool,
+):
+    structure = _require_structure(session, crystal_name)
+    try:
+        cfg = load_solver_config()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    try:
+        run_dir = qe_pipeline.resolve_run_dir(session.workspace.project_dir, request.run_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    params = _params_from_request(request, cfg.max_mpi_ranks)
+    try:
+        files = qe_pipeline.generate_inputs(
+            structure,
+            run_dir,
+            params,
+            pseudo_dir=cfg.pseudo_dir,
+            relative_outdir=relative_outdir,
+        )
+        script = qe_pipeline.write_hpc_script(
+            run_dir, params, max_mpi_ranks=cfg.max_mpi_ranks
+        )
+        files.append(script.name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    return cfg, run_dir, params, files
+
+
 @router.get("/structures", response_model=list[StructureOption])
 def list_structures(session: Session = Depends(current_session)) -> list[StructureOption]:
-    """Crystals in this session that carry atoms, with their hopping shells."""
     options = []
     for name, item in session.workspace._data.items():
         if item.get("type") != "crystal_structure":
@@ -79,6 +164,169 @@ def list_structures(session: Session = Depends(current_session)) -> list[Structu
             default_hoppings=[float(v) for v in shells.values()],
         ))
     return options
+
+
+@router.get("/solvers", response_model=SolverStatus)
+def solver_status() -> SolverStatus:
+    """Whether this server can queue QE jobs, and what the MPI rank cap is."""
+    return _solver_status()
+
+
+@router.post("/{name}/qe/generate", response_model=QEGenerateResponse)
+def generate_qe_inputs(
+    name: str,
+    request: QERequest,
+    session: Session = Depends(current_session),
+) -> QEGenerateResponse:
+    """Write SCF/NSCF/Wannier inputs into the session's qe_runs directory."""
+    cfg, run_dir, params, files = _prepare_run(
+        session, name, request, relative_outdir=False
+    )
+    status = _solver_status()
+    return QEGenerateResponse(
+        run_name=request.run_name,
+        run_dir=str(run_dir.relative_to(session.workspace.project_dir)),
+        files=files,
+        mpi_ranks_capped=params.mpi_ranks,
+        max_mpi_ranks=cfg.max_mpi_ranks,
+        solvers_available=status.available,
+    )
+
+
+@router.post("/{name}/qe/bundle")
+def download_qe_bundle(
+    name: str,
+    request: QERequest,
+    session: Session = Depends(current_session),
+):
+    """
+    Zip the generated inputs for an HPC submission.
+
+    Uses relative ``outdir`` paths and bare solver names in ``run_pipeline.sh``
+    so the archive is portable. The server does not execute that script.
+    """
+    cfg, run_dir, params, files = _prepare_run(
+        session, name, request, relative_outdir=True
+    )
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in run_dir.rglob("*"):
+            if path.is_file():
+                archive.write(path, arcname=str(path.relative_to(run_dir.parent)))
+    buffer.seek(0)
+
+    filename = f"{qe_pipeline.sanitize_run_name(request.run_name)}.zip"
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/{name}/qe/queue", response_model=JobInfo)
+def queue_qe_run(
+    name: str,
+    request: QERequest,
+    session: Session = Depends(current_session),
+) -> JobInfo:
+    """Generate inputs if needed and enqueue the allowlisted pipeline."""
+    cfg, run_dir, params, _files = _prepare_run(
+        session, name, request, relative_outdir=False
+    )
+    try:
+        cfg.require_exists()
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    solvers = SolverPaths(
+        pw=cfg.pw,
+        wannier90=cfg.wannier90,
+        pw2wannier90=cfg.pw2wannier90,
+        mpirun=cfg.mpirun,
+    )
+    commands = qe_pipeline.build_pipeline_commands(
+        solvers, params, max_mpi_ranks=cfg.max_mpi_ranks
+    )
+
+    queue = get_job_queue(cfg.max_global_jobs, cfg.max_jobs_per_session)
+    try:
+        job = queue.submit(
+            session_id=session.session_id,
+            run_name=request.run_name,
+            run_dir=run_dir,
+            commands=commands,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+    return JobInfo(**job.to_dict())
+
+
+@router.get("/jobs/{job_id}", response_model=JobInfo)
+def get_job(job_id: str, session: Session = Depends(current_session)) -> JobInfo:
+    queue = get_job_queue()
+    job = queue.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job.")
+    if job.session_id != session.session_id:
+        raise HTTPException(status_code=403, detail="That job belongs to another session.")
+    return JobInfo(**job.to_dict())
+
+
+@router.post("/jobs/{job_id}/cancel", response_model=JobInfo)
+def cancel_job(job_id: str, session: Session = Depends(current_session)) -> JobInfo:
+    queue = get_job_queue()
+    try:
+        job = queue.cancel(job_id, session.session_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown job.")
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+    return JobInfo(**job.to_dict())
+
+
+@router.websocket("/jobs/{job_id}/logs")
+async def job_logs(websocket: WebSocket, job_id: str):
+    """Stream a job's stdout lines to the browser."""
+    await websocket.accept()
+    cookie = websocket.cookies.get("ts_session")
+    session = session_store.get_or_create(cookie)
+
+    queue = get_job_queue()
+    job = queue.get(job_id)
+    if job is None or job.session_id != session.session_id:
+        await websocket.send_json({"type": "error", "message": "Unknown job."})
+        await websocket.close()
+        return
+
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    outbound: asyncio.Queue[str] = asyncio.Queue()
+
+    def on_line(line: str) -> None:
+        loop.call_soon_threadsafe(outbound.put_nowait, line)
+
+    unsubscribe = job.subscribe(on_line)
+    try:
+        while True:
+            try:
+                line = await asyncio.wait_for(outbound.get(), timeout=0.5)
+                await websocket.send_json({"type": "log", "line": line})
+            except asyncio.TimeoutError:
+                pass
+
+            if job.status.value in ("succeeded", "failed", "cancelled"):
+                # Drain anything still buffered, then send the final status.
+                while not outbound.empty():
+                    await websocket.send_json({"type": "log", "line": outbound.get_nowait()})
+                await websocket.send_json({"type": "status", "job": job.to_dict()})
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        unsubscribe()
 
 
 @router.post("/{name}/bands", response_model=BandResult)
@@ -134,7 +382,6 @@ def compute_bands(
     k_dist = np.asarray(result["k_dist"], dtype=float)
     node_idx = result["node_idx"] or []
 
-    # Store alongside the crystal so other suites can pull the dispersion.
     session.workspace.push_band_structure(
         f"{name}_bands",
         k_dist,
@@ -149,7 +396,6 @@ def compute_bands(
     return BandResult(
         name=f"{name}_bands",
         k_dist=[float(v) for v in k_dist],
-        # Transposed to band-major so the browser draws one polyline per band.
         bands=[[float(v) for v in eigenvalues[:, b]] for b in range(eigenvalues.shape[1])],
         node_positions=[float(k_dist[i]) for i in node_idx],
         node_labels=[_display_label(str(l)) for l in (result["labels"] or [])],

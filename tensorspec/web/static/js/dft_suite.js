@@ -1,8 +1,7 @@
-/* DFT Suite controller: tight-binding band structures.
- *
- * Collects parameters, asks the server to solve, and hands the eigenvalues to
- * the plot. The Quantum ESPRESSO panel stays inert here on purpose: running
- * solvers needs the job queue and the executable allowlist, not a fetch call.
+/* DFT Suite controller: tight-binding bands and the QE pipeline.
+
+ * Band structures are solved synchronously. QE runs are queued: the server
+ * builds argv lists from its allowlist, never from typed executable paths.
  */
 
 import { BandPlot } from "/static/js/viewers/band_plot.js";
@@ -33,6 +32,23 @@ const dom = {
     eMax: el("tb-emax"),
     shells: el("tb-shells"),
 
+    qeCutoff: el("qe-cutoff"),
+    qeSoc: el("qe-soc"),
+    qeNbnd: el("qe-nbnd"),
+    qeWanMode: el("qe-wanmode"),
+    qeKx: el("qe-kx"),
+    qeKy: el("qe-ky"),
+    qeKz: el("qe-kz"),
+    qeRunName: el("qe-runname"),
+    qeMpi: el("qe-mpi"),
+    qeRanks: el("qe-ranks"),
+    qeGenerate: el("qe-generate"),
+    qeBundle: el("qe-bundle"),
+    qeQueue: el("qe-queue"),
+    qeCancel: el("qe-cancel"),
+    qeStatus: el("qe-status"),
+    qeLog: el("qe-log"),
+
     statBands: el("dft-stat-bands"),
     statTime: el("dft-stat-time"),
 };
@@ -47,10 +63,18 @@ const PATH_VALUES = {
 
 let plot = null;
 let structures = [];
+let activeJobId = null;
+let logSocket = null;
+let maxMpiRanks = 8;
 
 function setStatus(message, isError = false) {
     dom.status.textContent = message;
     dom.status.style.color = isError ? "#ff6b6b" : "";
+}
+
+function setQeStatus(message, isError = false) {
+    dom.qeStatus.textContent = message;
+    dom.qeStatus.style.color = isError ? "#ff6b6b" : "";
 }
 
 function ensurePlot() {
@@ -64,7 +88,6 @@ function selected() {
     return structures.find((s) => s.name === dom.structures.value) || null;
 }
 
-/* The four t boxes are anonymous until a material defines its shells. */
 function renderShells() {
     const structure = selected();
     dom.shells.innerHTML = "";
@@ -135,6 +158,21 @@ function readParameters() {
     };
 }
 
+function readQeParameters() {
+    return {
+        run_name: dom.qeRunName.value.trim() || "run_01",
+        ecutwfc: Number(dom.qeCutoff.value) || 60,
+        nbnd: Number(dom.qeNbnd.value) || 12,
+        kx: Number(dom.qeKx.value) || 6,
+        ky: Number(dom.qeKy.value) || 6,
+        kz: Number(dom.qeKz.value) || 6,
+        use_soc: dom.qeSoc.checked,
+        mlwf_mode: dom.qeWanMode.value === "mlwf",
+        use_mpi: dom.qeMpi.checked,
+        mpi_ranks: Number(dom.qeRanks.value) || 4,
+    };
+}
+
 async function calculate() {
     const structure = selected();
     if (!structure) return;
@@ -159,9 +197,146 @@ async function calculate() {
     }
 }
 
+function appendLog(line) {
+    dom.qeLog.hidden = false;
+    dom.qeLog.textContent += `${line}\n`;
+    dom.qeLog.scrollTop = dom.qeLog.scrollHeight;
+}
+
+function closeLogSocket() {
+    if (logSocket) {
+        logSocket.close();
+        logSocket = null;
+    }
+}
+
+function watchJob(jobId) {
+    closeLogSocket();
+    activeJobId = jobId;
+    dom.qeCancel.disabled = false;
+    dom.qeLog.textContent = "";
+    dom.qeLog.hidden = false;
+
+    const protocol = location.protocol === "https:" ? "wss" : "ws";
+    logSocket = new WebSocket(`${protocol}://${location.host}/api/dft/jobs/${encodeURIComponent(jobId)}/logs`);
+    logSocket.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type === "log") appendLog(message.line);
+        if (message.type === "status") {
+            const job = message.job;
+            setQeStatus(`${job.run_name}: ${job.status}` + (job.error ? ` — ${job.error}` : ""));
+            if (["succeeded", "failed", "cancelled"].includes(job.status)) {
+                dom.qeCancel.disabled = true;
+                activeJobId = null;
+            }
+        }
+        if (message.type === "error") setQeStatus(message.message, true);
+    };
+    logSocket.onerror = () => setQeStatus("Log stream disconnected", true);
+}
+
+async function generateInputs() {
+    const structure = selected();
+    if (!structure) {
+        setQeStatus("Select a crystal first.", true);
+        return;
+    }
+    dom.qeGenerate.disabled = true;
+    try {
+        const result = await TensorSpecAPI.qeGenerate(structure.name, readQeParameters());
+        setQeStatus(
+            `Wrote ${result.files.join(", ")} → ${result.run_dir} `
+            + `(MPI ranks capped at ${result.mpi_ranks_capped}/${result.max_mpi_ranks})`
+        );
+    } catch (err) {
+        setQeStatus(err.message, true);
+    } finally {
+        dom.qeGenerate.disabled = false;
+    }
+}
+
+async function downloadBundle() {
+    const structure = selected();
+    if (!structure) {
+        setQeStatus("Select a crystal first.", true);
+        return;
+    }
+    dom.qeBundle.disabled = true;
+    try {
+        const params = readQeParameters();
+        const blob = await TensorSpecAPI.qeBundle(structure.name, params);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${params.run_name}.zip`;
+        link.click();
+        URL.revokeObjectURL(url);
+        setQeStatus(`Downloaded ${params.run_name}.zip for HPC`);
+    } catch (err) {
+        setQeStatus(err.message, true);
+    } finally {
+        dom.qeBundle.disabled = false;
+    }
+}
+
+async function queueRun() {
+    const structure = selected();
+    if (!structure) {
+        setQeStatus("Select a crystal first.", true);
+        return;
+    }
+    dom.qeQueue.disabled = true;
+    try {
+        const job = await TensorSpecAPI.qeQueue(structure.name, readQeParameters());
+        setQeStatus(`Queued ${job.run_name} (${job.job_id})`);
+        watchJob(job.job_id);
+    } catch (err) {
+        setQeStatus(err.message, true);
+    } finally {
+        dom.qeQueue.disabled = false;
+    }
+}
+
+async function cancelRun() {
+    if (!activeJobId) return;
+    try {
+        const job = await TensorSpecAPI.qeCancel(activeJobId);
+        setQeStatus(`${job.run_name}: ${job.status}`);
+    } catch (err) {
+        setQeStatus(err.message, true);
+    }
+}
+
+async function refreshSolvers() {
+    try {
+        const info = await TensorSpecAPI.dftSolvers();
+        maxMpiRanks = info.max_mpi_ranks || 8;
+        dom.qeRanks.max = maxMpiRanks;
+        if (Number(dom.qeRanks.value) > maxMpiRanks) dom.qeRanks.value = maxMpiRanks;
+
+        if (info.available) {
+            setQeStatus(
+                `Solvers ready — max ${maxMpiRanks} MPI ranks`
+                + (info.mpirun ? "" : " (mpirun not found; runs will be serial)")
+            );
+            dom.qeQueue.disabled = false;
+        } else {
+            setQeStatus(`Solvers unavailable: ${info.detail || "check server config"}`, true);
+            dom.qeQueue.disabled = true;
+        }
+    } catch (err) {
+        setQeStatus(err.message, true);
+        dom.qeQueue.disabled = true;
+    }
+}
+
 dom.refresh.addEventListener("click", refreshStructures);
 dom.structures.addEventListener("change", renderShells);
 dom.calculate.addEventListener("click", calculate);
+dom.qeGenerate.addEventListener("click", generateInputs);
+dom.qeBundle.addEventListener("click", downloadBundle);
+dom.qeQueue.addEventListener("click", queueRun);
+dom.qeCancel.addEventListener("click", cancelRun);
 
 dom.soc.addEventListener("change", () => {
     dom.socStrength.disabled = !dom.soc.checked;
@@ -173,7 +348,6 @@ dom.soc.addEventListener("change", () => {
     })
 );
 
-/* Custom coordinate fields only matter for the arbitrary path. */
 function syncPathFields() {
     const isCustom = PATH_VALUES[dom.pathMode.value] === "custom";
     dom.coords.disabled = !isCustom;
@@ -183,3 +357,4 @@ dom.pathMode.addEventListener("change", syncPathFields);
 syncPathFields();
 
 refreshStructures();
+refreshSolvers();
