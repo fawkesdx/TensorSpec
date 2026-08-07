@@ -5,10 +5,28 @@ The front end is migrating from the PySide6 desktop GUI to a browser-based HTML 
 Every `[x]` below marks **core/physics logic that is complete**; its user interface still needs
 re-implementation in HTML. Do not treat a checked box as a finished screen.
 
-- [ ] Phase 1 — Static shell: `web/templates/main_browser.html` (ribbon, workspace tree, inspector) with mock data
-- [ ] Phase 2 — Static suite pages: one HTML shell per suite
-- [ ] Phase 3 — JS interactivity: tree selection, inspector updates, panel launching (client-side only)
-- [ ] Phase 4 — Data bridge: connect HTML to `core/` (transport method TBD)
+- [x] Phase 1 — Static shell: `web/templates/main_browser.html` (ribbon, workspace tree, inspector)
+- [x] Phase 2 — Static suite pages: one HTML shell per suite
+- [ ] Phase 3 — Vertical slices: each slice runs HTML -> FastAPI -> `core/` end to end.
+      Replaces the original "client-side JS only" phase, which would have built every screen
+      twice: once against mock data, then again against the API.
+    - [x] Slice 1 — Session backbone: FastAPI app, per-session workspace, live variable tree
+    - [ ] Slice 2 — Crystal Suite: CIF load, geometry as JSON, three.js viewport
+    - [ ] Slice 3 — ARPES viewer: server-side slicing, linked crosshairs, EDC/MDC panels
+    - [ ] Slice 4 — DFT Suite: band plots, QE job queue, live log stream, command allowlist
+- [ ] Phase 4 — Cross-cutting requirements, delivered across the slices above.
+      Deployment target: shared server on the LBL VPN, multiple simultaneous users.
+    - [x] Web service layer (`tensorspec/web/server/`): thin request router, zero physics
+    - [x] Per-session workspace: each browser session owns its own data and directory;
+          `global_workspace` remains only for the Qt app until Phase 5
+    - [x] Parameter validation: Pydantic schemas mirror the bounds the UI advertises
+    - [ ] Job queue for long calculations (QE runs, ARPES simulations) so requests never block
+    - [ ] Live log streaming to the browser (WebSocket) for the QE pipeline runner
+    - [ ] three.js viewport: Python emits atom positions, bonds, and BZ facets as JSON;
+          the browser renders and rotates them. `crystallography.py` keeps all geometry math
+    - [ ] Server-side slicing/downsampling so 3D and 4D tensors are never shipped whole
+    - [ ] Command hardening: never build shell commands from raw user input;
+          allowlist solver executables and server-control the output directory
 - [ ] Phase 5 — Qt teardown: delete `tensorspec/gui/` and `plotting/viewers/`, drop PySide6 / PyQt6 / pyvistaqt / QtPy / shiboken6 from `requirements.txt`
 
 General Rule for the App

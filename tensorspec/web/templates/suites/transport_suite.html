@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TensorSpec - Transport Suite</title>
+    <link rel="stylesheet" href="../../static/css/base.css">
+    <link rel="stylesheet" href="../../static/css/layout.css">
+    <link rel="stylesheet" href="../../static/css/suite.css">
+</head>
+
+<body>
+    <div class="suite">
+
+        <header class="suite-header">
+            <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
+            <h1 class="suite-header__title">Transport Suite</h1>
+            <div class="suite-header__spacer"></div>
+            <span class="badge">Planned &mdash; no engine yet</span>
+        </header>
+
+        <div class="suite-body suite-body--split">
+
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">Transport Analysis</h2>
+                </div>
+                <div class="panel__body" style="padding:12px">
+
+                    <p class="hint">This suite has no Python engine yet. The controls below reflect the scope recorded
+                        in <code>sandy_rule.md</code> for <code>core/transport_engine.py</code>: magnetoresistance,
+                        Hall curves, and R&ndash;T scaling.</p>
+
+                    <fieldset class="fieldset">
+                        <legend>1. Load</legend>
+                        <button type="button" class="btn btn--block" disabled>&#128194; Load Transport Data...</button>
+                        <h3 class="section-heading">Loaded Curves</h3>
+                        <ul class="window-registry__list">
+                            <li class="empty-state">No curves loaded</li>
+                        </ul>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>2. Measurement Type</legend>
+                        <div class="form-row">
+                            <label for="tr-type">Curve Type:</label>
+                            <select class="field" id="tr-type">
+                                <option>Magnetoresistance R(H)</option>
+                                <option>Hall R_xy(H)</option>
+                                <option>Resistivity R(T)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label for="tr-geom">Geometry:</label>
+                            <select class="field" id="tr-geom">
+                                <option>Hall bar</option>
+                                <option>van der Pauw</option>
+                                <option>Four-point linear</option>
+                            </select>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>3. Sample Dimensions</legend>
+                        <div class="form-row">
+                            <label for="tr-thick">Thickness (nm):</label>
+                            <input class="field" id="tr-thick" type="number" min="0" step="1" value="100">
+                        </div>
+                        <div class="form-row">
+                            <label for="tr-width">Width (&#956;m):</label>
+                            <input class="field" id="tr-width" type="number" min="0" step="1" value="10">
+                        </div>
+                        <div class="form-row">
+                            <label for="tr-len">Length (&#956;m):</label>
+                            <input class="field" id="tr-len" type="number" min="0" step="1" value="50">
+                        </div>
+                        <div class="form-row">
+                            <label for="tr-curr">Current (&#956;A):</label>
+                            <input class="field" id="tr-curr" type="number" min="0" step="0.1" value="10.0">
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>4. Processing</legend>
+                        <label class="check"><input type="checkbox" checked> Symmetrize in field</label>
+                        <label class="check"><input type="checkbox"> Subtract ordinary Hall background</label>
+                        <div class="form-row">
+                            <label for="tr-fit">Fit Model:</label>
+                            <select class="field" id="tr-fit">
+                                <option>Single carrier</option>
+                                <option>Two-band</option>
+                                <option>Power law (R-T scaling)</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn btn--block" disabled>&#128200; Extract Transport Parameters</button>
+                    </fieldset>
+
+                    <button type="button" class="btn btn--primary" disabled>&#128229; Push Results to Workspace</button>
+
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">Transport Curves</h2>
+                </div>
+                <div class="panel__body" style="padding:12px; display:flex; flex-direction:column; gap:12px">
+                    <div class="canvas" style="flex:1 1 auto">
+                        <div class="canvas__glyph" aria-hidden="true">&#9640;</div>
+                        <p class="canvas__title">Curve Canvas</p>
+                        <p class="canvas__meta">Magnetoresistance, Hall, and resistance&ndash;temperature curves with
+                            fitted overlays and extracted carrier parameters.</p>
+                    </div>
+                    <div>
+                        <h3 class="section-heading">Planned capabilities (roadmap)</h3>
+                        <ul class="planned">
+                            <li>Transport curve plotting</li>
+                            <li>Transport parameter extraction</li>
+                            <li>Magneto-transport analysis</li>
+                            <li>Magnetoresistance, Hall curves, R&ndash;T scaling</li>
+                        </ul>
+                        <p class="hint">The Transport Suite is an unexpanded line in <code>roadmap.md</code>. If you
+                            want a detailed checklist there, tell me which items to add.</p>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+        <footer class="statusbar">
+            <div class="statusbar__group">
+                <span>Static shell &mdash; Phase 2</span>
+                <span>Engine not implemented</span>
+            </div>
+            <div class="statusbar__group">
+                <span>Transport Suite</span>
+            </div>
+        </footer>
+
+    </div>
+</body>
+
+</html>

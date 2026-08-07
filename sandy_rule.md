@@ -55,8 +55,20 @@ tensorspec/
 │       ├── __init__.py
 │       ├── matplotlib_engine.py # Static PNG/SVG for 1D lines & 2D maps
 │       └── pyvista_engine.py    # Off-screen 3D render / mesh export
-└── web/
+└── web/                           # Browser UI + FastAPI service. No physics lives here.
     ├── __init__.py
+    ├── server/                    # FastAPI layer: request routing only, zero physics
+    │   ├── __init__.py
+    │   ├── app.py                 # App factory, static mounts, WebSocket setup
+    │   ├── session.py             # Per-session workspace registry (replaces the global singleton)
+    │   ├── jobs.py                # Background job queue for QE / ARPES solvers
+    │   ├── schemas.py             # Pydantic models mirroring the UI parameter bounds
+    │   └── routers/               # One router per suite, mirroring core/ engines
+    │       ├── __init__.py
+    │       ├── workspace.py       # List / push / pull session data
+    │       ├── crystal.py         # CIF load, geometry + BZ facets as JSON
+    │       ├── dft.py             # Band structure, QE pipeline, live log stream
+    │       └── arpes.py           # Simulation router + server-side tensor slicing
     ├── templates/
     │   ├── main_browser.html      # THE BIG UI: Workspace Explorer & Suite Launcher Ribbon
     │   └── suites/                # One HTML shell per roadmap suite
@@ -70,16 +82,18 @@ tensorspec/
     └── static/
         ├── css/
         │   ├── base.css           # Design tokens: color, type, spacing
-        │   └── layout.css         # Ribbon / sidebar / inspector shell
+        │   ├── layout.css         # Ribbon / sidebar / inspector shell
+        │   └── suite.css          # Suite shell: tabs, form controls, canvas frames
         └── js/
+            ├── api.js             # Fetch wrapper for the FastAPI endpoints
             ├── workspace_tree.js  # Renders variable tree + selection events
             ├── inspector.js       # Metadata panel rendering
             ├── suite_launcher.js  # Opens suite panels
             └── viewers/           # Browser replacements for the old Qt viewer widgets
                 ├── viewer_1d.js   # LineViewer: 1D spectra, stack overlays, peak fit plotting
                 ├── viewer_2d.js   # ImageViewer: 2D heatmap, contrast levels, live EDC/MDC crosshairs
-                ├── viewer_3d.js   # VolumeSlicer: 3D cube orthogonal slicer & iso-surface rendering
-                └── viewer_4d.js   # HypercubeViewer: 3D VolumeSlicer + 4th dimension timeline/motor slider
+                ├── viewer_3d.js   # three.js crystal / BZ renderer; geometry arrives as JSON
+                └── viewer_4d.js   # HypercubeViewer: 3D slicer + 4th dimension timeline/motor slider
 
 8. **ARPES Multi-Engine Protocol**: 
    When writing physics solvers under `core/arpes/`, never let solver-specific parameters bleed into the main UI. 
@@ -90,3 +104,10 @@ tensorspec/
    * Static-first: plain HTML + CSS + vanilla JS. No build step, no bundler, no framework until explicitly approved.
    * Panels are HTML partials, never monolithic pages — mirror the modularity of rule 5.
    * The Python `core/` layer must stay UI-agnostic: it returns plain data (JSON-serializable dicts, arrays, file paths), never widgets.
+   * HTML and JS contain zero physics. Every calculation is an API call into `core/`; the browser only sends parameters and renders returned data.
+   * 3D geometry is computed in Python and sent as JSON. three.js draws it; it never derives lattice vectors, bonds, or Brillouin-zone facets on its own.
+
+10. **Multi-User Server Protocol:** The app is served over FastAPI to multiple simultaneous users.
+    * No module-level mutable singletons. Session-scoped state only — one user's workspace must never be visible or writable by another.
+    * Long-running solvers go to a job queue and report progress; never block a request.
+    * Treat every request as untrusted: validate numeric parameters against the same bounds the UI declares, and never interpolate user text into a shell command.
