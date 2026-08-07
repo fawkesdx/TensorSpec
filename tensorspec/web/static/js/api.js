@@ -105,6 +105,13 @@ const TensorSpecAPI = (() => {
             return { header, values };
         },
 
+        dftStructures: () => request("/api/dft/structures"),
+        dftBands: (name, payload) =>
+            request(`/api/dft/${encodeURIComponent(name)}/bands`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+
         tensorProfiles: (name, payload) =>
             request(`/api/arpes/${encodeURIComponent(name)}/profiles`, {
                 method: "POST",
