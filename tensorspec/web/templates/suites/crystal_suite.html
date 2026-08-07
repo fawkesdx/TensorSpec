@@ -193,7 +193,7 @@
 
                         <!-- Tab 2 -->
                         <section class="tab-panel">
-                            <label class="check"><input type="checkbox"> Enable CDW Modulation</label>
+                            <label class="check"><input type="checkbox" id="cdw-enable"> Enable CDW Modulation</label>
 
                             <div class="form-row form-row--stacked">
                                 <label for="cdw-target">Target Element:</label>
@@ -238,78 +238,37 @@
                                 <label for="cdw-phase">Phase Shift &#966; (degrees):</label>
                                 <input class="field" id="cdw-phase" type="number" min="0" max="360" step="15" value="0">
                             </div>
+                            <p class="hint">Changes re-render live. Phase is sent in degrees (fixed relative to the Qt double-conversion bug).</p>
                         </section>
 
                         <!-- Tab 3 -->
                         <section class="tab-panel">
                             <fieldset class="fieldset">
                                 <legend>2D Material Templates</legend>
-                                <button type="button" class="btn btn--block" disabled>&#128194; Load 2D Monolayer CIF</button>
-                                <select class="field" style="margin-bottom:8px">
+                                <select class="field" id="st-template" style="margin-bottom:8px">
                                     <option>Graphene (Monolayer)</option>
                                     <option>Graphene (AB Bilayer)</option>
                                     <option>TaIrTe4 (1T')</option>
                                     <option>MoS2</option>
+                                    <option>WSe2</option>
                                     <option>h-BN</option>
                                 </select>
-                                <button type="button" class="btn btn--block" disabled>&#10133; Add Template Sheet</button>
-                            </fieldset>
-
-                            <fieldset class="fieldset">
-                                <legend>Bulk Exfoliator</legend>
-                                <div class="form-row form-row--stacked">
-                                    <label for="cleave-mode">Cleavage / Cut Engine Mode:</label>
-                                    <select class="field" id="cleave-mode">
-                                        <option>Automatic van der Waals Gap Detection</option>
-                                        <option>Manual [h k l] Miller Index Cleavage</option>
-                                    </select>
-                                </div>
-                                <p class="hint">The rows below appear only in Manual mode.</p>
-                                <div class="form-row">
-                                    <label for="cleave-layers">Layers:</label>
-                                    <input class="field" id="cleave-layers" type="number" min="1" max="10" value="1">
-                                </div>
-                                <div class="form-row">
-                                    <label for="cleave-vac">Vacuum (&#197;):</label>
-                                    <input class="field" id="cleave-vac" type="number" min="0" max="100" step="0.5" value="15.0">
-                                </div>
-                                <div class="form-row">
-                                    <label>Plane [h k l]:</label>
-                                    <div class="inline">
-                                        <input class="field field--num" type="number" min="-10" max="10" value="0">
-                                        <input class="field field--num" type="number" min="-10" max="10" value="0">
-                                        <input class="field field--num" type="number" min="-10" max="10" value="1">
-                                    </div>
-                                </div>
-                                <button type="button" class="btn btn--block" disabled>&#9986; Extract Monolayer from Bulk CIF</button>
+                                <button type="button" class="btn btn--block" id="st-add-template">&#10133; Add Template Sheet</button>
                             </fieldset>
 
                             <h3 class="section-heading">Stacked Layers</h3>
-                            <div class="layer-row">
-                                <span class="layer-row__name">Graphene (Monolayer)</span>
-                                <label>SC:</label>
-                                <input class="field field--num" type="number" min="1" max="100" value="1">
-                                <input class="field field--num" type="number" min="1" max="100" value="1">
-                                <label>z (&#197;):</label>
-                                <input class="field field--num" type="number" min="-100" max="100" step="0.5" value="0.0">
-                                <label>&#952; (&#176;):</label>
-                                <input class="field field--num" type="number" min="-360" max="360" step="1" value="0.0">
-                                <button type="button" class="btn" disabled>&#9650;</button>
-                                <button type="button" class="btn" disabled>&#9660;</button>
-                                <button type="button" class="btn" disabled>&#128190;</button>
-                                <button type="button" class="btn" disabled>X</button>
-                            </div>
-                            <p class="hint">One row is shown as a layout sample; rows are generated per loaded layer.</p>
+                            <div id="st-layers"></div>
+                            <p class="hint">Add templates, set SC / z / &#952;, then render. Moir&#233; needs exactly two layers.</p>
 
-                            <button type="button" class="btn btn--block" disabled>&#129521; Render Heterostructure Stack</button>
-                            <button type="button" class="btn btn--block" disabled>&#127744; Calculate Moir&#233; Superlattice</button>
-                            <p class="status-line">Status: Waiting for stack...</p>
+                            <button type="button" class="btn btn--block" id="st-render">&#129521; Render Heterostructure Stack</button>
+                            <button type="button" class="btn btn--block" id="st-moire">&#127744; Calculate Moir&#233; Superlattice</button>
+                            <p class="status-line" id="st-status">Status: Waiting for stack...</p>
                         </section>
 
                         <!-- Tab 4 -->
                         <section class="tab-panel">
                             <h3 class="section-heading">Reciprocal Space (Wigner-Seitz Cell)</h3>
-                            <label class="check"><input type="checkbox" checked> Overlay Real-Space Crystal Structure</label>
+                            <label class="check"><input type="checkbox" id="bz-overlay" checked> Overlay Real-Space Crystal Structure</label>
                             <div class="form-row">
                                 <label for="bz-scale">BZ Visual Scale:</label>
                                 <input class="field" id="bz-scale" type="number" min="0.1" max="10" step="0.1" value="1.0">
@@ -317,26 +276,27 @@
                             <div class="form-row">
                                 <label for="bz-style">Render Style:</label>
                                 <select class="field" id="bz-style">
-                                    <option>Solid Faces</option>
-                                    <option>Skeleton (Cylinder Frame)</option>
-                                    <option>Both Solid &amp; Skeleton</option>
+                                    <option value="solid">Solid Faces</option>
+                                    <option value="skeleton">Skeleton (Cylinder Frame)</option>
+                                    <option value="both">Both Solid &amp; Skeleton</option>
                                 </select>
                             </div>
 
                             <fieldset class="fieldset">
                                 <legend>Projected Surface BZ</legend>
-                                <label class="check"><input type="checkbox"> Enable Surface Projection</label>
+                                <label class="check"><input type="checkbox" id="bz-surface"> Enable Surface Projection</label>
                                 <div class="form-row">
                                     <label>Plane [h k l]:</label>
                                     <div class="inline">
-                                        <input class="field field--num" type="number" min="-10" max="10" value="0">
-                                        <input class="field field--num" type="number" min="-10" max="10" value="0">
-                                        <input class="field field--num" type="number" min="-10" max="10" value="1">
+                                        <input class="field field--num" id="bz-h" type="number" min="-10" max="10" value="0">
+                                        <input class="field field--num" id="bz-k" type="number" min="-10" max="10" value="0">
+                                        <input class="field field--num" id="bz-l" type="number" min="-10" max="10" value="1">
                                     </div>
                                 </div>
                             </fieldset>
 
-                            <button type="button" class="btn btn--primary" disabled>&#128721; Render Brillouin Zone</button>
+                            <button type="button" class="btn btn--primary" id="bz-render">&#128721; Render Brillouin Zone</button>
+                            <button type="button" class="btn btn--block" id="bz-clear">Clear BZ Overlay</button>
                         </section>
 
                     </div>

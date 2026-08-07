@@ -93,9 +93,153 @@ export class CrystalViewer {
 
     this._drawAtoms(geometry, center);
     if (showBonds) this._drawBonds(geometry, center);
-    if (showCell) this._drawCell(geometry, center);
+    const drawCell = showCell && geometry.show_cell !== false;
+    if (drawCell) this._drawCell(geometry, center);
+
+    if (this._moireEnvelope) this._drawMoire(this._moireEnvelope, center);
+    if (this._bzData) this._drawBZ(this._bzData, center);
 
     if (frame) this.frameToContent();
+  }
+
+  /* Brillouin zone as a separate mesh group from the atom InstancedMeshes. */
+  setBrillouinZone(bz, { frame = true } = {}) {
+    this._bzData = bz;
+    if (!this.geometry) {
+      this.clear();
+      const center = new THREE.Vector3(0, 0, 0);
+      this._drawBZ(bz, center);
+      if (frame) this.frameToContent();
+      return;
+    }
+    this.render(this.geometry, { ...(this._lastOptions || {}), frame });
+  }
+
+  clearBrillouinZone() {
+    this._bzData = null;
+    if (this.geometry) this.render(this.geometry, { ...(this._lastOptions || {}), frame: false });
+  }
+
+  setMoireEnvelope(points, { frame = false } = {}) {
+    this._moireEnvelope = points;
+    if (this.geometry) this.render(this.geometry, { ...(this._lastOptions || {}), frame });
+  }
+
+  clearMoire() {
+    this._moireEnvelope = null;
+    if (this.geometry) this.render(this.geometry, { ...(this._lastOptions || {}), frame: false });
+  }
+
+  _drawBZ(bz, center) {
+    const style = bz.style || "solid";
+    const points = bz.hull_points.map((p) => new THREE.Vector3(...p).sub(center));
+
+    if (style === "solid" || style === "both") {
+      const positions = [];
+      const indices = [];
+      points.forEach((p) => positions.push(p.x, p.y, p.z));
+      bz.simplices.forEach((tri) => indices.push(...tri));
+
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+
+      const mesh = new THREE.Mesh(
+        geometry,
+        new THREE.MeshStandardMaterial({
+          color: "#ff00ff",
+          transparent: true,
+          opacity: 0.25,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+          roughness: 0.6,
+          metalness: 0.05,
+        })
+      );
+      this.content.add(mesh);
+
+      const edges = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geometry),
+        new THREE.LineBasicMaterial({ color: "#ffffff" })
+      );
+      this.content.add(edges);
+    }
+
+    if (style === "skeleton" || style === "both") {
+      const linePoints = [];
+      (bz.edges || []).forEach(([a, b]) => {
+        linePoints.push(new THREE.Vector3(...a).sub(center), new THREE.Vector3(...b).sub(center));
+      });
+      if (linePoints.length) {
+        this.content.add(new THREE.LineSegments(
+          new THREE.BufferGeometry().setFromPoints(linePoints),
+          new THREE.LineBasicMaterial({ color: "#ff00ff", linewidth: 2 })
+        ));
+      }
+    }
+
+    // Reciprocal axes from the origin.
+    const axisLen = Math.max(...points.map((p) => p.length()), 1) * 1.25;
+    [
+      [[axisLen, 0, 0], "#ff6666", "kx"],
+      [[0, axisLen, 0], "#66ff66", "ky"],
+      [[0, 0, axisLen], "#6666ff", "kz"],
+    ].forEach(([dir]) => {
+      const arrow = new THREE.ArrowHelper(
+        new THREE.Vector3(...dir).normalize(),
+        new THREE.Vector3(0, 0, 0).sub(center),
+        axisLen,
+        0xffffff,
+        0.12 * axisLen,
+        0.06 * axisLen
+      );
+      this.content.add(arrow);
+    });
+
+    if (bz.surface_vertices && bz.surface_simplices) {
+      const positions = [];
+      bz.surface_vertices.forEach((p) => {
+        const v = new THREE.Vector3(...p).sub(center);
+        positions.push(v.x, v.y, v.z);
+      });
+      const indices = [];
+      bz.surface_simplices.forEach((tri) => indices.push(...tri));
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setIndex(indices);
+      geometry.computeVertexNormals();
+      this.content.add(new THREE.Mesh(
+        geometry,
+        new THREE.MeshStandardMaterial({
+          color: "#00ffff",
+          transparent: true,
+          opacity: 0.35,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        })
+      ));
+    }
+
+    if (bz.projection_lines && bz.projection_lines.length) {
+      const linePoints = [];
+      bz.projection_lines.forEach(([a, b]) => {
+        linePoints.push(new THREE.Vector3(...a).sub(center), new THREE.Vector3(...b).sub(center));
+      });
+      this.content.add(new THREE.LineSegments(
+        new THREE.BufferGeometry().setFromPoints(linePoints),
+        new THREE.LineBasicMaterial({ color: "#ffd700" })
+      ));
+    }
+  }
+
+  _drawMoire(points, center) {
+    if (!points || points.length < 2) return;
+    const linePoints = points.map((p) => new THREE.Vector3(...p).sub(center));
+    this.content.add(new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(linePoints),
+      new THREE.LineBasicMaterial({ color: "#ffd700" })
+    ));
   }
 
   /* One InstancedMesh per element keeps thousands of atoms at one draw call each. */

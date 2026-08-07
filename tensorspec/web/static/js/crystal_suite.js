@@ -1,5 +1,8 @@
-/* Crystal Suite controller: binds the Tab 1 controls to the API and viewer.
-   Holds no geometry logic; it only moves values between the DOM and the server. */
+/* Crystal Suite controller: Tabs 1–4.
+ *
+ * Moves values between the DOM and the server. CDW, stack, and BZ math all
+ * live in core.crystallography; this file only orchestrates requests.
+ */
 
 import { CrystalViewer, elementColor } from "/static/js/viewers/viewer_3d.js";
 
@@ -21,21 +24,68 @@ const dom = {
     radius: el("cr-radius"),
     statAtoms: el("cr-stat-atoms"),
     statBonds: el("cr-stat-bonds"),
+
+    cdwEnable: el("cdw-enable"),
+    cdwTarget: el("cdw-target"),
+    qa: el("q-a"),
+    qb: el("q-b"),
+    qc: el("q-c"),
+    ax: el("a-x"),
+    ay: el("a-y"),
+    az: el("a-z"),
+    cdwPhase: el("cdw-phase"),
+
+    stTemplate: el("st-template"),
+    stAdd: el("st-add-template"),
+    stLayers: el("st-layers"),
+    stRender: el("st-render"),
+    stMoire: el("st-moire"),
+    stStatus: el("st-status"),
+
+    bzOverlay: el("bz-overlay"),
+    bzScale: el("bz-scale"),
+    bzStyle: el("bz-style"),
+    bzSurface: el("bz-surface"),
+    bzH: el("bz-h"),
+    bzK: el("bz-k"),
+    bzL: el("bz-l"),
+    bzRender: el("bz-render"),
+    bzClear: el("bz-clear"),
 };
 
 let viewer = null;
 let activeCrystal = null;
+const stackLayers = [];
 
 function setStatus(message, isError = false) {
     dom.status.textContent = message;
     dom.status.style.color = isError ? "#ff6b6b" : "";
 }
 
+function setStackStatus(message, isError = false) {
+    dom.stStatus.textContent = message;
+    dom.stStatus.style.color = isError ? "#ff6b6b" : "";
+}
+
 function ensureViewer() {
     if (viewer) return viewer;
-    dom.placeholder.remove();
+    if (dom.placeholder) dom.placeholder.remove();
     viewer = new CrystalViewer(dom.viewport);
     return viewer;
+}
+
+function fillTargets(elements) {
+    const previous = dom.cdwTarget.value;
+    dom.cdwTarget.innerHTML = '<option>All Elements</option>';
+    elements.forEach((symbol) => {
+        const option = document.createElement("option");
+        option.textContent = symbol;
+        option.value = symbol;
+        dom.cdwTarget.appendChild(option);
+    });
+    if ([...dom.cdwTarget.options].some((o) => o.value === previous)) {
+        dom.cdwTarget.value = previous;
+    }
 }
 
 function geometryRequest() {
@@ -45,6 +95,15 @@ function geometryRequest() {
         nz: Number(dom.nz.value) || 1,
         bond_threshold: Number(dom.threshold.value) || 1.15,
         show_bonds: true,
+        cdw_enabled: Boolean(dom.cdwEnable.checked),
+        cdw_target: dom.cdwTarget.value || "All Elements",
+        cdw_qx: Number(dom.qa.value) || 0,
+        cdw_qy: Number(dom.qb.value) || 0,
+        cdw_qz: Number(dom.qc.value) || 0,
+        cdw_ax: Number(dom.ax.value) || 0,
+        cdw_ay: Number(dom.ay.value) || 0,
+        cdw_az: Number(dom.az.value) || 0,
+        cdw_phase: Number(dom.cdwPhase.value) || 0,
     };
 }
 
@@ -61,7 +120,8 @@ async function refreshGeometry({ frame = true } = {}) {
         dom.statAtoms.textContent = `${geometry.n_atoms} atoms`;
         dom.statBonds.textContent = `${geometry.bonds.length} bonds`;
         dom.legend.textContent = geometry.elements.join(", ");
-        dom.legend.style.color = elementColor(geometry.elements[0]);
+        if (geometry.elements[0]) dom.legend.style.color = elementColor(geometry.elements[0]);
+        fillTargets(geometry.elements);
         setStatus(`${activeCrystal} rendered`);
     } catch (err) {
         setStatus(err.message, true);
@@ -82,8 +142,163 @@ async function onFileChosen(event) {
     } catch (err) {
         setStatus(err.message, true);
     } finally {
-        // Clear so re-picking the same file still fires a change event.
         event.target.value = "";
+    }
+}
+
+function renderLayerRows() {
+    dom.stLayers.innerHTML = "";
+    if (!stackLayers.length) {
+        dom.stLayers.innerHTML = '<p class="hint">No layers yet. Add a template above.</p>';
+        return;
+    }
+
+    stackLayers.forEach((layer, index) => {
+        const row = document.createElement("div");
+        row.className = "layer-row";
+        row.innerHTML = `
+            <span class="layer-row__name">${layer.label}</span>
+            <label>SC:</label>
+            <input class="field field--num" data-k="sc_x" type="number" min="1" max="50" value="${layer.sc_x}">
+            <input class="field field--num" data-k="sc_y" type="number" min="1" max="50" value="${layer.sc_y}">
+            <label>z (&#197;):</label>
+            <input class="field field--num" data-k="z_shift" type="number" min="-100" max="100" step="0.5" value="${layer.z_shift}">
+            <label>&#952; (&#176;):</label>
+            <input class="field field--num" data-k="twist" type="number" min="-360" max="360" step="1" value="${layer.twist}">
+            <button type="button" class="btn" data-up title="Move up">&#9650;</button>
+            <button type="button" class="btn" data-down title="Move down">&#9660;</button>
+            <button type="button" class="btn" data-remove>X</button>`;
+
+        row.querySelectorAll("input").forEach((input) => {
+            input.addEventListener("change", () => {
+                layer[input.dataset.k] = Number(input.value);
+            });
+        });
+        row.querySelector("[data-up]").addEventListener("click", () => {
+            if (index === 0) return;
+            [stackLayers[index - 1], stackLayers[index]] = [stackLayers[index], stackLayers[index - 1]];
+            renderLayerRows();
+        });
+        row.querySelector("[data-down]").addEventListener("click", () => {
+            if (index >= stackLayers.length - 1) return;
+            [stackLayers[index + 1], stackLayers[index]] = [stackLayers[index], stackLayers[index + 1]];
+            renderLayerRows();
+        });
+        row.querySelector("[data-remove]").addEventListener("click", () => {
+            stackLayers.splice(index, 1);
+            renderLayerRows();
+        });
+
+        dom.stLayers.appendChild(row);
+    });
+}
+
+async function addTemplate() {
+    const templateName = dom.stTemplate.value;
+    setStackStatus(`Adding ${templateName}\u2026`);
+    try {
+        const summary = await TensorSpecAPI.crystalAddTemplate({ template_name: templateName });
+        const zShift = stackLayers.length ? Math.max(...stackLayers.map((l) => l.z_shift)) + 3.4 : 0;
+        stackLayers.push({
+            name: summary.name,
+            label: `${summary.name} (${summary.formula})`,
+            sc_x: 1,
+            sc_y: 1,
+            z_shift: Number(zShift.toFixed(1)),
+            twist: 0,
+        });
+        renderLayerRows();
+        setStackStatus(`Added ${summary.name}`);
+    } catch (err) {
+        setStackStatus(err.message, true);
+    }
+}
+
+async function renderStack() {
+    if (!stackLayers.length) {
+        setStackStatus("Add at least one layer first.", true);
+        return;
+    }
+    setStackStatus("Building stack\u2026");
+    try {
+        const geometry = await TensorSpecAPI.crystalStack({
+            layers: stackLayers.map(({ name, sc_x, sc_y, z_shift, twist }) => ({
+                name, sc_x, sc_y, z_shift, twist,
+            })),
+            store_as: "heterostructure",
+            show_bonds: true,
+        });
+        activeCrystal = geometry.name;
+        const view = ensureViewer();
+        view.clearBrillouinZone();
+        view.atomScale = Number(dom.radius.value) || 0.5;
+        view.render(geometry, { frame: true });
+        fillTargets(geometry.elements);
+        dom.statAtoms.textContent = `${geometry.n_atoms} atoms`;
+        dom.statBonds.textContent = `${geometry.bonds.length} bonds`;
+        dom.legend.textContent = geometry.elements.join(", ");
+        setStackStatus(`Rendered ${geometry.name} (${geometry.n_atoms} atoms)`);
+        setStatus(`${geometry.name} active`);
+    } catch (err) {
+        setStackStatus(err.message, true);
+    }
+}
+
+async function calculateMoire() {
+    if (stackLayers.length !== 2) {
+        setStackStatus("Moiré needs exactly two layers.", true);
+        return;
+    }
+    const [a, b] = stackLayers;
+    try {
+        const result = await TensorSpecAPI.crystalMoire({
+            layer1: a.name,
+            layer2: b.name,
+            twist1: a.twist,
+            twist2: b.twist,
+            z_min: Math.min(a.z_shift, b.z_shift) - 2,
+            z_max: Math.max(a.z_shift, b.z_shift) + 2,
+        });
+        if (result.envelope) {
+            ensureViewer().setMoireEnvelope(result.envelope, { frame: false });
+        }
+        const period = result.periodicity != null ? `${result.periodicity.toFixed(2)} Å` : "—";
+        const extra = result.n_cells != null ? `, ~${result.n_cells}×${result.n_cells} cells` : "";
+        setStackStatus(`Moiré ${result.status}: period ${period}${extra}`);
+    } catch (err) {
+        setStackStatus(err.message, true);
+    }
+}
+
+async function renderBZ() {
+    if (!activeCrystal) {
+        setStatus("Load a crystal first.", true);
+        return;
+    }
+    setStatus(`Building BZ for ${activeCrystal}\u2026`);
+    try {
+        const bz = await TensorSpecAPI.crystalBZ(activeCrystal, {
+            scale: Number(dom.bzScale.value) || 1,
+            style: dom.bzStyle.value || "solid",
+            surface: Boolean(dom.bzSurface.checked),
+            h: Number(dom.bzH.value) || 0,
+            k: Number(dom.bzK.value) || 0,
+            l: Number(dom.bzL.value) || 1,
+            overlay_crystal: Boolean(dom.bzOverlay.checked),
+        });
+
+        const view = ensureViewer();
+        if (!dom.bzOverlay.checked) {
+            view.geometry = null;
+            view.clear();
+            view.setBrillouinZone(bz, { frame: true });
+        } else {
+            if (!view.geometry) await refreshGeometry({ frame: false });
+            view.setBrillouinZone(bz, { frame: true });
+        }
+        setStatus(`BZ rendered (${bz.style}, scale ${bz.scale})`);
+    } catch (err) {
+        setStatus(err.message, true);
     }
 }
 
@@ -97,6 +312,24 @@ dom.file.addEventListener("change", onFileChosen);
 dom.radius.addEventListener("change", () => {
     if (viewer) viewer.setAtomScale(Number(dom.radius.value) || 0.5);
 });
+
+[
+    dom.cdwEnable, dom.cdwTarget, dom.qa, dom.qb, dom.qc,
+    dom.ax, dom.ay, dom.az, dom.cdwPhase,
+].forEach((input) =>
+    input.addEventListener("change", () => refreshGeometry({ frame: false }))
+);
+
+dom.stAdd.addEventListener("click", addTemplate);
+dom.stRender.addEventListener("click", renderStack);
+dom.stMoire.addEventListener("click", calculateMoire);
+dom.bzRender.addEventListener("click", renderBZ);
+dom.bzClear.addEventListener("click", () => {
+    if (viewer) viewer.clearBrillouinZone();
+    setStatus("BZ cleared");
+});
+
+renderLayerRows();
 
 TensorSpecAPI.health()
     .then((info) => {
