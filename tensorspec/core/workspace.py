@@ -21,14 +21,16 @@ class WorkspaceManager:
         """Returns {name: type} for every object currently held in memory."""
         return {name: item.get('type', 'Unknown') for name, item in self._data.items()}
 
-    def push_crystal_structure(self, name, basis_vectors):
+    def push_crystal_structure(self, name, basis_vectors, structure=None):
         """
-        Stores a parsed crystal structure's local basis vectors.
-        This will later be called by the Crystal Suite after loading a CIF.
+        Stores a parsed crystal structure's local basis vectors, and optionally
+        the full pymatgen Structure so the atoms survive alongside the lattice.
+        Callers that only have the basis may omit `structure`.
         """
         self._data[name] = {
             'type': 'crystal_structure',
-            'basis': basis_vectors
+            'basis': basis_vectors,
+            'structure': structure
         }
 
     def pull_crystal_structure(self, name):
@@ -38,6 +40,16 @@ class WorkspaceManager:
         item = self._data.get(name)
         if item and item.get('type') == 'crystal_structure':
             return item['basis']
+        return None
+
+    def pull_structure_object(self, name):
+        """
+        Retrieves the full pymatgen Structure for a stored crystal, or None if
+        it was pushed with only its basis vectors.
+        """
+        item = self._data.get(name)
+        if item and item.get('type') == 'crystal_structure':
+            return item.get('structure')
         return None
     
     def list_crystal_structures(self):

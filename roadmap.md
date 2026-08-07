@@ -11,7 +11,8 @@ re-implementation in HTML. Do not treat a checked box as a finished screen.
       Replaces the original "client-side JS only" phase, which would have built every screen
       twice: once against mock data, then again against the API.
     - [x] Slice 1 — Session backbone: FastAPI app, per-session workspace, live variable tree
-    - [ ] Slice 2 — Crystal Suite: CIF load, geometry as JSON, three.js viewport
+    - [x] Slice 2a — Crystal Suite Tab 1: CIF load, geometry as JSON, three.js viewport
+    - [ ] Slice 2b — Crystal Suite Tabs 2-4: CDW modulator, stack & twist, Brillouin zone
     - [ ] Slice 3 — ARPES viewer: server-side slicing, linked crosshairs, EDC/MDC panels
     - [ ] Slice 4 — DFT Suite: band plots, QE job queue, live log stream, command allowlist
 - [ ] Phase 4 — Cross-cutting requirements, delivered across the slices above.
@@ -22,8 +23,9 @@ re-implementation in HTML. Do not treat a checked box as a finished screen.
     - [x] Parameter validation: Pydantic schemas mirror the bounds the UI advertises
     - [ ] Job queue for long calculations (QE runs, ARPES simulations) so requests never block
     - [ ] Live log streaming to the browser (WebSocket) for the QE pipeline runner
-    - [ ] three.js viewport: Python emits atom positions, bonds, and BZ facets as JSON;
+    - [x] three.js viewport: Python emits atom positions, bonds, and BZ facets as JSON;
           the browser renders and rotates them. `crystallography.py` keeps all geometry math
+          (three.js is vendored in `web/static/vendor/`, so no CDN is needed on the VPN)
     - [ ] Server-side slicing/downsampling so 3D and 4D tensors are never shipped whole
     - [ ] Command hardening: never build shell commands from raw user input;
           allowlist solver executables and server-control the output directory

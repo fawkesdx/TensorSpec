@@ -6,6 +6,8 @@ from scipy.spatial import KDTree
 import pyvista as pv
 from pyvistaqt import QtInteractor
 
+from tensorspec.core.crystallography import CrystalEngine
+
 # --- UNIVERSAL HARDWARE DETECTION ENGINE ---
 system = platform.system()
 machine = platform.machine()
@@ -119,24 +121,13 @@ class PyVistaCrystalBackend:
         if erased_atoms is None: erased_atoms = set()
 
         coords = supercell.cart_coords
-        radii = np.array([s.specie.atomic_radius if s.specie.atomic_radius else 1.2 for s in supercell])
-        
-        tree = KDTree(coords)
-        pairs = tree.query_pairs(r=4.0)
-        if not pairs:
+        bonds = CrystalEngine.compute_bonds(supercell, thresh_multiplier=thresh_multiplier)
+        if len(bonds["i"]) == 0:
             self.bond_tree = None
             return
 
-        pairs_arr = np.array(list(pairs))
-        i_idx, j_idx = pairs_arr[:, 0], pairs_arr[:, 1]
-        vecs = coords[j_idx] - coords[i_idx]
-        dists = np.linalg.norm(vecs, axis=1)
-        
-        rad_sums = (radii[i_idx] + radii[j_idx]) * thresh_multiplier
-        mask = (dists > 0.5) & (dists <= rad_sums)
-        
-        valid_i, valid_j = i_idx[mask], j_idx[mask]
-        valid_dists, valid_vecs = dists[mask], vecs[mask]
+        valid_i, valid_j = bonds["i"], bonds["j"]
+        valid_dists, valid_vecs = bonds["distances"], bonds["vectors"]
 
         bond_centers, bond_directions, bond_heights = [], [], []
         self.bond_pairs_list = []
