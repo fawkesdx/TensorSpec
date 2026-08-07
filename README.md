@@ -2,9 +2,11 @@
 ## Prerequisites
 * **Python 3.11 or 3.12** (Python 3.9 and 3.10 are not supported due to modern dependency requirements).
 * A virtual environment is highly recommended.
+* **A modern browser** (Chrome, Firefox, or Safari) for the user interface.
+* No Qt or other desktop toolkit is required.
 
 **A General-Purpose Framework for N-Dimensional Spectroscopic Analysis**
-`TensorSpec` is a Python-based library designed to handle, visualize, and analyze multidimensional spectroscopic data. 
+`TensorSpec` is a Python-based framework with a browser-based (HTML/CSS/JS) interface, designed to handle, visualize, and analyze multidimensional spectroscopic data. 
 Originally developed for ARPES (Angle-Resolved Photoemission Spectroscopy), it generalizes the concept of "coordinates vs. intensity" to support a wide range of experimental techniques, including XAS, XMCD, PEEM, and other multi-dimensional scanning microscopy.
 
 The goal of this project is to provide a unified data structure for high-dimensional data and seamlessly integrate classical analysis with modern Machine Learning workflows.
@@ -39,3 +41,16 @@ A dedicated module for attaching ML routines to experimental data:
 * Dimensionality reduction (PCA/NMF) for hyperspectral datasets.
 * Deep learning-based image analysis.
 * Transfer learning-based model.
+
+### 5. Browser-Based Interface (In Development)
+The user interface is a browser application, replacing the earlier PySide6 desktop GUI:
+* **Workspace Browser:** Central explorer for active data variables, metadata inspector, and suite launcher ribbon.
+* **Suite Panels:** Each analytical suite (Crystal, DFT, ARPES, PEEM, XAS, Transport, ML) is an independent HTML panel.
+* **Static-First:** The shell runs as plain HTML with no build step; data binding to the Python core follows in a later phase.
+
+## Running the App
+The interface currently runs as a static shell. Open the workspace browser directly in your browser:
+
+```
+tensorspec/web/templates/main_browser.html
+```

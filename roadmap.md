@@ -1,6 +1,18 @@
 # TensorSpec Roadmap
+
+## UI Architecture: HTML Migration (Active)
+The front end is migrating from the PySide6 desktop GUI to a browser-based HTML interface.
+Every `[x]` below marks **core/physics logic that is complete**; its user interface still needs
+re-implementation in HTML. Do not treat a checked box as a finished screen.
+
+- [ ] Phase 1 — Static shell: `web/templates/main_browser.html` (ribbon, workspace tree, inspector) with mock data
+- [ ] Phase 2 — Static suite pages: one HTML shell per suite
+- [ ] Phase 3 — JS interactivity: tree selection, inspector updates, panel launching (client-side only)
+- [ ] Phase 4 — Data bridge: connect HTML to `core/` (transport method TBD)
+- [ ] Phase 5 — Qt teardown: delete `tensorspec/gui/` and `plotting/viewers/`, drop PySide6 / PyQt6 / pyvistaqt / QtPy / shiboken6 from `requirements.txt`
+
 General Rule for the App
-- [] Always give option to work with GPU or CPU. With PyVista or MatplotLib. In any suite, detect what kind of machine is being used and use the right machinary.
+- [ ] Always give option to work with GPU or CPU rendering. In the browser this maps to WebGL-backed interactive rendering vs. server-side static images. In any suite, detect what kind of machine is being used and use the right machinery.
 - [] 
 Grand App
 - Crystal viewer Suite
