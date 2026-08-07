@@ -135,3 +135,76 @@ def calculate_bands(engine, *, path_mode: str = PATH_AUTO, custom_coords: str = 
         "fermi_energy": fermi_energy,
         "n_bands": int(eigenvalues.shape[1]) if eigenvalues.ndim == 2 else 0,
     }
+
+
+def calculate_2d_mesh(
+    engine,
+    *,
+    kx_min: float = -4.5,
+    kx_max: float = 4.5,
+    ky_min: float = -4.5,
+    ky_max: float = 4.5,
+    resolution: int = 24,
+    shell_keys=(),
+    hoppings=(),
+    cutoffs=(1.6, 2.6, 3.1, 4.5),
+    onsite_e: float = 0.0,
+    orbital_shifts=None,
+    use_soc: bool = False,
+    soc_strength: float = 0.5,
+    tb_mode: str = TB_SCALAR,
+) -> dict:
+    """
+    Diagonalises a rectangular kx–ky mesh for ARPES matrix-element mapping.
+
+    Option A interpolates bands onto the detector frame from this mesh. The
+    resolution is intentionally capped by the caller; a shared server cannot
+    afford the desktop's largest grids.
+    """
+    shifts = orbital_shifts or {"0": -10.0, "1": -2.0, "2": 0.0}
+    res = max(4, int(resolution))
+    kx_vals = np.linspace(kx_min, kx_max, res)
+    ky_vals = np.linspace(ky_min, ky_max, res)
+    kx_grid, ky_grid = np.meshgrid(kx_vals, ky_vals, indexing="ij")
+    k_vecs = np.column_stack([
+        kx_grid.ravel(),
+        ky_grid.ravel(),
+        np.zeros(res * res, dtype=float),
+    ])
+
+    eigenvalues, eigenvectors, orb_labels = engine.solve_bands(
+        k_vecs,
+        custom_hopping=pack_hopping(shell_keys, hoppings),
+        onsite_e=onsite_e,
+        use_soc=use_soc,
+        soc_strength=soc_strength,
+        cutoffs=list(cutoffs),
+        tb_mode=tb_mode,
+        orbital_shifts=shifts,
+    )
+    eigenvalues = np.asarray(eigenvalues)
+
+    structure = engine.crystal_structure
+    recip = None
+    if structure is not None and hasattr(structure, "lattice"):
+        recip = np.asarray(structure.lattice.reciprocal_lattice.matrix, dtype=float)
+
+    return {
+        "type": "band_structure",
+        "is_2d": True,
+        "k_vecs": np.asarray(k_vecs),
+        "eigenvalues": eigenvalues,
+        "eigenvectors": eigenvectors,
+        "orbital_positions": [site.coords.tolist() for site in structure] if structure else [],
+        "orbital_labels": orb_labels,
+        "kx": kx_vals,
+        "ky": ky_vals,
+        "grid_shape": (res, res),
+        "fermi_energy": 0.0,
+        "tb_model": getattr(engine, "tb_model", None),
+        "basis": getattr(engine, "basis", None),
+        "H_dict": getattr(engine, "H_dict", None),
+        "structure": structure,
+        "recip_matrix": recip,
+        "n_bands": int(eigenvalues.shape[1]) if eigenvalues.ndim == 2 else 0,
+    }

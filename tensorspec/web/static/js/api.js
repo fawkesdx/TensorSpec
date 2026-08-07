@@ -174,5 +174,70 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
+
+        arpesExportFigure: async (name, payload) => {
+            const response = await fetch(
+                `/api/arpes/${encodeURIComponent(name)}/export/figure`,
+                {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                }
+            );
+            if (!response.ok) {
+                let detail = `${response.status} ${response.statusText}`;
+                try {
+                    const body = await response.json();
+                    if (body.detail) detail = body.detail;
+                } catch (err) {
+                    /* ignore */
+                }
+                throw new Error(detail);
+            }
+            return response.blob();
+        },
+
+        arpesSimulate: (payload) =>
+            request("/api/arpes/simulate", {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        arpesJob: (jobId) =>
+            request(`/api/arpes/jobs/${encodeURIComponent(jobId)}`),
+        arpesCancelJob: (jobId) =>
+            request(`/api/arpes/jobs/${encodeURIComponent(jobId)}/cancel`, {
+                method: "POST",
+            }),
+        arpesPushJob: (jobId, payload = {}) =>
+            request(`/api/arpes/jobs/${encodeURIComponent(jobId)}/push`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        arpesPreview: async (jobId, eIndex = 0) => {
+            const response = await fetch(
+                `/api/arpes/jobs/${encodeURIComponent(jobId)}/preview?e_index=${eIndex}`,
+                { credentials: "same-origin" }
+            );
+            if (!response.ok) {
+                let detail = `${response.status} ${response.statusText}`;
+                try {
+                    const body = await response.json();
+                    if (body.detail) detail = body.detail;
+                } catch (err) {
+                    /* ignore */
+                }
+                throw new Error(detail);
+            }
+            const buffer = await response.arrayBuffer();
+            const headerLength = new DataView(buffer).getUint32(0, true);
+            const header = JSON.parse(
+                new TextDecoder().decode(new Uint8Array(buffer, 4, headerLength))
+            );
+            const values = new Float32Array(
+                buffer, 4 + headerLength, header.shape[0] * header.shape[1]
+            );
+            return { header, values };
+        },
     };
 })();

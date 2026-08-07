@@ -1,8 +1,9 @@
-"""In-process job queue for long Quantum ESPRESSO runs.
+"""In-process job queue for long Quantum ESPRESSO and Python simulations.
 
-Runs allowlisted argv lists with ``shell=False``, streams stdout into a ring
-buffer for WebSocket clients, and enforces per-session / global concurrency
-caps. No physics lives here.
+QE jobs run allowlisted argv lists with ``shell=False``. Callable jobs run a
+server-owned Python worker (e.g. ARPES matrix-element sims). Both stream log
+lines into a ring buffer for WebSocket clients and share the same per-session /
+global concurrency caps. No physics lives here.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 
 class JobStatus(str, Enum):
@@ -31,7 +32,9 @@ class Job:
     session_id: str
     run_name: str
     run_dir: Path
-    commands: list[list[str]]
+    commands: list[list[str]] = field(default_factory=list)
+    worker: Callable[["Job"], None] | None = field(default=None, repr=False)
+    result: Any = field(default=None, repr=False)
     status: JobStatus = JobStatus.QUEUED
     created_at: float = field(default_factory=time.time)
     started_at: float | None = None
@@ -101,6 +104,18 @@ class JobQueue:
         self._worker = threading.Thread(target=self._loop, name="qe-job-queue", daemon=True)
         self._worker.start()
 
+    def _assert_session_capacity(self, session_id: str) -> None:
+        active = [
+            j for j in self._jobs.values()
+            if j.session_id == session_id
+            and j.status in (JobStatus.QUEUED, JobStatus.RUNNING)
+        ]
+        if len(active) >= self.max_jobs_per_session:
+            raise RuntimeError(
+                f"This session already has {len(active)} active job(s); "
+                "wait for it to finish or cancel it."
+            )
+
     def submit(
         self,
         *,
@@ -110,17 +125,7 @@ class JobQueue:
         commands: list[list[str]],
     ) -> Job:
         with self._condition:
-            active = [
-                j for j in self._jobs.values()
-                if j.session_id == session_id
-                and j.status in (JobStatus.QUEUED, JobStatus.RUNNING)
-            ]
-            if len(active) >= self.max_jobs_per_session:
-                raise RuntimeError(
-                    f"This session already has {len(active)} active job(s); "
-                    "wait for it to finish or cancel it."
-                )
-
+            self._assert_session_capacity(session_id)
             job = Job(
                 job_id=secrets.token_urlsafe(12),
                 session_id=session_id,
@@ -128,6 +133,31 @@ class JobQueue:
                 run_dir=Path(run_dir),
                 commands=commands,
                 total_steps=len(commands),
+            )
+            self._jobs[job.job_id] = job
+            self._condition.notify()
+            return job
+
+    def submit_callable(
+        self,
+        *,
+        session_id: str,
+        run_name: str,
+        run_dir: Path,
+        worker: Callable[[Job], None],
+        total_steps: int = 1,
+    ) -> Job:
+        """Queue a Python worker (ARPES sims, etc.) under the same caps as QE."""
+        with self._condition:
+            self._assert_session_capacity(session_id)
+            job = Job(
+                job_id=secrets.token_urlsafe(12),
+                session_id=session_id,
+                run_name=run_name,
+                run_dir=Path(run_dir),
+                commands=[],
+                worker=worker,
+                total_steps=max(1, int(total_steps)),
             )
             self._jobs[job.job_id] = job
             self._condition.notify()
@@ -181,48 +211,10 @@ class JobQueue:
     def _execute(self, job: Job) -> None:
         job.append_log(f"[queue] starting {job.run_name} ({job.total_steps} steps)")
         try:
-            for index, command in enumerate(job.commands, start=1):
-                if job._cancel.is_set():
-                    job.status = JobStatus.CANCELLED
-                    job.append_log("[queue] cancelled")
-                    break
-
-                job.current_step = index
-                rendered = " ".join(command)
-                job.append_log(f"[step {index}/{job.total_steps}] {rendered}")
-
-                # argv list only — never shell=True, never interpolate user text.
-                process = subprocess.Popen(
-                    command,
-                    cwd=str(job.run_dir),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
-                job._process = process
-
-                assert process.stdout is not None
-                for line in process.stdout:
-                    job.append_log(line.rstrip("\n"))
-
-                code = process.wait()
-                job._process = None
-                if job._cancel.is_set():
-                    job.status = JobStatus.CANCELLED
-                    job.exit_code = code
-                    job.append_log("[queue] cancelled")
-                    break
-                if code != 0:
-                    job.status = JobStatus.FAILED
-                    job.exit_code = code
-                    job.error = f"Step {index} exited with code {code}"
-                    job.append_log(f"[queue] failed: {job.error}")
-                    break
+            if job.worker is not None:
+                self._execute_callable(job)
             else:
-                job.status = JobStatus.SUCCEEDED
-                job.exit_code = 0
-                job.append_log("[queue] finished successfully")
+                self._execute_commands(job)
         except Exception as exc:
             job.status = JobStatus.FAILED
             job.error = str(exc)
@@ -230,6 +222,67 @@ class JobQueue:
         finally:
             job.finished_at = time.time()
             job._process = None
+
+    def _execute_callable(self, job: Job) -> None:
+        if job._cancel.is_set():
+            job.status = JobStatus.CANCELLED
+            job.append_log("[queue] cancelled before start")
+            return
+        assert job.worker is not None
+        job.current_step = 1
+        job.worker(job)
+        if job._cancel.is_set():
+            job.status = JobStatus.CANCELLED
+            job.append_log("[queue] cancelled")
+            return
+        if job.status == JobStatus.RUNNING:
+            job.status = JobStatus.SUCCEEDED
+            job.exit_code = 0
+            job.append_log("[queue] finished successfully")
+
+    def _execute_commands(self, job: Job) -> None:
+        for index, command in enumerate(job.commands, start=1):
+            if job._cancel.is_set():
+                job.status = JobStatus.CANCELLED
+                job.append_log("[queue] cancelled")
+                break
+
+            job.current_step = index
+            rendered = " ".join(command)
+            job.append_log(f"[step {index}/{job.total_steps}] {rendered}")
+
+            # argv list only — never shell=True, never interpolate user text.
+            process = subprocess.Popen(
+                command,
+                cwd=str(job.run_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            job._process = process
+
+            assert process.stdout is not None
+            for line in process.stdout:
+                job.append_log(line.rstrip("\n"))
+
+            code = process.wait()
+            job._process = None
+            if job._cancel.is_set():
+                job.status = JobStatus.CANCELLED
+                job.exit_code = code
+                job.append_log("[queue] cancelled")
+                break
+            if code != 0:
+                job.status = JobStatus.FAILED
+                job.exit_code = code
+                job.error = f"Step {index} exited with code {code}"
+                job.append_log(f"[queue] failed: {job.error}")
+                break
+        else:
+            job.status = JobStatus.SUCCEEDED
+            job.exit_code = 0
+            job.append_log("[queue] finished successfully")
 
 
 # Lazily constructed so import does not require solvers to be present.
