@@ -42,6 +42,54 @@ class DemoSeedRequest(BaseModel):
     n_ky: int = Field(default=32, ge=1, le=256)
 
 
+class BandRequest(BaseModel):
+    """Tight-binding parameters. Bounds mirror the DFT Suite spin boxes."""
+
+    path_mode: Literal["auto", "custom", "hexagonal", "rectangular", "square"] = "auto"
+    custom_coords: str = Field(default="", max_length=2000)
+    custom_labels: str = Field(default="", max_length=500)
+    # The desktop app allows 2000, but that runs on the user's own CPU. A
+    # shared server caps it and offers the job queue for anything heavier.
+    points_per_segment: int = Field(default=100, ge=10, le=500)
+
+    hoppings: list[float] = Field(default=[2.7, 0.0, 0.0, -0.3], max_length=8)
+    cutoffs: list[float] = Field(default=[1.6, 2.6, 3.1, 4.5], max_length=8)
+
+    onsite_e: float = Field(default=0.0, ge=-10, le=10)
+    shift_s: float = Field(default=-10.0, ge=-50, le=50)
+    shift_p: float = Field(default=-2.0, ge=-50, le=50)
+    shift_d: float = Field(default=0.0, ge=-50, le=50)
+
+    use_soc: bool = False
+    soc_strength: float = Field(default=0.5, ge=0, le=5)
+    tb_mode: Literal["Simple Scalar (Isotropic)", "Slater-Koster (Rigorous)"] = "Simple Scalar (Isotropic)"
+
+
+class BandResult(BaseModel):
+    """A computed dispersion, ready to plot."""
+
+    name: str
+    k_dist: list[float]
+    bands: list[list[float]]
+    node_positions: list[float]
+    node_labels: list[str]
+    n_bands: int
+    n_kpoints: int
+    fermi_energy: float
+    energy_min: float
+    energy_max: float
+    orbital_labels: list[str]
+    elapsed_seconds: float
+
+
+class StructureOption(BaseModel):
+    name: str
+    formula: str
+    n_sites: int
+    shell_keys: list[str]
+    default_hoppings: list[float]
+
+
 class AxisInfo(BaseModel):
     """One dimension of a tensor, as the axis pickers and sliders need it."""
 

@@ -16,7 +16,12 @@ re-implementation in HTML. Do not treat a checked box as a finished screen.
     - [x] Slice 3a — ARPES viewer: server-side slicing, crosshair, EDC/MDC/orthogonal curves
     - [ ] Slice 3b — ARPES viewer extras: multi-panel snap grid, cross-dataset crosshair sync,
           profile export (CSV/PDF), and the matrix-element simulator tab
-    - [ ] Slice 4 — DFT Suite: band plots, QE job queue, live log stream, command allowlist
+    - [x] Slice 4a — DFT Suite: tight-binding band structures solved server-side and plotted
+    - [ ] Slice 4b — QE pipeline: input generation, downloadable HPC bundle, job queue,
+          live log stream. The desktop app runs a user-editable bash script through
+          /bin/bash, which is safe on a personal machine and remote code execution on a
+          shared one; the served version builds an argument list from validated parameters,
+          takes solver paths from server config, and confines output to the session directory
 - [ ] Phase 4 — Cross-cutting requirements, delivered across the slices above.
       Deployment target: shared server on the LBL VPN, multiple simultaneous users.
     - [x] Web service layer (`tensorspec/web/server/`): thin request router, zero physics
@@ -31,7 +36,8 @@ re-implementation in HTML. Do not treat a checked box as a finished screen.
     - [x] Server-side slicing/downsampling so 3D and 4D tensors are never shipped whole
           (`core/tensor_ops.py`; planes travel as framed float32, not JSON text)
     - [ ] Command hardening: never build shell commands from raw user input;
-          allowlist solver executables and server-control the output directory
+          allowlist solver executables and server-control the output directory.
+          Deferred with slice 4b; no solver is reachable from the browser until it lands
 - [ ] Phase 5 — Qt teardown: delete `tensorspec/gui/` and `plotting/viewers/`, drop PySide6 / PyQt6 / pyvistaqt / QtPy / shiboken6 from `requirements.txt`
 
 General Rule for the App

@@ -1,0 +1,137 @@
+# File: tensorspec/core/dft/band_service.py
+"""
+Band-structure orchestration: k-path construction, solver call, Fermi shift.
+
+This sequence previously lived in the Qt suite's `calculate_bands`, so nothing
+but the desktop GUI could produce a band structure. It is pure computation --
+no widgets, no plotting, no file dialogs -- and returns plain arrays that any
+front end can render.
+
+The solver itself stays in `ChinookTightBindingEngine`; this module only
+decides which k-points to hand it and how to shift the result.
+"""
+import os
+
+import numpy as np
+
+# Path templates the UI offers. "auto" derives the path from the lattice
+# symmetry; "custom" takes explicit fractional coordinates from the caller.
+PATH_AUTO = "auto"
+PATH_CUSTOM = "custom"
+PATH_TEMPLATES = ("hexagonal", "rectangular", "square")
+PATH_MODES = (PATH_AUTO, PATH_CUSTOM) + PATH_TEMPLATES
+
+TB_SCALAR = "Simple Scalar (Isotropic)"
+TB_SLATER_KOSTER = "Slater-Koster (Rigorous)"
+
+
+def build_kpath(engine, path_mode: str = PATH_AUTO, custom_coords: str = "",
+                custom_labels: str = "", points_per_segment: int = 100):
+    """
+    Produces the k-points to diagonalise along, in Cartesian reciprocal space.
+
+    High-symmetry points arrive in fractional coordinates and are converted
+    with the reciprocal lattice. Skipping that conversion silently misplaces
+    every high-symmetry point on a non-cubic lattice.
+    """
+    if path_mode not in PATH_MODES:
+        raise ValueError(f"Unknown path mode '{path_mode}'. Expected one of {PATH_MODES}.")
+
+    if path_mode == PATH_AUTO:
+        points, labels = engine.get_auto_kpath()
+    elif path_mode == PATH_CUSTOM:
+        points, labels = engine.get_custom_kpath(custom_coords, custom_labels)
+    else:
+        lattice = getattr(engine.crystal_structure, "lattice", None)
+        a = lattice.a if lattice is not None else 3.0
+        b = lattice.b if lattice is not None else 3.0
+        points, labels = engine.get_kpath_template(path_mode, a=a, b=b)
+
+    structure = engine.crystal_structure
+    if structure is not None and hasattr(structure, "lattice"):
+        points = np.dot(points, structure.lattice.reciprocal_lattice.matrix)
+
+    return engine.generate_k_path(points, labels, points_per_segment=points_per_segment)
+
+
+def pack_hopping(shell_keys, amplitudes) -> dict:
+    """
+    Pairs hopping amplitudes with the shell names for the loaded material.
+
+    The UI shows four anonymous t1..t4 boxes; the meaning of each comes from
+    the material's own shell list, so the pairing has to happen here rather
+    than being hard-coded.
+    """
+    return {key: float(value) for key, value in zip(shell_keys, amplitudes)}
+
+
+def read_fermi_energy(reference_path: str) -> float:
+    """
+    Recovers the Fermi level from Quantum ESPRESSO output beside a Wannier file.
+
+    Wannier90 eigenvalues are absolute, so without this shift the bands sit at
+    the wrong energy and zero is no longer the Fermi level. Returns 0.0 when no
+    output file is present, which is correct for a pure model calculation.
+    """
+    if not reference_path:
+        return 0.0
+
+    work_dir = os.path.dirname(reference_path)
+    for name in ("nscf.out", "scf.out"):
+        candidate = os.path.join(work_dir, name)
+        if not os.path.exists(candidate):
+            continue
+        energy = 0.0
+        with open(candidate, "r") as handle:
+            for line in handle:
+                if "the Fermi energy is" in line:
+                    energy = float(line.split()[4])
+        if energy != 0.0:
+            return energy
+    return 0.0
+
+
+def calculate_bands(engine, *, path_mode: str = PATH_AUTO, custom_coords: str = "",
+                    custom_labels: str = "", points_per_segment: int = 100,
+                    shell_keys=(), hoppings=(), cutoffs=(1.6, 2.6, 3.1, 4.5),
+                    onsite_e: float = 0.0, orbital_shifts=None,
+                    use_soc: bool = False, soc_strength: float = 0.5,
+                    tb_mode: str = TB_SCALAR, w90_filepath: str = None) -> dict:
+    """
+    Runs a 1D high-symmetry band structure and returns plain arrays.
+
+    `engine` must already hold a crystal structure. Energies come back shifted
+    so that zero is the Fermi level.
+    """
+    shifts = orbital_shifts or {"0": -10.0, "1": -2.0, "2": 0.0}
+
+    k_vecs, k_dist, node_idx, labels = build_kpath(
+        engine, path_mode, custom_coords, custom_labels, points_per_segment
+    )
+
+    eigenvalues, eigenvectors, orb_labels = engine.solve_bands(
+        k_vecs,
+        custom_hopping=pack_hopping(shell_keys, hoppings),
+        onsite_e=onsite_e,
+        use_soc=use_soc,
+        soc_strength=soc_strength,
+        w90_filepath=w90_filepath,
+        cutoffs=list(cutoffs),
+        tb_mode=tb_mode,
+        orbital_shifts=shifts,
+    )
+
+    fermi_energy = read_fermi_energy(w90_filepath)
+    eigenvalues = np.asarray(eigenvalues) - fermi_energy
+
+    return {
+        "k_vecs": np.asarray(k_vecs),
+        "k_dist": np.asarray(k_dist),
+        "eigenvalues": eigenvalues,
+        "eigenvectors": eigenvectors,
+        "node_idx": node_idx,
+        "labels": labels,
+        "orbital_labels": orb_labels,
+        "fermi_energy": fermi_energy,
+        "n_bands": int(eigenvalues.shape[1]) if eigenvalues.ndim == 2 else 0,
+    }

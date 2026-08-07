@@ -23,6 +23,20 @@ class DFTEngineRouter:
         """Proxies the workspace loading down to the tight binding engine."""
         return self.chinook.load_structure_from_workspace(variable_name)
 
+    def load_structure(self, structure) -> bool:
+        """
+        Loads a pymatgen Structure directly, bypassing the global workspace.
+
+        Served sessions each own a separate workspace, so they cannot go
+        through the module-level singleton the desktop app uses. The lattice is
+        deliberately not standardised: rotating it would misalign the Brillouin
+        zone against the k-path.
+        """
+        if structure is None:
+            return False
+        self.chinook.crystal_structure = structure
+        return True
+
     def get_qe_generator(self):
         """Returns the QE Input Generator initialized with the active structure."""
         if not self.crystal_structure:

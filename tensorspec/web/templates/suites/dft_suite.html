@@ -17,7 +17,7 @@
             <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
             <h1 class="suite-header__title">DFT &amp; Tight Binding Suite</h1>
             <div class="suite-header__spacer"></div>
-            <span class="badge">Static shell &mdash; not wired to core</span>
+            <span class="badge" id="dft-badge">Tight binding live</span>
         </header>
 
         <div class="suite-body suite-body--split">
@@ -32,12 +32,12 @@
                     <fieldset class="fieldset">
                         <legend>Crystal Structure (Workspace)</legend>
                         <div class="inline" style="margin-bottom:8px">
-                            <select class="field">
-                                <option>No structures available</option>
+                            <select class="field" id="dft-structures">
+                                <option value="">Loading&hellip;</option>
                             </select>
-                            <button type="button" class="btn" disabled>&#128260; Refresh</button>
+                            <button type="button" class="btn" id="dft-refresh">&#128260; Refresh</button>
                         </div>
-                        <button type="button" class="btn btn--block" disabled>&#128229; Load Basis into Engine</button>
+                        <p class="status-line" id="dft-status">Load a CIF in the Crystal Suite first.</p>
                     </fieldset>
 
                     <fieldset class="fieldset">
@@ -71,41 +71,26 @@
                             </div>
                         </div>
                         <div class="form-row">
-                            <label for="qe-outdir">Output Directory:</label>
-                            <input class="field field--mono" id="qe-outdir" type="text" value="./qe_workspace">
+                            <label for="qe-runname">Run Name:</label>
+                            <input class="field field--mono" id="qe-runname" type="text" value="run_01" disabled>
                         </div>
                         <div class="form-row">
                             <label>Parallel Execution:</label>
                             <div class="inline">
-                                <label class="check" style="margin:0"><input type="checkbox" checked> Use MPI</label>
-                                <input class="field field--num" type="number" min="1" max="256" value="16">
-                                <label>Cores</label>
+                                <label class="check" style="margin:0"><input type="checkbox" checked disabled> Use MPI</label>
+                                <input class="field field--num" type="number" min="1" max="8" value="4" disabled>
+                                <label>Ranks</label>
                             </div>
-                        </div>
-                        <div class="form-row">
-                            <label for="qe-pw">pw.x Command:</label>
-                            <input class="field field--mono" id="qe-pw" type="text" value="pw.x">
-                        </div>
-                        <div class="form-row">
-                            <label for="qe-w90">Wannier90 Command:</label>
-                            <input class="field field--mono" id="qe-w90" type="text" value="wannier90.x">
-                        </div>
-                        <div class="form-row">
-                            <label for="qe-pw2wan">pw2wan.x Command:</label>
-                            <input class="field field--mono" id="qe-pw2wan" type="text" value="pw2wannier90.x">
                         </div>
 
                         <button type="button" class="btn btn--block" disabled>&#128196; Generate Input Files</button>
+                        <button type="button" class="btn btn--block" disabled>&#11015; Download Bundle for HPC</button>
+                        <button type="button" class="btn btn--block" disabled>&#128640; Queue Run on Server</button>
 
-                        <div class="form-row form-row--stacked">
-                            <label for="qe-script">Pipeline Script:</label>
-                            <textarea class="field field--script" id="qe-script"
-                                placeholder="Click 'Generate Input Files' to auto-populate this bash script..."></textarea>
-                        </div>
-
-                        <button type="button" class="btn btn--block" disabled>&#128640; Run Script Locally</button>
-                        <p class="hint">The run log and the &#9208; Pause Viewer (Keep Running) toggle appear here once a
-                            script is running.</p>
+                        <p class="hint">Solver paths and the rank limit are set in server configuration, not here:
+                            the browser chooses whether to run, never what to run. Each run gets its own directory
+                            inside your session workspace. Use <em>Download Bundle</em> to take the generated inputs
+                            to your own HPC allocation.</p>
                     </fieldset>
 
                     <fieldset class="fieldset">
@@ -135,14 +120,14 @@
                         <div class="form-row">
                             <label>Relativistic:</label>
                             <div class="inline">
-                                <label class="check" style="margin:0"><input type="checkbox"> Enable Spin-Orbit Coupling</label>
-                                <input class="field field--num" type="number" min="0" max="5" step="0.1" value="0.5"
+                                <label class="check" style="margin:0"><input type="checkbox" id="tb-soc"> Enable Spin-Orbit Coupling</label>
+                                <input class="field field--num" id="tb-soc-val" type="number" min="0" max="5" step="0.1" value="0.5"
                                     title="SOC Strength (&#955;)" disabled>
                             </div>
                         </div>
                         <div class="form-row">
                             <label for="tb-fat">Fat Band Target:</label>
-                            <select class="field" id="tb-fat">
+                            <select class="field" id="tb-fat" disabled>
                                 <option>None (Standard Lines)</option>
                             </select>
                         </div>
@@ -181,63 +166,35 @@
                         <div class="form-row">
                             <label>Orbital Shifts:</label>
                             <div class="inline">
-                                <label>s:</label>
-                                <input class="field field--num" type="number" min="-50" max="50" step="0.5" value="-10.0"
+                                <label for="tb-shift-s">s:</label>
+                                <input class="field field--num" id="tb-shift-s" type="number" min="-50" max="50" step="0.5" value="-10.0"
                                     title="s-orbital on-site energy (eV)">
-                                <label>p:</label>
-                                <input class="field field--num" type="number" min="-50" max="50" step="0.5" value="-2.0"
+                                <label for="tb-shift-p">p:</label>
+                                <input class="field field--num" id="tb-shift-p" type="number" min="-50" max="50" step="0.5" value="-2.0"
                                     title="p-orbital on-site energy (eV)">
-                                <label>d:</label>
-                                <input class="field field--num" type="number" min="-50" max="50" step="0.5" value="0.0"
+                                <label for="tb-shift-d">d:</label>
+                                <input class="field field--num" id="tb-shift-d" type="number" min="-50" max="50" step="0.5" value="0.0"
                                     title="d-orbital on-site energy (eV)">
                             </div>
                         </div>
                         <div class="form-row">
                             <label>Y-Axis Zoom (eV):</label>
                             <div class="inline">
-                                <label>Min:</label>
-                                <input class="field field--num" type="number" min="-50" max="50" step="0.5" value="-6.0">
-                                <label>Max:</label>
-                                <input class="field field--num" type="number" min="-50" max="50" step="0.5" value="6.0">
+                                <label for="tb-emin">Min:</label>
+                                <input class="field field--num" id="tb-emin" type="number" min="-50" max="50" step="0.5" value="-6.0">
+                                <label for="tb-emax">Max:</label>
+                                <input class="field field--num" id="tb-emax" type="number" min="-50" max="50" step="0.5" value="6.0">
                             </div>
                         </div>
-                        <div class="form-row">
-                            <label>Hopping t1:</label>
-                            <div class="inline">
-                                <input class="field field--num" type="number" min="-10" max="10" step="0.1" value="2.7">
-                                <label>Max &#197;:</label>
-                                <input class="field field--num" type="number" min="0" max="10" step="0.1" value="1.6">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <label>Hopping t2:</label>
-                            <div class="inline">
-                                <input class="field field--num" type="number" min="-10" max="10" step="0.1" value="0.0">
-                                <label>Max &#197;:</label>
-                                <input class="field field--num" type="number" min="0" max="10" step="0.1" value="2.6">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <label>Hopping t3:</label>
-                            <div class="inline">
-                                <input class="field field--num" type="number" min="-10" max="10" step="0.1" value="0.0">
-                                <label>Max &#197;:</label>
-                                <input class="field field--num" type="number" min="0" max="10" step="0.1" value="3.1">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <label>Hopping t4:</label>
-                            <div class="inline">
-                                <input class="field field--num" type="number" min="-10" max="10" step="0.1" value="-0.3">
-                                <label>Max &#197;:</label>
-                                <input class="field field--num" type="number" min="0" max="15" step="0.1" value="4.5">
-                            </div>
+
+                        <h3 class="section-heading">Hopping Shells</h3>
+                        <div id="tb-shells">
+                            <p class="hint">Shell names and defaults come from the selected material.</p>
                         </div>
                     </fieldset>
 
-                    <button type="button" class="btn btn--primary" disabled>&#9881; Calculate Band Structure</button>
-                    <button type="button" class="btn btn--block" disabled>&#128228; Push Bands to Workspace</button>
-                    <button type="button" class="btn btn--block" disabled>&#128202; Load QE Ab-Initio Bands (XML)</button>
+                    <button type="button" class="btn btn--primary" id="dft-calculate" disabled>&#9881; Calculate Band Structure</button>
+                    <p class="hint">Bands are pushed to your session workspace automatically once solved.</p>
 
                 </div>
             </section>
@@ -249,11 +206,12 @@
                     <span class="badge">Matplotlib</span>
                 </div>
                 <div class="panel__body" style="padding:12px">
-                    <div class="canvas">
-                        <div class="canvas__glyph" aria-hidden="true">&#9636;</div>
-                        <p class="canvas__title">Band Structure Plot</p>
-                        <p class="canvas__meta">1D dispersion along the high-symmetry path (Energy (eV) vs. k) or the 2D
-                            isoenergy mesh, with fat-band orbital character and Wannier90 / ab-initio overlays.</p>
+                    <div class="viewport" id="dft-viewport" style="height:78vh;min-height:400px">
+                        <div class="canvas" id="dft-placeholder">
+                            <div class="canvas__glyph" aria-hidden="true">&#9636;</div>
+                            <p class="canvas__title">Band Structure Plot</p>
+                            <p class="canvas__meta">Select a crystal and press Calculate Band Structure.</p>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -262,8 +220,8 @@
 
         <footer class="statusbar">
             <div class="statusbar__group">
-                <span>Static shell &mdash; Phase 2</span>
-                <span>Solvers not connected</span>
+                <span id="dft-stat-bands">No calculation yet</span>
+                <span id="dft-stat-time">&mdash;</span>
             </div>
             <div class="statusbar__group">
                 <span>DFT Suite</span>
@@ -271,6 +229,9 @@
         </footer>
 
     </div>
+
+    <script src="../../static/js/api.js"></script>
+    <script type="module" src="../../static/js/dft_suite.js"></script>
 </body>
 
 </html>
