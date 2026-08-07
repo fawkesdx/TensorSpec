@@ -8,10 +8,18 @@ class QEInputGenerator:
     Core physics/math engine for generating Quantum Espresso (pw.x) and Wannier90 inputs.
     Zero GUI dependencies. Operates entirely independently of local executables.
     """
-    def __init__(self, structure: Structure):
+    def __init__(self, structure: Structure, pseudo_dir: str | None = None):
         self.structure = structure
         self.prefix = "tensorspec_run"
-        self.app_pseudo_dir = "./pseudo" 
+        # Default keeps the desktop layout; the web service passes an absolute
+        # path from server configuration so CWD never decides which pseudos load.
+        self.app_pseudo_dir = pseudo_dir or "./pseudo"
+
+    def _outdir_token(self, out_dir: str, relative_outdir: bool) -> str:
+        """QE's outdir= path: absolute for local runs, relative for portable bundles."""
+        if relative_outdir:
+            return "./out/"
+        return os.path.abspath(os.path.join(out_dir, "out")) + "/" 
         
     def _generate_atomic_species(self, out_dir: str, use_soc: bool = False) -> str:
         """Extracts unique elements, finds their UPF files based on SOC toggle, and copies them to the run directory."""
@@ -69,11 +77,11 @@ class QEInputGenerator:
                     kpts.append(f"  {x/kmesh[0]:.10f}  {y/kmesh[1]:.10f}  {z/kmesh[2]:.10f}")
         return kpts
 
-    def write_scf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), use_soc: bool = False):
+    def write_scf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), use_soc: bool = False, relative_outdir: bool = False):
         """Generates the main self-consistent field (SCF) input file."""
         os.makedirs(out_dir, exist_ok=True)
         scf_path = os.path.join(out_dir, "scf.in")
-        abs_out = os.path.abspath(os.path.join(out_dir, "out")) + "/"
+        outdir_token = self._outdir_token(out_dir, relative_outdir)
         
         ibrav = 0 
         nat = len(self.structure)
@@ -87,7 +95,7 @@ class QEInputGenerator:
         scf_content = f"""&CONTROL
   calculation = 'scf'
   prefix = '{self.prefix}'
-  outdir = '{abs_out}'
+  outdir = '{outdir_token}'
   pseudo_dir = './pseudo/'
   wf_collect = .true.
 /
@@ -119,10 +127,10 @@ K_POINTS {{automatic}}
             f.write(scf_content)
         return scf_path
 
-    def write_nscf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), nbnd: int = 12, use_soc: bool = False):
+    def write_nscf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), nbnd: int = 12, use_soc: bool = False, relative_outdir: bool = False):
         """Generates the non-self-consistent field (NSCF) input file with explicit k-points."""
         nscf_path = os.path.join(out_dir, "nscf.in")
-        abs_out = os.path.abspath(os.path.join(out_dir, "out")) + "/"
+        outdir_token = self._outdir_token(out_dir, relative_outdir)
         
         ibrav = 0  
         nat = len(self.structure)
@@ -139,7 +147,7 @@ K_POINTS {{automatic}}
         nscf_content = f"""&CONTROL
   calculation = 'nscf'
   prefix = '{self.prefix}'
-  outdir = '{abs_out}'
+  outdir = '{outdir_token}'
   pseudo_dir = './pseudo/'
   wf_collect = .true.
 /
@@ -249,13 +257,13 @@ end kpoints
             f.write(win_content)
         return win_path
 
-    def write_pw2wan_input(self, out_dir: str):
+    def write_pw2wan_input(self, out_dir: str, relative_outdir: bool = False):
         """Generates the bridge input file for pw2wannier90.x."""
         pw2wan_path = os.path.join(out_dir, "pw2wan.in")
-        abs_out = os.path.abspath(os.path.join(out_dir, "out")) + "/"
+        outdir_token = self._outdir_token(out_dir, relative_outdir)
         
         content = f"""&inputpp
-  outdir = '{abs_out}'
+  outdir = '{outdir_token}'
   prefix = '{self.prefix}'
   seedname = 'wannier90'
   write_mmn = .true.

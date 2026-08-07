@@ -90,6 +90,54 @@ class StructureOption(BaseModel):
     default_hoppings: list[float]
 
 
+class QERequest(BaseModel):
+    """Validated QE / Wannier90 parameters. No executable paths here."""
+
+    run_name: str = Field(default="run_01", min_length=1, max_length=64)
+    ecutwfc: float = Field(default=60.0, ge=20, le=200)
+    nbnd: int = Field(default=12, ge=1, le=500)
+    kx: int = Field(default=6, ge=1, le=20)
+    ky: int = Field(default=6, ge=1, le=20)
+    kz: int = Field(default=6, ge=1, le=20)
+    use_soc: bool = False
+    mlwf_mode: bool = False
+    use_mpi: bool = True
+    mpi_ranks: int = Field(default=4, ge=1, le=256)
+
+
+class QEGenerateResponse(BaseModel):
+    run_name: str
+    run_dir: str
+    files: list[str]
+    mpi_ranks_capped: int
+    max_mpi_ranks: int
+    solvers_available: bool
+
+
+class JobInfo(BaseModel):
+    job_id: str
+    run_name: str
+    status: str
+    current_step: int
+    total_steps: int
+    exit_code: int | None = None
+    error: str | None = None
+    created_at: float
+    started_at: float | None = None
+    finished_at: float | None = None
+
+
+class SolverStatus(BaseModel):
+    available: bool
+    pw: str | None = None
+    wannier90: str | None = None
+    pw2wannier90: str | None = None
+    mpirun: str | None = None
+    pseudo_dir: str | None = None
+    max_mpi_ranks: int
+    detail: str | None = None
+
+
 class AxisInfo(BaseModel):
     """One dimension of a tensor, as the axis pickers and sliders need it."""
 

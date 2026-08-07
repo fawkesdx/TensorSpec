@@ -111,6 +111,42 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
+        dftSolvers: () => request("/api/dft/solvers"),
+        qeGenerate: (name, payload) =>
+            request(`/api/dft/${encodeURIComponent(name)}/qe/generate`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        qeQueue: (name, payload) =>
+            request(`/api/dft/${encodeURIComponent(name)}/qe/queue`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        qeJob: (jobId) => request(`/api/dft/jobs/${encodeURIComponent(jobId)}`),
+        qeCancel: (jobId) =>
+            request(`/api/dft/jobs/${encodeURIComponent(jobId)}/cancel`, {
+                method: "POST",
+            }),
+        /* Binary zip download — returns a Blob the browser can save. */
+        qeBundle: async (name, payload) => {
+            const response = await fetch(`/api/dft/${encodeURIComponent(name)}/qe/bundle`, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) {
+                let detail = `${response.status} ${response.statusText}`;
+                try {
+                    const body = await response.json();
+                    if (body.detail) detail = body.detail;
+                } catch (err) {
+                    /* no JSON body */
+                }
+                throw new Error(detail);
+            }
+            return response.blob();
+        },
 
         tensorProfiles: (name, payload) =>
             request(`/api/arpes/${encodeURIComponent(name)}/profiles`, {
