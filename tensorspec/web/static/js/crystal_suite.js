@@ -42,6 +42,17 @@ const dom = {
     stMoire: el("st-moire"),
     stStatus: el("st-status"),
 
+    exSource: el("ex-source"),
+    exRefresh: el("ex-refresh"),
+    exMode: el("ex-mode"),
+    exMiller: el("ex-miller-opts"),
+    exLayers: el("ex-layers"),
+    exVacuum: el("ex-vacuum"),
+    exH: el("ex-h"),
+    exK: el("ex-k"),
+    exL: el("ex-l"),
+    exRun: el("ex-run"),
+
     bzOverlay: el("bz-overlay"),
     bzScale: el("bz-scale"),
     bzStyle: el("bz-style"),
@@ -139,6 +150,8 @@ async function onFileChosen(event) {
         dom.spacegroup.textContent =
             `Space Group: ${summary.spacegroup} \u2014 ${summary.formula}, ${summary.n_sites} sites`;
         await refreshGeometry({ frame: true });
+        await refreshExfoliateSources();
+        if (dom.exSource) dom.exSource.value = summary.name;
     } catch (err) {
         setStatus(err.message, true);
     } finally {
@@ -244,6 +257,86 @@ async function renderStack() {
     }
 }
 
+async function refreshExfoliateSources() {
+    if (!dom.exSource) return;
+    try {
+        const listing = await TensorSpecAPI.listItems();
+        const crystals = listing.items.filter((item) => /crystal/i.test(item.type));
+        const previous = dom.exSource.value || activeCrystal || "";
+        dom.exSource.innerHTML = "";
+        if (!crystals.length) {
+            dom.exSource.innerHTML = '<option value="">Load a CIF in Tab 1 first</option>';
+            return;
+        }
+        crystals.forEach((item) => {
+            const option = document.createElement("option");
+            option.value = item.name;
+            option.textContent = `${item.name} — ${item.dims}`;
+            dom.exSource.appendChild(option);
+        });
+        if ([...dom.exSource.options].some((o) => o.value === previous)) {
+            dom.exSource.value = previous;
+        }
+    } catch (err) {
+        setStackStatus(err.message, true);
+    }
+}
+
+function syncExfoliateMode() {
+    const miller = dom.exMode.value === "miller";
+    dom.exMiller.hidden = !miller;
+}
+
+async function runExfoliate() {
+    const source = dom.exSource.value;
+    if (!source) {
+        setStackStatus("Load a bulk CIF in Tab 1, then pick it as the source.", true);
+        return;
+    }
+    const mode = dom.exMode.value;
+    setStackStatus(`Exfoliating ${source} (${mode})\u2026`);
+    try {
+        const result = await TensorSpecAPI.crystalExfoliate({
+            source_name: source,
+            mode,
+            h: Number(dom.exH.value) || 0,
+            k: Number(dom.exK.value) || 0,
+            l: Number(dom.exL.value) || 1,
+            num_layers: Number(dom.exLayers.value) || 1,
+            vacuum: Number(dom.exVacuum.value) || 15,
+        });
+        const summary = result.summary;
+        const zShift = stackLayers.length
+            ? Math.max(...stackLayers.map((layer) => layer.z_shift)) + 3.4
+            : 0;
+        stackLayers.push({
+            name: summary.name,
+            label: `${summary.name} (${summary.formula})`,
+            sc_x: 1,
+            sc_y: 1,
+            z_shift: Number(zShift.toFixed(1)),
+            twist: 0,
+        });
+        renderLayerRows();
+
+        activeCrystal = summary.name;
+        await refreshGeometry({ frame: true });
+        await refreshExfoliateSources();
+        if (dom.exSource) dom.exSource.value = summary.name;
+
+        const gapNote = result.gap_angstrom != null
+            ? `; vdW gap ${result.gap_angstrom.toFixed(2)} Å`
+            : "";
+        const hklNote = result.hkl
+            ? `; [${result.hkl.join(" ")}], ${result.num_layers} layer(s)`
+            : "";
+        setStackStatus(`Extracted ${summary.name} (${summary.n_sites} sites${gapNote}${hklNote})`);
+        setStatus(`${summary.name} active`);
+    } catch (err) {
+        setStackStatus(err.message, true);
+    }
+}
+
 async function calculateMoire() {
     if (stackLayers.length !== 2) {
         setStackStatus("Moiré needs exactly two layers.", true);
@@ -323,6 +416,9 @@ dom.radius.addEventListener("change", () => {
 dom.stAdd.addEventListener("click", addTemplate);
 dom.stRender.addEventListener("click", renderStack);
 dom.stMoire.addEventListener("click", calculateMoire);
+dom.exRefresh.addEventListener("click", refreshExfoliateSources);
+dom.exMode.addEventListener("change", syncExfoliateMode);
+dom.exRun.addEventListener("click", runExfoliate);
 dom.bzRender.addEventListener("click", renderBZ);
 dom.bzClear.addEventListener("click", () => {
     if (viewer) viewer.clearBrillouinZone();
@@ -330,6 +426,8 @@ dom.bzClear.addEventListener("click", () => {
 });
 
 renderLayerRows();
+syncExfoliateMode();
+refreshExfoliateSources();
 
 TensorSpecAPI.health()
     .then((info) => {

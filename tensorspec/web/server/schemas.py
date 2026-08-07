@@ -327,6 +327,28 @@ class MoireResult(BaseModel):
     envelope: list[list[float]] | None = None
 
 
+class ExfoliateRequest(BaseModel):
+    """Bulk → monolayer (or N-layer) cleave for the Stack & Twist tab."""
+
+    source_name: str = Field(min_length=1, max_length=64)
+    mode: Literal["vdw", "miller"] = "vdw"
+    h: int = Field(default=0, ge=-10, le=10)
+    k: int = Field(default=0, ge=-10, le=10)
+    l: int = Field(default=1, ge=-10, le=10)
+    num_layers: int = Field(default=1, ge=1, le=10)
+    vacuum: float = Field(default=15.0, ge=0, le=100)
+    store_as: str = Field(default="", max_length=64)
+
+
+class ExfoliateResult(BaseModel):
+    summary: CrystalSummary
+    mode: str
+    gap_angstrom: float | None = None
+    hkl: list[int] | None = None
+    num_layers: int | None = None
+    vacuum: float | None = None
+
+
 class AxisBound(BaseModel):
     min: float = Field(default=-2.0, ge=-20, le=20)
     max: float = Field(default=2.0, ge=-20, le=20)

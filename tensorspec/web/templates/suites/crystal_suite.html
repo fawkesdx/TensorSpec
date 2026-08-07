@@ -256,9 +256,49 @@
                                 <button type="button" class="btn btn--block" id="st-add-template">&#10133; Add Template Sheet</button>
                             </fieldset>
 
+                            <fieldset class="fieldset">
+                                <legend>Bulk Exfoliator</legend>
+                                <div class="form-row form-row--stacked">
+                                    <label for="ex-source">Source crystal (workspace):</label>
+                                    <div class="inline">
+                                        <select class="field" id="ex-source" style="flex:1">
+                                            <option value="">Load a CIF in Tab 1 first</option>
+                                        </select>
+                                        <button type="button" class="btn" id="ex-refresh" title="Refresh crystal list">&#128260;</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label for="ex-mode">Mode:</label>
+                                    <select class="field" id="ex-mode">
+                                        <option value="vdw">Auto-Detect van der Waals Gap</option>
+                                        <option value="miller">Manual [h k l] Cleavage</option>
+                                    </select>
+                                </div>
+                                <div id="ex-miller-opts" hidden>
+                                    <div class="form-row">
+                                        <label for="ex-layers">Layers:</label>
+                                        <input class="field field--num" id="ex-layers" type="number" min="1" max="10" value="1">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ex-vacuum">Vacuum (&#197;):</label>
+                                        <input class="field" id="ex-vacuum" type="number" min="0" max="100" step="1" value="15">
+                                    </div>
+                                    <div class="form-row">
+                                        <label>Plane [h k l]:</label>
+                                        <div class="inline">
+                                            <input class="field field--num" id="ex-h" type="number" min="-10" max="10" value="0">
+                                            <input class="field field--num" id="ex-k" type="number" min="-10" max="10" value="0">
+                                            <input class="field field--num" id="ex-l" type="number" min="-10" max="10" value="1">
+                                        </div>
+                                    </div>
+                                </div>
+                                <button type="button" class="btn btn--block" id="ex-run">&#9986; Extract Monolayer from Bulk</button>
+                                <p class="hint">Result is added to the stack below and previewed in the viewport.</p>
+                            </fieldset>
+
                             <h3 class="section-heading">Stacked Layers</h3>
                             <div id="st-layers"></div>
-                            <p class="hint">Add templates, set SC / z / &#952;, then render. Moir&#233; needs exactly two layers.</p>
+                            <p class="hint">Add templates or exfoliated sheets, set SC / z / &#952;, then render. Moir&#233; needs exactly two layers.</p>
 
                             <button type="button" class="btn btn--block" id="st-render">&#129521; Render Heterostructure Stack</button>
                             <button type="button" class="btn btn--block" id="st-moire">&#127744; Calculate Moir&#233; Superlattice</button>

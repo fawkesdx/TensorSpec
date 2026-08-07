@@ -20,6 +20,8 @@ from tensorspec.web.server.schemas import (
     BZRequest,
     CrystalGeometry,
     CrystalSummary,
+    ExfoliateRequest,
+    ExfoliateResult,
     GeometryRequest,
     MoireRequest,
     MoireResult,
@@ -250,6 +252,55 @@ def compute_moire(
         n_cells=result.get("n_cells"),
         matrix=[[float(v) for v in row] for row in matrix] if matrix is not None else None,
         envelope=envelope,
+    )
+
+
+@router.post("/exfoliate", response_model=ExfoliateResult)
+def exfoliate_bulk(
+    request: ExfoliateRequest,
+    session: Session = Depends(current_session),
+) -> ExfoliateResult:
+    """Cleave a bulk crystal into a monolayer / N-layer sheet for stacking."""
+    bulk = _require_structure(session, request.source_name)
+    gap = None
+    hkl = None
+
+    try:
+        if request.mode == "vdw":
+            mono, gap = CrystalEngine.extract_monolayer_vdw(bulk)
+            default_name = f"{request.source_name}_vdW_mono"
+        else:
+            hkl = (request.h, request.k, request.l)
+            mono = CrystalEngine.extract_monolayer_miller(
+                bulk,
+                hkl,
+                num_layers=request.num_layers,
+                vacuum=request.vacuum,
+            )
+            default_name = (
+                f"{request.source_name}_{request.num_layers}L_"
+                f"{request.h}{request.k}{request.l}"
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Exfoliation failed: {exc}")
+
+    if len(mono) > MAX_RENDER_ATOMS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{len(mono)} atoms exceeds the {MAX_RENDER_ATOMS} the browser can draw.",
+        )
+
+    label = _safe_label(request.store_as or default_name, "monolayer")
+    summary = _store(session, label, mono)
+    return ExfoliateResult(
+        summary=summary,
+        mode=request.mode,
+        gap_angstrom=float(gap) if gap is not None else None,
+        hkl=[int(v) for v in hkl] if hkl is not None else None,
+        num_layers=request.num_layers if request.mode == "miller" else 1,
+        vacuum=request.vacuum if request.mode == "miller" else None,
     )
 
 

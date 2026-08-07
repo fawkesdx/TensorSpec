@@ -89,6 +89,11 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
+        crystalExfoliate: (payload) =>
+            request("/api/crystal/exfoliate", {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
 
         tensorAxes: (name) =>
             request(`/api/arpes/${encodeURIComponent(name)}/axes`),
