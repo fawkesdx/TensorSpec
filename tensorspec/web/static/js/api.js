@@ -68,6 +68,27 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
+        crystalBZ: (name, payload = {}) =>
+            request(`/api/crystal/${encodeURIComponent(name)}/bz`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        crystalTemplates: () => request("/api/crystal/templates"),
+        crystalAddTemplate: (payload) =>
+            request("/api/crystal/templates", {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        crystalStack: (payload) =>
+            request("/api/crystal/stack", {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        crystalMoire: (payload) =>
+            request("/api/crystal/moire", {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
 
         tensorAxes: (name) =>
             request(`/api/arpes/${encodeURIComponent(name)}/axes`),

@@ -209,7 +209,7 @@ class CrystalSummary(BaseModel):
 
 
 class GeometryRequest(BaseModel):
-    """Supercell and bonding options for a geometry render.
+    """Supercell, bonding, and optional CDW options for a geometry render.
 
     Bounds mirror the Crystal Suite spin boxes. The supercell cap keeps a
     stray large request from building millions of atoms on a shared server.
@@ -220,6 +220,17 @@ class GeometryRequest(BaseModel):
     nz: int = Field(default=1, ge=1, le=20)
     bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
     show_bonds: bool = True
+
+    # CDW: phase is degrees (the Qt path double-converted; the web path does not).
+    cdw_enabled: bool = False
+    cdw_target: str = Field(default="All Elements", max_length=32)
+    cdw_qx: float = Field(default=0.0, ge=-5, le=5)
+    cdw_qy: float = Field(default=0.0, ge=-5, le=5)
+    cdw_qz: float = Field(default=0.0, ge=-5, le=5)
+    cdw_ax: float = Field(default=0.0, ge=-2, le=2)
+    cdw_ay: float = Field(default=0.0, ge=-2, le=2)
+    cdw_az: float = Field(default=0.0, ge=-2, le=2)
+    cdw_phase: float = Field(default=0.0, ge=0, le=360)
 
     @property
     def cell_count(self) -> int:
@@ -252,3 +263,65 @@ class CrystalGeometry(BaseModel):
     center: list[float]
     elements: list[str]
     n_atoms: int
+    # Heterostructure stacks sit in a 500 Å dummy cell; the frame is meaningless.
+    show_cell: bool = True
+
+
+class BZRequest(BaseModel):
+    scale: float = Field(default=1.0, ge=0.1, le=10)
+    style: Literal["solid", "skeleton", "both"] = "solid"
+    surface: bool = False
+    h: int = Field(default=0, ge=-10, le=10)
+    k: int = Field(default=0, ge=-10, le=10)
+    l: int = Field(default=1, ge=-10, le=10)
+    overlay_crystal: bool = True
+
+
+class BZGeometry(BaseModel):
+    name: str
+    hull_points: list[list[float]]
+    simplices: list[list[int]]
+    edges: list[list[list[float]]]
+    scale: float
+    style: str
+    surface_vertices: list[list[float]] | None = None
+    surface_simplices: list[list[int]] | None = None
+    projection_lines: list[list[list[float]]] | None = None
+
+
+class TemplateRequest(BaseModel):
+    template_name: str = Field(min_length=1, max_length=128)
+    store_as: str = Field(default="", max_length=64)
+
+
+class StackLayerSpec(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    sc_x: int = Field(default=1, ge=1, le=50)
+    sc_y: int = Field(default=1, ge=1, le=50)
+    z_shift: float = Field(default=0.0, ge=-100, le=100)
+    twist: float = Field(default=0.0, ge=-360, le=360)
+
+
+class StackRequest(BaseModel):
+    layers: list[StackLayerSpec] = Field(min_length=1, max_length=20)
+    store_as: str = Field(default="heterostructure", max_length=64)
+    bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
+    show_bonds: bool = True
+
+
+class MoireRequest(BaseModel):
+    layer1: str = Field(min_length=1, max_length=64)
+    layer2: str = Field(min_length=1, max_length=64)
+    twist1: float = Field(default=0.0, ge=-360, le=360)
+    twist2: float = Field(default=0.0, ge=-360, le=360)
+    z_min: float = Field(default=-5.0, ge=-100, le=100)
+    z_max: float = Field(default=5.0, ge=-100, le=100)
+
+
+class MoireResult(BaseModel):
+    status: str
+    message: str | None = None
+    periodicity: float | None = None
+    n_cells: int | None = None
+    matrix: list[list[float]] | None = None
+    envelope: list[list[float]] | None = None
