@@ -17,7 +17,7 @@
             <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
             <h1 class="suite-header__title">ARPES Suite</h1>
             <div class="suite-header__spacer"></div>
-            <span class="badge">Static shell &mdash; not wired to core</span>
+            <span class="badge">Data Viewer live &mdash; simulator not yet wired</span>
         </header>
 
         <div class="tabs">
@@ -267,13 +267,13 @@
                                 <h2 class="panel__title">ARPES Workspace Memory</h2>
                             </div>
                             <div class="panel__body" style="padding:12px">
-                                <button type="button" class="btn btn--primary" disabled>&#128194; Load ARPES Data...</button>
+                                <button type="button" class="btn btn--primary" id="av-demo">&#10133; Seed Demo Cube</button>
                                 <h3 class="section-heading">ARPES Workspace Memory:</h3>
-                                <ul class="window-registry__list">
-                                    <li class="empty-state">No datasets in workspace</li>
+                                <ul class="window-registry__list" id="av-datasets">
+                                    <li class="empty-state">Loading&hellip;</li>
                                 </ul>
-                                <button type="button" class="btn btn--block" disabled style="margin-top:12px">&#128260; Refresh List</button>
-                                <p class="hint">Double-clicking a dataset loads it into the dashboard on the right.</p>
+                                <button type="button" class="btn btn--block" id="av-refresh" style="margin-top:12px">&#128260; Refresh List</button>
+                                <p class="hint">Click a dataset to load it into the dashboard on the right.</p>
                             </div>
                         </section>
 
@@ -281,74 +281,48 @@
                         <section class="panel">
                             <div class="panel__header">
                                 <h2 class="panel__title">Dynamic Cross-Correlated Dashboard</h2>
-                                <span class="badge">1 panel</span>
+                                <span class="badge" id="av-badge">No dataset</span>
                             </div>
                             <div class="panel__body" style="padding:12px">
 
                                 <div class="inline" style="margin-bottom:8px">
-                                    <label>X:</label>
-                                    <select class="field" style="width:auto">
-                                        <option>kx (Slit) (1/A)</option>
+                                    <label for="av-x">X:</label>
+                                    <select class="field" id="av-x" style="width:auto"></select>
+                                    <label for="av-y">Y:</label>
+                                    <select class="field" id="av-y" style="width:auto"></select>
+                                    <label class="check" style="margin:0"><input type="checkbox" id="av-profiles" checked> XY Profiles</label>
+                                    <select class="field" id="av-mode" style="width:auto">
+                                        <option value="sum">Raw (Sum)</option>
+                                        <option value="mean">Mean</option>
+                                        <option value="normalized">Normalized to Max</option>
                                     </select>
-                                    <label>Y:</label>
-                                    <select class="field" style="width:auto">
-                                        <option>Energy (eV)</option>
-                                    </select>
-                                    <label class="check" style="margin:0"><input type="checkbox"> XY Profiles</label>
-                                    <select class="field" style="width:auto">
-                                        <option>Raw (Sum)</option>
-                                        <option>Mean</option>
-                                        <option>Normalized to Max</option>
-                                    </select>
-                                    <button type="button" class="btn" disabled>&#128065; Toggle UI</button>
-                                    <button type="button" class="btn" disabled>&#10005;</button>
-                                    <label class="check" style="margin:0"
-                                        title="Lock crosshairs across all open windows with matching axes."><input
-                                            type="checkbox"> &#128279; Sync</label>
+                                    <label for="av-cmap">Colormap:</label>
+                                    <select class="field" id="av-cmap" style="width:auto"></select>
                                 </div>
 
                                 <div class="inline" style="margin-bottom:12px">
-                                    <label>&#916;X:</label>
-                                    <input class="field field--num" type="number" min="0" max="100" value="0">
-                                    <input type="range" min="0" max="100" value="0" style="width:50px">
-                                    <label>&#916;Y:</label>
-                                    <input class="field field--num" type="number" min="0" max="100" value="0">
-                                    <input type="range" min="0" max="100" value="0" style="width:50px">
+                                    <label for="av-dx">&#916;X:</label>
+                                    <input class="field field--num" id="av-dx" type="number" min="0" max="100" value="0">
+                                    <label for="av-dy">&#916;Y:</label>
+                                    <input class="field field--num" id="av-dy" type="number" min="0" max="100" value="0">
                                     <span style="color:var(--text-dim)">|</span>
-                                    <label class="check" style="margin:0"><input type="checkbox"> Extract Orthogonal:</label>
-                                    <select class="field" style="width:auto" disabled>
-                                        <option>ky (Deflection) (1/A)</option>
-                                    </select>
+                                    <label class="check" style="margin:0"><input type="checkbox" id="av-ortho-on"> Extract Orthogonal:</label>
+                                    <select class="field" id="av-ortho" style="width:auto" disabled></select>
+                                    <span style="color:var(--text-dim)">|</span>
+                                    <span class="hint" id="av-readout" style="margin:0">&mdash;</span>
                                 </div>
 
                                 <div class="viewer-grid">
-                                    <div class="canvas">
-                                        <div class="canvas__glyph" aria-hidden="true">&#9635;</div>
-                                        <p class="canvas__title">Main Slice</p>
-                                        <p class="canvas__meta">2D colormap with cyan crosshair and &#916;X/&#916;Y
-                                            integration window.</p>
-                                    </div>
-                                    <div class="canvas">
-                                        <p class="canvas__meta">Y profile</p>
-                                    </div>
-                                    <div class="canvas">
-                                        <p class="canvas__meta">X profile</p>
-                                    </div>
-                                    <div class="canvas">
-                                        <p class="canvas__meta">Ortho</p>
-                                    </div>
+                                    <div class="viewport" id="av-main"></div>
+                                    <div class="viewport" id="av-prof-y"></div>
+                                    <div class="viewport" id="av-prof-x"></div>
+                                    <div class="viewport" id="av-prof-ortho"></div>
                                 </div>
 
                                 <h3 class="section-heading">Dimension Sliders</h3>
-                                <div class="form-row">
-                                    <label>Energy:</label>
-                                    <div class="inline" style="flex:1">
-                                        <input class="field field--num" type="number" step="0.001" value="0.000">
-                                        <input type="range" min="0" max="100" value="50" style="flex:1">
-                                    </div>
+                                <div id="av-sliders">
+                                    <p class="hint">One row appears per tensor dimension not assigned to X or Y.</p>
                                 </div>
-                                <p class="hint">One row is generated per tensor dimension not assigned to X or Y.
-                                    Right-click a panel for snap, de-snap, and reattach actions (Phase 3).</p>
 
                             </div>
                         </section>
@@ -361,8 +335,8 @@
 
         <footer class="statusbar">
             <div class="statusbar__group">
-                <span>Static shell &mdash; Phase 2</span>
-                <span>Physics router not connected</span>
+                <span id="av-stat-shape">No tensor loaded</span>
+                <span id="av-stat-window">&mdash;</span>
             </div>
             <div class="statusbar__group">
                 <span>ARPES Suite</span>
@@ -370,6 +344,9 @@
         </footer>
 
     </div>
+
+    <script src="../../static/js/api.js"></script>
+    <script type="module" src="../../static/js/arpes_suite.js"></script>
 </body>
 
 </html>

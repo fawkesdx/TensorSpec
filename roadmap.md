@@ -13,7 +13,9 @@ re-implementation in HTML. Do not treat a checked box as a finished screen.
     - [x] Slice 1 — Session backbone: FastAPI app, per-session workspace, live variable tree
     - [x] Slice 2a — Crystal Suite Tab 1: CIF load, geometry as JSON, three.js viewport
     - [ ] Slice 2b — Crystal Suite Tabs 2-4: CDW modulator, stack & twist, Brillouin zone
-    - [ ] Slice 3 — ARPES viewer: server-side slicing, linked crosshairs, EDC/MDC panels
+    - [x] Slice 3a — ARPES viewer: server-side slicing, crosshair, EDC/MDC/orthogonal curves
+    - [ ] Slice 3b — ARPES viewer extras: multi-panel snap grid, cross-dataset crosshair sync,
+          profile export (CSV/PDF), and the matrix-element simulator tab
     - [ ] Slice 4 — DFT Suite: band plots, QE job queue, live log stream, command allowlist
 - [ ] Phase 4 — Cross-cutting requirements, delivered across the slices above.
       Deployment target: shared server on the LBL VPN, multiple simultaneous users.
@@ -26,7 +28,8 @@ re-implementation in HTML. Do not treat a checked box as a finished screen.
     - [x] three.js viewport: Python emits atom positions, bonds, and BZ facets as JSON;
           the browser renders and rotates them. `crystallography.py` keeps all geometry math
           (three.js is vendored in `web/static/vendor/`, so no CDN is needed on the VPN)
-    - [ ] Server-side slicing/downsampling so 3D and 4D tensors are never shipped whole
+    - [x] Server-side slicing/downsampling so 3D and 4D tensors are never shipped whole
+          (`core/tensor_ops.py`; planes travel as framed float32, not JSON text)
     - [ ] Command hardening: never build shell commands from raw user input;
           allowlist solver executables and server-control the output directory
 - [ ] Phase 5 — Qt teardown: delete `tensorspec/gui/` and `plotting/viewers/`, drop PySide6 / PyQt6 / pyvistaqt / QtPy / shiboken6 from `requirements.txt`
