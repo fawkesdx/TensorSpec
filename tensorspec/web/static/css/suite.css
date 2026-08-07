@@ -409,12 +409,19 @@ input[type="color"] {
     grid-template-columns: 4fr 1fr;
     grid-template-rows: 4fr 1fr;
     gap: var(--sp-2);
-    height: 100%;
-    min-height: 320px;
+    height: 62vh;
+    min-height: 380px;
 }
 
 .viewer-grid .canvas {
     min-height: 90px;
+}
+
+/* Grid cells must not be sized by their canvas, or a repaint can grow the
+   row it lives in and trigger another repaint. */
+.viewer-grid .viewport {
+    min-width: 0;
+    min-height: 0;
 }
 
 .log-area {
