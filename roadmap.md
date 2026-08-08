@@ -110,7 +110,7 @@ Grand App
 		- [x] `/processed`: Store transformed coordinate cubes (e.g., interpolated $E, k_x, k_y$ volumes, curvature analysis, or normalization).
 			- [x] In-plane angle → k∥ Process tab (user Γ center via click/drag, Suggest assist, Apply → new dataset + `/processed`)
 			- [x] Overlay projected surface BZ from workspace crystal (Crystal Suite Tab 4 machinery)
-			- [ ] Photon-energy → kz module (Vo slider + perpendicular BZ)
+			- [x] Photon-energy → kz module (Vo slider + perpendicular BZ)
 		- [ ] `/analysis`: Attach mathematical model outputs (e.g., `/analysis/mdc_peakfit` or `/analysis/edc_peakfit` containing Lorentzian parameters and residuals).
 		- [x] `/history`: Append sequential audit trail logs of every functional transformation applied to the dataset.
 	- [ ] once the data is loaded, there is option to launch a general viewer where it will plot the data according to the kind of data

@@ -198,6 +198,35 @@ class InplaneApplyRequest(InplaneConvertRequest):
     also_write_processed: bool = True
 
 
+class KzConvertRequest(BaseModel):
+    """Photon-energy → kz conversion with live inner potential."""
+
+    photon_axis: int = Field(ge=0, le=15)
+    work_function: float = Field(default=4.5, ge=0, le=10)
+    inner_potential: float = Field(default=15.0, ge=0, le=50)
+    theta_deg: float = Field(default=0.0, ge=-90, le=90)
+    binding_ref: float = Field(default=0.0, ge=-5, le=50)
+    include_photon_momentum: bool = False
+    photon_incidence_angle: float = Field(default=45.0, ge=0, le=90)
+    x_idx: int = Field(default=0, ge=0, le=15)
+    y_idx: int = Field(default=1, ge=0, le=15)
+    fixed: dict[int, int] = Field(default_factory=dict)
+    max_points: int = Field(default=512, ge=32, le=2048)
+
+
+class KzApplyRequest(KzConvertRequest):
+    store_as: str = Field(default="", max_length=64)
+    also_write_processed: bool = True
+
+
+class PerpBZRequest(BaseModel):
+    crystal_name: str = Field(min_length=1, max_length=64)
+    h: int = Field(default=0, ge=-10, le=10)
+    k: int = Field(default=0, ge=-10, le=10)
+    l: int = Field(default=1, ge=-10, le=10)
+    n_zones: int = Field(default=4, ge=1, le=12)
+
+
 class SuggestCenterRequest(BaseModel):
     angle_axis: int = Field(ge=0, le=15)
     energy_axis: int | None = Field(default=None, ge=0, le=15)

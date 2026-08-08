@@ -938,10 +938,33 @@ const processState = {
     rawHeader: null,
     fixedAxis: null,
     bzPolygon: null,
+    perpBz: null,
     rawViewer: null,
     kViewer: null,
     debounce: null,
+    mode: "inplane",
 };
+
+function processMode() {
+    return el("ap-mode")?.value || "inplane";
+}
+
+function syncProcessModeUI() {
+    const mode = processMode();
+    processState.mode = mode;
+    const kz = mode === "kz";
+    el("ap-inplane-controls").hidden = kz;
+    el("ap-kz-controls").hidden = !kz;
+    el("ap-bz-inplane-row").hidden = kz;
+    el("ap-bz-inplane-row").style.display = kz ? "none" : "flex";
+    el("ap-bz-perp-row").hidden = !kz;
+    el("ap-bz-perp-row").style.display = kz ? "flex" : "none";
+    el("ap-raw-title").textContent = kz ? "Raw (hv scan)" : "Raw (set Γ)";
+    el("ap-k-title").textContent = kz ? "kz preview" : "k∥ preview";
+    el("ap-status").textContent = kz
+        ? "Drag the Vo slider — kz preview updates live. Toggle ⊥ BZ to judge Vo."
+        : "Click the raw map to set Γ. Preview updates on the right.";
+}
 
 function processEnsureViewers() {
     if (!processState.rawViewer) {
@@ -1015,11 +1038,23 @@ async function refreshProcessCrystals() {
 }
 
 function processViewAxes(roles) {
+    const mode = processMode();
+    if (mode === "kz") {
+        if (roles.photon_axis == null) {
+            return { xIdx: 0, yIdx: Math.min(1, roles.shape.length - 1) };
+        }
+        // Prefer Energy × Photon (then kz); else Angle × Photon.
+        let xIdx = roles.photon_axis;
+        let yIdx = roles.energy_axis != null ? roles.energy_axis : roles.angle_axis;
+        if (yIdx == null || yIdx === xIdx) {
+            yIdx = xIdx === 0 ? 1 : 0;
+        }
+        return { xIdx, yIdx };
+    }
     // Prefer angle on X and energy on Y for cuts; for maps prefer angle × beta.
     let xIdx = roles.angle_axis;
     let yIdx = roles.energy_axis != null ? roles.energy_axis : 0;
     if (roles.beta_axis != null && roles.energy_axis != null) {
-        // Fermi-style cube: show angle × beta at fixed energy via slider.
         xIdx = roles.angle_axis;
         yIdx = roles.beta_axis;
     }
@@ -1067,6 +1102,29 @@ function convertPayload() {
     };
 }
 
+function kzPayload() {
+    const roles = processState.roles;
+    const { xIdx, yIdx } = processViewAxes(roles);
+    processState.viewX = xIdx;
+    processState.viewY = yIdx;
+    if (roles.photon_axis == null) {
+        throw new Error("This dataset has no Photon Energy axis — load an hv scan.");
+    }
+    return {
+        photon_axis: roles.photon_axis,
+        work_function: Number(el("ap-kz-phi").value),
+        inner_potential: Number(el("ap-vo").value),
+        theta_deg: Number(el("ap-kz-theta").value),
+        binding_ref: Number(el("ap-kz-eb").value),
+        include_photon_momentum: el("ap-kz-q").checked,
+        photon_incidence_angle: 45,
+        x_idx: xIdx,
+        y_idx: yIdx,
+        fixed: processFixed(roles, xIdx, yIdx),
+        max_points: 512,
+    };
+}
+
 function scheduleProcessPreview() {
     clearTimeout(processState.debounce);
     processState.debounce = setTimeout(() => {
@@ -1079,23 +1137,35 @@ function scheduleProcessPreview() {
 async function loadProcessDataset(name) {
     if (!name) return;
     processEnsureViewers();
+    syncProcessModeUI();
     const roles = await TensorSpecAPI.processRoles(name);
     processState.roles = roles;
-    el("ap-meta").textContent = `${roles.data_type} · ${roles.shape.join("×")} · ${roles.labels.join(", ")}`;
+    const photonNote =
+        roles.photon_axis != null
+            ? ` · photon ${roles.labels[roles.photon_axis]}`
+            : "";
+    el("ap-meta").textContent = `${roles.data_type} · ${roles.shape.join("×")} · ${roles.labels.join(", ")}${photonNote}`;
     el("ap-center").value = String(roles.center);
     el("ap-beta-center").value = String(roles.beta_center);
     el("ap-dpu").value = String(roles.deg_per_unit);
     el("ap-beta-dpu").value = String(roles.beta_deg_per_unit);
     el("ap-hv").value = String(roles.photon_energy);
     el("ap-phi").value = String(roles.work_function);
-    el("ap-store").value = `${name}_k`;
+    el("ap-kz-phi").value = String(roles.work_function);
+    el("ap-vo").value = String(roles.inner_potential ?? 15);
+    el("ap-vo-slider").value = String(roles.inner_potential ?? 15);
+    el("ap-store").value = processMode() === "kz" ? `${name}_kz` : `${name}_k`;
     el("ap-raw-badge").textContent = name;
+
+    if (processMode() === "kz" && roles.photon_axis == null) {
+        el("ap-status").textContent =
+            "No Photon Energy axis on this dataset — pick an hv-dependent scan.";
+    }
 
     const { xIdx, yIdx } = processViewAxes(roles);
     processState.viewX = xIdx;
     processState.viewY = yIdx;
 
-    // Extra-axis slider (usually Energy for Fermi maps)
     const slider = el("ap-fixed-slider");
     let fixedDim = null;
     for (let i = 0; i < roles.shape.length; i++) {
@@ -1109,6 +1179,7 @@ async function loadProcessDataset(name) {
         slider.min = 0;
         slider.max = 0;
         el("ap-fixed-label").textContent = "No extra axis";
+        processState.fixedAxis = null;
     } else {
         slider.disabled = false;
         slider.min = 0;
@@ -1127,12 +1198,16 @@ async function loadProcessDataset(name) {
     });
     processState.rawHeader = raw.header;
     processState.rawViewer.setData(raw.header, raw.values);
-    const centerXi = nearestIndex(raw.header.x_axis, Number(el("ap-center").value));
-    processState.rawViewer.setCrosshair(centerXi, Math.floor(raw.header.shape[0] / 2));
-    processState.rawViewer.setOverlays({
-        vlines: xIdx === roles.angle_axis ? [Number(el("ap-center").value)] : [],
-        hlines: yIdx === roles.angle_axis ? [Number(el("ap-center").value)] : [],
-    });
+    if (processMode() === "inplane") {
+        const centerXi = nearestIndex(raw.header.x_axis, Number(el("ap-center").value));
+        processState.rawViewer.setCrosshair(centerXi, Math.floor(raw.header.shape[0] / 2));
+        processState.rawViewer.setOverlays({
+            vlines: xIdx === roles.angle_axis ? [Number(el("ap-center").value)] : [],
+            hlines: yIdx === roles.angle_axis ? [Number(el("ap-center").value)] : [],
+        });
+    } else {
+        processState.rawViewer.setOverlays({ polygons: [], vlines: [], hlines: [] });
+    }
     await updateProcessPreview();
 }
 
@@ -1140,12 +1215,40 @@ async function updateProcessPreview() {
     const name = el("ap-dataset").value;
     if (!name || !processState.roles) return;
     processEnsureViewers();
+
+    if (processMode() === "kz") {
+        const payload = kzPayload();
+        const preview = await TensorSpecAPI.processKzPreview(name, payload);
+        processState.kViewer.setData(preview.header, preview.values);
+        el("ap-k-badge").textContent = `Vo ${Number(preview.header.inner_potential).toFixed(1)} eV · kz [${Number(
+            preview.header.kz_min
+        ).toFixed(2)}, ${Number(preview.header.kz_max).toFixed(2)}]`;
+
+        const kOverlays = { polygons: [], vlines: [], hlines: [] };
+        if (el("ap-perp-bz-toggle").checked && processState.perpBz) {
+            const half = Number(processState.perpBz.half_g);
+            const onX = preview.header.x_label === "kz";
+            const onY = preview.header.y_label === "kz";
+            const lo = onX ? preview.header.extent[0] : preview.header.extent[2];
+            const hi = onX ? preview.header.extent[1] : preview.header.extent[3];
+            const n0 = Math.floor(Math.min(lo, hi) / half) - 1;
+            const n1 = Math.ceil(Math.max(lo, hi) / half) + 1;
+            const lines = [];
+            for (let n = n0; n <= n1; n++) lines.push(n * half);
+            if (onX) kOverlays.vlines = lines;
+            if (onY) kOverlays.hlines = lines;
+        }
+        processState.kViewer.setOverlays(kOverlays);
+        processState.rawViewer.setOverlays({ polygons: [], vlines: [], hlines: [] });
+        el("ap-status").textContent = `kz preview · Vo=${Number(el("ap-vo").value).toFixed(1)} eV`;
+        return;
+    }
+
     const payload = convertPayload();
     const preview = await TensorSpecAPI.processInplanePreview(name, payload);
     processState.kViewer.setData(preview.header, preview.values);
     el("ap-k-badge").textContent = `Eₖ ref ${Number(preview.header.e_kin_ref).toFixed(2)} eV`;
 
-    // Center marker on raw
     const roles = processState.roles;
     const overlays = {
         vlines: [],
@@ -1163,7 +1266,6 @@ async function updateProcessPreview() {
     const kOverlays = { polygons: [], vlines: [0], hlines: roles.beta_axis != null ? [0] : [] };
     if (el("ap-bz-toggle").checked && processState.bzPolygon) {
         const poly = processState.bzPolygon;
-        // Map BX polygon onto current view axes (kx on X or Y).
         const pts = poly.kx.map((kx, i) => {
             const ky = poly.ky[i];
             let x = kx;
@@ -1172,8 +1274,6 @@ async function updateProcessPreview() {
             if (preview.header.y_label === "kx") y = kx;
             if (preview.header.x_label === "kx") x = kx;
             if (preview.header.y_label === "ky") y = ky;
-            // Cuts: only kx on one axis — draw vertical BZ edge span as polygon in kx only is weak;
-            // still draw full polygon projected to view: use kx vs ky when both present, else kx vs mid-y.
             if (preview.header.y_label === "Energy" || preview.header.x_label === "Energy") {
                 const energyAxis = preview.header.y_label.includes("Energy")
                     ? preview.header.y_axis
@@ -1188,6 +1288,21 @@ async function updateProcessPreview() {
     }
     processState.kViewer.setOverlays(kOverlays);
     el("ap-status").textContent = `Preview · mode ${preview.header.energy_mode || "auto"}`;
+}
+
+async function loadPerpBZ() {
+    const crystal = el("ap-crystal").value;
+    if (!crystal) {
+        processState.perpBz = null;
+        return;
+    }
+    processState.perpBz = await TensorSpecAPI.processPerpBZ({
+        crystal_name: crystal,
+        h: Number(el("ap-h").value),
+        k: Number(el("ap-k").value),
+        l: Number(el("ap-l").value),
+        n_zones: 4,
+    });
 }
 
 async function loadBZPolygon() {
@@ -1272,9 +1387,12 @@ el("ap-bz-toggle").addEventListener("change", async () => {
 });
 ["ap-crystal", "ap-h", "ap-k", "ap-l"].forEach((id) => {
     el(id).addEventListener("change", async () => {
-        if (!el("ap-bz-toggle").checked) return;
         try {
-            await loadBZPolygon();
+            if (processMode() === "kz" && el("ap-perp-bz-toggle").checked) {
+                await loadPerpBZ();
+            } else if (processMode() === "inplane" && el("ap-bz-toggle").checked) {
+                await loadBZPolygon();
+            }
             scheduleProcessPreview();
         } catch (err) {
             el("ap-status").textContent = err.message;
@@ -1286,15 +1404,27 @@ el("ap-apply").addEventListener("click", async () => {
     if (!name) return;
     el("ap-apply").disabled = true;
     try {
-        const payload = {
-            ...convertPayload(),
-            store_as: el("ap-store").value,
-            also_write_processed: true,
-        };
-        const result = await TensorSpecAPI.processInplaneApply(name, payload);
-        el("ap-status").textContent = `Applied as ${result.name} (${result.shape.join("×")})${
-            result.wrote_processed ? " · wrote /processed" : ""
-        }`;
+        if (processMode() === "kz") {
+            const payload = {
+                ...kzPayload(),
+                store_as: el("ap-store").value,
+                also_write_processed: true,
+            };
+            const result = await TensorSpecAPI.processKzApply(name, payload);
+            el("ap-status").textContent = `Applied as ${result.name} (${result.shape.join("×")})${
+                result.wrote_processed ? " · wrote /processed" : ""
+            } · Vo=${Number(result.inner_potential).toFixed(1)}`;
+        } else {
+            const payload = {
+                ...convertPayload(),
+                store_as: el("ap-store").value,
+                also_write_processed: true,
+            };
+            const result = await TensorSpecAPI.processInplaneApply(name, payload);
+            el("ap-status").textContent = `Applied as ${result.name} (${result.shape.join("×")})${
+                result.wrote_processed ? " · wrote /processed" : ""
+            }`;
+        }
         await refreshDatasets();
         await refreshProcessDatasets();
     } catch (err) {
@@ -1304,10 +1434,47 @@ el("ap-apply").addEventListener("click", async () => {
     }
 });
 
+el("ap-mode").addEventListener("change", () => {
+    syncProcessModeUI();
+    const name = el("ap-dataset").value;
+    if (name) {
+        el("ap-store").value = processMode() === "kz" ? `${name}_kz` : `${name}_k`;
+        loadProcessDataset(name).catch((e) => {
+            el("ap-status").textContent = e.message;
+        });
+    }
+});
+
+function syncVoFromSlider() {
+    el("ap-vo").value = el("ap-vo-slider").value;
+    scheduleProcessPreview();
+}
+function syncVoFromInput() {
+    el("ap-vo-slider").value = el("ap-vo").value;
+    scheduleProcessPreview();
+}
+el("ap-vo-slider").addEventListener("input", syncVoFromSlider);
+el("ap-vo").addEventListener("input", syncVoFromInput);
+["ap-kz-phi", "ap-kz-theta", "ap-kz-eb", "ap-kz-q"].forEach((id) => {
+    el(id).addEventListener("input", scheduleProcessPreview);
+    el(id).addEventListener("change", scheduleProcessPreview);
+});
+
+el("ap-perp-bz-toggle").addEventListener("change", async () => {
+    try {
+        if (el("ap-perp-bz-toggle").checked) await loadPerpBZ();
+        scheduleProcessPreview();
+    } catch (err) {
+        el("ap-status").textContent = err.message;
+        el("ap-perp-bz-toggle").checked = false;
+    }
+});
+
 // Load process lists when the Process tab is selected
 el("t3").addEventListener("change", () => {
     if (!el("t3").checked) return;
     processEnsureViewers();
+    syncProcessModeUI();
     refreshProcessDatasets()
         .then(() => refreshProcessCrystals())
         .then(() => {

@@ -25,7 +25,8 @@ ANGLE_HINTS = (
     "detector",
 )
 ENERGY_HINTS = ("energy", "ev", "binding", "kinetic")
-AVOID_ANGLE = ("sample x", "sample y", "sample z", "photon", "time", "index")
+PHOTON_HINTS = ("photon", "mono_ev", "mono energy", "hv")
+AVOID_ANGLE = ("sample x", "sample y", "sample z", "photon", "time", "index", "mono")
 
 
 def _label_matches(label: str, hints: Sequence[str]) -> bool:
@@ -33,25 +34,40 @@ def _label_matches(label: str, hints: Sequence[str]) -> bool:
     return any(token in lower for token in hints)
 
 
+def _is_photon_label(label: str) -> bool:
+    lower = label.lower()
+    return any(token in lower for token in PHOTON_HINTS)
+
+
 def infer_axis_roles(tensor: TensorData) -> Dict[str, Optional[int]]:
-    """Guess energy / primary angle / secondary angle indices from labels."""
+    """Guess energy / photon / primary angle / secondary angle indices from labels."""
     energy_idx = None
+    photon_idx = None
     angle_idxs: List[int] = []
     for index, label in enumerate(tensor.labels):
         lower = label.lower()
-        if any(tok in lower for tok in AVOID_ANGLE):
-            if _label_matches(label, ENERGY_HINTS):
-                energy_idx = index
+        if _is_photon_label(label):
+            photon_idx = index
             continue
-        if _label_matches(label, ENERGY_HINTS):
+        if any(tok in lower for tok in AVOID_ANGLE):
+            continue
+        if _label_matches(label, ENERGY_HINTS) and "pixel" not in lower:
             energy_idx = index
         elif _label_matches(label, ANGLE_HINTS):
             angle_idxs.append(index)
 
     primary = angle_idxs[0] if angle_idxs else (1 if tensor.ndim > 1 else 0)
     secondary = angle_idxs[1] if len(angle_idxs) > 1 else None
+    if energy_idx is None:
+        for index, label in enumerate(tensor.labels):
+            if index in (photon_idx, primary, secondary):
+                continue
+            if _label_matches(label, ENERGY_HINTS) and not _is_photon_label(label):
+                energy_idx = index
+                break
     return {
         "energy_axis": energy_idx if energy_idx is not None else 0,
+        "photon_axis": photon_idx,
         "angle_axis": primary,
         "beta_axis": secondary,
     }
@@ -278,4 +294,102 @@ def surface_bz_polygon_2d(
         "ky": [float(v) for v in ky],
         "hkl": list(hkl),
         "n_vertices": int(len(kx) - 1),
+    }
+
+
+def convert_hv_to_kz(
+    tensor: TensorData,
+    *,
+    photon_axis: int,
+    work_function: float = 4.5,
+    inner_potential: float = 15.0,
+    theta_deg: float = 0.0,
+    binding_ref: float = 0.0,
+    include_photon_momentum: bool = False,
+    photon_incidence_angle: float = 45.0,
+) -> TensorData:
+    """
+    Relabel a photon-energy axis as kz (free-electron final state).
+
+    Uses E_kin = hv − Φ − E_B(ref) at each hv point (default E_B=0 at EF).
+    Intensity is not resampled — coordinate transform for Vo tuning.
+    """
+    if photon_axis is None or not 0 <= photon_axis < tensor.ndim:
+        raise ValueError("photon_axis is required for hv → kz conversion.")
+
+    hv = np.asarray(tensor.axes[photon_axis], dtype=float)
+    e_kin = np.maximum(hv - float(work_function) - float(binding_ref), 1e-6)
+    kz = np.asarray(
+        ARPESKinematics.calculate_kz(
+            e_kin,
+            float(theta_deg),
+            float(inner_potential),
+            include_photon_momentum=include_photon_momentum,
+            photon_energy=hv if include_photon_momentum else None,
+            photon_incidence_angle=float(photon_incidence_angle),
+        ),
+        dtype=float,
+    )
+
+    new_axes = [np.asarray(ax, dtype=float).copy() for ax in tensor.axes]
+    new_labels = list(tensor.labels)
+    new_units = list(tensor.units)
+    new_axes[photon_axis] = kz
+    new_labels[photon_axis] = "kz"
+    new_units[photon_axis] = "1/A"
+
+    metadata = dict(tensor.metadata or {})
+    metadata.update(
+        {
+            "Processed": "hv_kz",
+            "Inner_Potential_eV": float(inner_potential),
+            "Work_Function_eV": float(work_function),
+            "Theta_Deg": float(theta_deg),
+            "Binding_Ref_eV": float(binding_ref),
+            "Photon_Momentum_Correction": bool(include_photon_momentum),
+            "Photon_Incidence_Deg": float(photon_incidence_angle),
+            "Photon_Axis": int(photon_axis),
+            "kz_min": float(np.nanmin(kz)),
+            "kz_max": float(np.nanmax(kz)),
+            "Source_DataType": tensor.data_type,
+        }
+    )
+
+    return TensorData(
+        value=np.asarray(tensor.value, dtype=float).copy(),
+        axes=new_axes,
+        labels=new_labels,
+        units=new_units,
+        data_type=f"{tensor.data_type} (kz)",
+        metadata=metadata,
+    )
+
+
+def perpendicular_bz_guides(
+    structure,
+    h: int = 0,
+    k: int = 0,
+    l: int = 1,
+    n_zones: int = 4,
+) -> Dict[str, Any]:
+    """
+    kz zone-boundary guides along the surface normal.
+
+    Edges sit at n · |G_hkl| / 2 (Å⁻¹), i.e. ±π/d, ±2π/d, … for the chosen HKL.
+    """
+    hkl = (int(h), int(k), int(l))
+    if hkl == (0, 0, 0):
+        raise ValueError("HKL cannot be (0,0,0).")
+    d_hkl = float(structure.lattice.d_hkl(hkl))
+    if d_hkl <= 0:
+        raise ValueError("Invalid d_hkl for the requested plane.")
+    g_mag = 2.0 * np.pi / d_hkl
+    half = g_mag / 2.0
+    lines = [float(n * half) for n in range(-int(n_zones), int(n_zones) + 1) if n != 0]
+    return {
+        "kz_lines": lines,
+        "half_g": float(half),
+        "g_mag": float(g_mag),
+        "d_hkl": d_hkl,
+        "hkl": list(hkl),
     }

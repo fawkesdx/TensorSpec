@@ -34,6 +34,9 @@ from tensorspec.web.server.schemas import (
     InplaneApplyRequest,
     InplaneConvertRequest,
     JobInfo,
+    KzApplyRequest,
+    KzConvertRequest,
+    PerpBZRequest,
     ProfileRequest,
     ProfileResponse,
     SliceRequest,
@@ -163,15 +166,21 @@ def _convert_from_request(tensor, request: InplaneConvertRequest):
 
 @router.get("/process/{name}/roles")
 def process_axis_roles(name: str, session: Session = Depends(current_session)):
-    """Infer energy / angle axes and sensible Γ / scale defaults."""
+    """Infer energy / angle / photon axes and sensible Γ / scale defaults."""
     tensor = _require_tensor(session, name)
     roles = arpes_process.infer_axis_roles(tensor)
     angle_axis = roles["angle_axis"]
     energy_axis = roles["energy_axis"]
     beta_axis = roles["beta_axis"]
+    photon_axis = roles["photon_axis"]
     angle = np.asarray(tensor.axes[angle_axis], dtype=float)
     center = float(angle[len(angle) // 2])
     photon = _photon_from_metadata(tensor) or 80.0
+    photon_span = None
+    if photon_axis is not None:
+        pax = np.asarray(tensor.axes[photon_axis], dtype=float)
+        photon_span = [float(np.nanmin(pax)), float(np.nanmax(pax))]
+        photon = float(np.nanmedian(pax))
     return {
         "name": name,
         "labels": list(tensor.labels),
@@ -180,6 +189,7 @@ def process_axis_roles(name: str, session: Session = Depends(current_session)):
         "energy_axis": energy_axis,
         "angle_axis": angle_axis,
         "beta_axis": beta_axis,
+        "photon_axis": photon_axis,
         "center": center,
         "beta_center": float(np.asarray(tensor.axes[beta_axis])[len(tensor.axes[beta_axis]) // 2])
         if beta_axis is not None
@@ -187,7 +197,9 @@ def process_axis_roles(name: str, session: Session = Depends(current_session)):
         "deg_per_unit": _default_deg_per_unit(tensor, angle_axis),
         "beta_deg_per_unit": _default_deg_per_unit(tensor, beta_axis) if beta_axis is not None else 1.0,
         "photon_energy": photon,
+        "photon_span": photon_span,
         "work_function": 4.5,
+        "inner_potential": 15.0,
         "data_type": tensor.data_type,
     }
 
@@ -290,6 +302,106 @@ def process_surface_bz(
     if poly is None:
         raise HTTPException(status_code=422, detail="Could not build a surface BZ polygon.")
     return {"crystal_name": request.crystal_name, **poly}
+
+
+def _kz_from_request(tensor, request: KzConvertRequest):
+    return arpes_process.convert_hv_to_kz(
+        tensor,
+        photon_axis=request.photon_axis,
+        work_function=request.work_function,
+        inner_potential=request.inner_potential,
+        theta_deg=request.theta_deg,
+        binding_ref=request.binding_ref,
+        include_photon_momentum=request.include_photon_momentum,
+        photon_incidence_angle=request.photon_incidence_angle,
+    )
+
+
+@router.post("/process/{name}/kz/preview")
+def process_kz_preview(
+    name: str,
+    request: KzConvertRequest,
+    session: Session = Depends(current_session),
+) -> Response:
+    """Convert photon axis to kz and return a 2D preview plane."""
+    tensor = _require_tensor(session, name)
+    try:
+        converted = _kz_from_request(tensor, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if converted.ndim < 2:
+        raise HTTPException(status_code=422, detail="Need at least 2D data to preview.")
+    _validate_axes(converted, request.x_idx, request.y_idx)
+
+    result = ops.extract_slice(converted, request.x_idx, request.y_idx, request.fixed)
+    plane, x_axis, y_axis, steps = ops.downsample_plane(
+        result["values"], result["x_axis"], result["y_axis"], request.max_points
+    )
+    header = {
+        "shape": [int(plane.shape[0]), int(plane.shape[1])],
+        "x_axis": [float(v) for v in x_axis],
+        "y_axis": [float(v) for v in y_axis],
+        "extent": [float(x_axis[0]), float(x_axis[-1]), float(y_axis[0]), float(y_axis[-1])],
+        "x_label": converted.labels[request.x_idx],
+        "y_label": converted.labels[request.y_idx],
+        "x_unit": converted.units[request.x_idx],
+        "y_unit": converted.units[request.y_idx],
+        "vmin": float(np.nanmin(plane)),
+        "vmax": float(np.nanmax(plane)),
+        "steps": steps,
+        "inner_potential": converted.metadata.get("Inner_Potential_eV"),
+        "kz_min": converted.metadata.get("kz_min"),
+        "kz_max": converted.metadata.get("kz_max"),
+    }
+    return Response(content=_pack_plane(header, plane), media_type="application/octet-stream")
+
+
+@router.post("/process/{name}/kz/apply")
+def process_kz_apply(
+    name: str,
+    request: KzApplyRequest,
+    session: Session = Depends(current_session),
+):
+    tensor = _require_tensor(session, name)
+    try:
+        converted = _kz_from_request(tensor, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    store_as = (request.store_as or f"{name}_kz").strip()
+    label = _safe_label(store_as, f"{name}_kz")
+    session.workspace.push_spectroscopy_data(label, converted)
+    wrote_processed = False
+    if request.also_write_processed:
+        wrote_processed = session.workspace.write_processed_data(name, converted)
+    return {
+        "name": label,
+        "source": name,
+        "shape": [int(n) for n in converted.value.shape],
+        "labels": list(converted.labels),
+        "units": list(converted.units),
+        "wrote_processed": wrote_processed,
+        "kz_min": converted.metadata.get("kz_min"),
+        "kz_max": converted.metadata.get("kz_max"),
+        "inner_potential": converted.metadata.get("Inner_Potential_eV"),
+    }
+
+
+@router.post("/process/perp-bz")
+def process_perp_bz(
+    request: PerpBZRequest,
+    session: Session = Depends(current_session),
+):
+    """kz zone-boundary guides for the perpendicular BZ overlay."""
+    structure = _require_structure(session, request.crystal_name)
+    try:
+        guides = arpes_process.perpendicular_bz_guides(
+            structure, request.h, request.k, request.l, n_zones=request.n_zones
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"crystal_name": request.crystal_name, **guides}
 
 
 def _require_tensor(session: Session, name: str):
