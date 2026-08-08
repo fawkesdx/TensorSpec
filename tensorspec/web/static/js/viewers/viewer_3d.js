@@ -105,8 +105,19 @@ export class CrystalViewer {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
     if (!w || !h) return;
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    const aspect = w / h;
+    if (this.camera.isOrthographicCamera) {
+      const half = this._orthoHalfHeight ?? Math.max((this.camera.top - this.camera.bottom) / 2, 1);
+      this._orthoHalfHeight = half;
+      this.camera.left = -half * aspect;
+      this.camera.right = half * aspect;
+      this.camera.top = half;
+      this.camera.bottom = -half;
+      this.camera.updateProjectionMatrix();
+    } else {
+      this.camera.aspect = aspect;
+      this.camera.updateProjectionMatrix();
+    }
     this.renderer.setSize(w, h, false);
   }
 
@@ -330,6 +341,7 @@ export class CrystalViewer {
     const hit = hits[0];
     const indices = this._atomIndexByMesh.get(hit.object);
     const atom = this.geometry.atoms[indices[hit.instanceId]];
+    if (!atom) { this._tooltip.style.display = "none"; return; }
     this._tooltip.textContent = `${atom.label} (${atom.element})`;
     this._tooltip.style.display = "block";
     this._tooltip.style.left = `${event.clientX - rect.left + 12}px`;
@@ -409,12 +421,29 @@ export class CrystalViewer {
 
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(size.length() / 2, 1);
-    const distance = radius / Math.sin((this.camera.fov * Math.PI) / 360);
+    const w = this.container.clientWidth || 1;
+    const h = this.container.clientHeight || 1;
+    const aspect = w / h;
 
-    this.camera.position.set(0, 0, distance * 1.15);
-    this.camera.near = distance / 100;
-    this.camera.far = distance * 100;
-    this.camera.updateProjectionMatrix();
+    if (this.camera.isOrthographicCamera) {
+      const half = radius * 1.15;
+      this._orthoHalfHeight = half;
+      this.camera.left = -half * aspect;
+      this.camera.right = half * aspect;
+      this.camera.top = half;
+      this.camera.bottom = -half;
+      this.camera.position.set(0, 0, 30);
+      this.camera.near = 0.1;
+      this.camera.far = 5000;
+      this.camera.updateProjectionMatrix();
+    } else {
+      const distance = radius / Math.sin((this.camera.fov * Math.PI) / 360);
+      this.camera.position.set(0, 0, distance * 1.15);
+      this.camera.near = distance / 100;
+      this.camera.far = distance * 100;
+      this.camera.aspect = aspect;
+      this.camera.updateProjectionMatrix();
+    }
     this.controls.target.set(0, 0, 0);
     this.controls.update();
   }
@@ -437,10 +466,15 @@ export class CrystalViewer {
   }
 
   setProjection(mode) {
-    const aspect = this.camera.aspect || 1;
+    const w = this.container.clientWidth || 1;
+    const h = this.container.clientHeight || 1;
+    const aspect = w / h;
     const dist = this.camera.position.length();
     if (mode === "orthographic") {
-      const half = Math.max(dist * Math.tan((45 * Math.PI) / 360), 1);
+      const half = this.camera.isOrthographicCamera
+        ? Math.max((this.camera.top - this.camera.bottom) / 2, 1)
+        : Math.max(dist * Math.tan((45 * Math.PI) / 360), 1);
+      this._orthoHalfHeight = half;
       const cam = new THREE.OrthographicCamera(-half * aspect, half * aspect, half, -half, 0.1, 5000);
       cam.position.copy(this.camera.position);
       cam.quaternion.copy(this.camera.quaternion);
@@ -450,6 +484,7 @@ export class CrystalViewer {
       cam.position.copy(this.camera.position);
       cam.quaternion.copy(this.camera.quaternion);
       this.camera = cam;
+      this._orthoHalfHeight = undefined;
     }
     this.controls.object = this.camera;
     this._resize();
