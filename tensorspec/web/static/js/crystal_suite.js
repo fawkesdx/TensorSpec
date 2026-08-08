@@ -38,6 +38,12 @@ const dom = {
     basisPrim: el("cr-basis-prim"),
     statAtoms: el("cr-stat-atoms"),
     statBonds: el("cr-stat-bonds"),
+    cutH: el("cr-h"),
+    cutK: el("cr-k"),
+    cutL: el("cr-l"),
+    cut: el("cr-cut"),
+    cutColor: el("cr-cut-color"),
+    depth: el("cr-depth"),
 
     cdwEnable: el("cdw-enable"),
     cdwTarget: el("cdw-target"),
@@ -168,10 +174,33 @@ function updateLegend(elements) {
     if (elements[0]) dom.legend.style.color = elementColor(elements[0]);
 }
 
+function applyCutPlane(view) {
+    if (!view) return;
+    const h = Number(dom.cutH?.value) || 0;
+    const k = Number(dom.cutK?.value) || 0;
+    const l = Number(dom.cutL?.value) || 0;
+    if (dom.cut?.checked && h === 0 && k === 0 && l === 0) {
+        setStatus("Cut plane needs a non-zero [h k l].", true);
+        view.setCutPlane({ visible: false });
+        return;
+    }
+    if (!activeCrystal && dom.cut?.checked) {
+        setStatus("Load a structure first.", true);
+        return;
+    }
+    view.setCutPlane({
+        h, k, l,
+        depthFrac: (Number(dom.depth?.value) || 0) / 100,
+        color: dom.cutColor?.value || "#00ffff",
+        visible: Boolean(dom.cut?.checked),
+    });
+}
+
 function applyViewerChrome(view) {
     view.atomScale = Number(dom.radius.value) || 0.5;
     view.setBondRadius(Number(dom.bondThick?.value) || 0.1);
     view.setShowAxes(Boolean(dom.axes?.checked));
+    applyCutPlane(view);
 }
 
 function geometryRequest() {
@@ -510,6 +539,11 @@ dom.view111?.addEventListener("click", () => ensureViewer().lookAlong("111"));
 const syncAzEl = () => ensureViewer().setAzEl(Number(dom.az.value) || 0, Number(dom.elv.value) || 0);
 dom.az?.addEventListener("change", syncAzEl);
 dom.elv?.addEventListener("change", syncAzEl);
+
+const syncCut = () => applyCutPlane(ensureViewer());
+[dom.cutH, dom.cutK, dom.cutL, dom.cutColor].forEach((n) => n?.addEventListener("change", syncCut));
+dom.cut?.addEventListener("change", syncCut);
+dom.depth?.addEventListener("input", syncCut);
 
 [
     dom.cdwEnable, dom.cdwTarget, dom.qa, dom.qb, dom.qc,
