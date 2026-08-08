@@ -89,6 +89,15 @@
                             <input class="field" id="qe-cutoff" type="number" min="20" max="200" step="1" value="60">
                         </div>
                         <div class="form-row">
+                            <label for="qe-xc">XC functional:</label>
+                            <select class="field" id="qe-xc">
+                                <option value="PBE" selected>PBE</option>
+                                <option value="LDA">LDA</option>
+                                <option value="PBEsol">PBEsol</option>
+                            </select>
+                        </div>
+                        <p class="hint">Sets <code>input_dft</code> in scf/nscf. Does not filter pseudos — keep PBE-compatible UPFs unless you swap the pseudo set yourself.</p>
+                        <div class="form-row">
                             <label>Relativistic (SOC):</label>
                             <label class="check" style="margin:0"><input type="checkbox" id="qe-soc"> Inject Spin-Orbit Coupling Math</label>
                         </div>
