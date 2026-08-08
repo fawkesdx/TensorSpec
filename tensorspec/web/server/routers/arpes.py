@@ -22,7 +22,7 @@ from tensorspec.core.dft import band_service
 from tensorspec.core.dft_engine import DFTEngineRouter
 from tensorspec.core.io.arpes_loader import ARPESLoader
 from tensorspec.core import arpes_process
-from tensorspec.core import arpes_peakfit, arpes_results, arpes_gap, arpes_overlay
+from tensorspec.core import arpes_peakfit, arpes_results, arpes_gap, arpes_overlay, arpes_volume
 from tensorspec.plotting.backends.arpes_figure import export_slice_figure
 from tensorspec.web.server.jobs import Job, JobStatus, get_job_queue
 from tensorspec.web.server.schemas import (
@@ -43,6 +43,7 @@ from tensorspec.web.server.schemas import (
     GapFitCurveRequest,
     GapFitStackRequest,
     CutOverlayRequest,
+    VolumeViewRequest,
     PerpBZRequest,
     ProfileRequest,
     ProfileResponse,
@@ -1243,6 +1244,74 @@ def get_slice(
         "full_shape": [int(result["values"].shape[0]), int(result["values"].shape[1])],
     }
     return Response(content=_pack_plane(header, plane), media_type="application/octet-stream")
+
+
+@router.post("/{name}/volume")
+def get_volume(
+    name: str,
+    request: VolumeViewRequest,
+    session: Session = Depends(current_session),
+) -> Response:
+    """Downsampled I(z,y,x) cube + BZ prism polygon for the 3D cutout viewer."""
+    tensor = _require_tensor(session, name)
+    if tensor.ndim < 3:
+        raise HTTPException(
+            status_code=422,
+            detail="Volume view needs ≥3D data (e.g. Fermi map with energy, or E×kx×ky cube).",
+        )
+    inferred = arpes_volume.infer_volume_axes(tensor)
+    x_idx = request.x_idx if request.x_idx is not None else inferred["x_idx"]
+    y_idx = request.y_idx if request.y_idx is not None else inferred["y_idx"]
+    z_idx = request.z_idx if request.z_idx is not None else inferred["z_idx"]
+    try:
+        vol = arpes_volume.extract_volume(
+            tensor,
+            x_idx=x_idx,
+            y_idx=y_idx,
+            z_idx=z_idx,
+            fixed=request.fixed,
+            max_per_axis=request.max_per_axis,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    structure = None
+    if request.crystal_name:
+        structure = session.workspace.pull_structure_object(request.crystal_name)
+        if structure is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Crystal '{request.crystal_name}' not in this session.",
+            )
+    prism = arpes_volume.build_prism_spec(
+        x_axis=vol["x_axis"],
+        y_axis=vol["y_axis"],
+        structure=structure,
+        h=request.h,
+        k=request.k,
+        l=request.l,
+        shape_mode=request.shape_mode,
+    )
+    header = {
+        "shape": vol["shape"],
+        "x_axis": [float(v) for v in vol["x_axis"]],
+        "y_axis": [float(v) for v in vol["y_axis"]],
+        "z_axis": [float(v) for v in vol["z_axis"]],
+        "vmin": vol["vmin"],
+        "vmax": vol["vmax"],
+        "steps": vol["steps"],
+        "x_label": vol["x_label"],
+        "y_label": vol["y_label"],
+        "z_label": vol["z_label"],
+        "x_unit": vol["x_unit"],
+        "y_unit": vol["y_unit"],
+        "z_unit": vol["z_unit"],
+        "x_idx": vol["x_idx"],
+        "y_idx": vol["y_idx"],
+        "z_idx": vol["z_idx"],
+        "prism": prism,
+    }
+    return Response(content=_pack_plane(header, vol["values"]), media_type="application/octet-stream")
 
 
 @router.post("/{name}/profiles", response_model=ProfileResponse)

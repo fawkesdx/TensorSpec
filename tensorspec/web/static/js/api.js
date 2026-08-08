@@ -266,6 +266,33 @@ const TensorSpecAPI = (() => {
                 `/api/arpes/analysis/${encodeURIComponent(name)}/${encodeURIComponent(node)}`
             ),
 
+        tensorVolume: async (name, payload) => {
+            const response = await fetch(`/api/arpes/${encodeURIComponent(name)}/volume`, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (!response.ok) {
+                let detail = `${response.status} ${response.statusText}`;
+                try {
+                    const body = await response.json();
+                    if (body.detail) detail = body.detail;
+                } catch (err) {
+                    /* binary error */
+                }
+                throw new Error(detail);
+            }
+            const buffer = await response.arrayBuffer();
+            const headerLength = new DataView(buffer).getUint32(0, true);
+            const header = JSON.parse(
+                new TextDecoder().decode(new Uint8Array(buffer, 4, headerLength))
+            );
+            const n = header.shape[0] * header.shape[1] * header.shape[2];
+            const values = new Float32Array(buffer, 4 + headerLength, n);
+            return { header, values };
+        },
+
         /* Unpacks the framed slice: uint32 header length, header JSON, then
            float32 values. The header is padded so the values start aligned
            and can be wrapped without copying. */

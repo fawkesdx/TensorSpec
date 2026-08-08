@@ -320,6 +320,21 @@ class CutOverlayRequest(BaseModel):
     max_points: int = Field(default=512, ge=64, le=2048)
 
 
+class VolumeViewRequest(BaseModel):
+    """Downsampled intensity cube + BZ prism footprint for the 3D cutout viewer."""
+
+    x_idx: int | None = Field(default=None, ge=0, le=15)
+    y_idx: int | None = Field(default=None, ge=0, le=15)
+    z_idx: int | None = Field(default=None, ge=0, le=15)
+    fixed: dict[int, int] = Field(default_factory=dict)
+    max_per_axis: int = Field(default=64, ge=16, le=128)
+    shape_mode: str = Field(default="auto")  # auto | rectangle | hexagon | crystal
+    crystal_name: str | None = Field(default=None, max_length=64)
+    h: int = Field(default=0, ge=-10, le=10)
+    k: int = Field(default=0, ge=-10, le=10)
+    l: int = Field(default=1, ge=-10, le=10)
+
+
 class SuggestCenterRequest(BaseModel):
     angle_axis: int = Field(ge=0, le=15)
     energy_axis: int | None = Field(default=None, ge=0, le=15)

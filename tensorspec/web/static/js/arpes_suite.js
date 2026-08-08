@@ -6,6 +6,7 @@
 
 import { ImageViewer } from "/static/js/viewers/viewer_2d.js";
 import { LineViewer } from "/static/js/viewers/viewer_1d.js";
+import { ArpesVolumeViewer } from "/static/js/viewers/viewer_volume.js";
 import { COLORMAP_NAMES } from "/static/js/viewers/colormaps.js";
 
 const el = (id) => document.getElementById(id);
@@ -2246,4 +2247,102 @@ el("t4").addEventListener("change", () => {
         .catch((e) => {
             el("an-status").textContent = e.message;
         });
+});
+
+/* ---- Volume: BZ prism cutout ---- */
+
+const volumeState = { viewer: null };
+
+function volumeEnsureViewer() {
+    if (!volumeState.viewer) {
+        volumeState.viewer = new ArpesVolumeViewer(el("vol-view"));
+    }
+}
+
+async function refreshVolumeDatasets() {
+    const listing = await TensorSpecAPI.listItems();
+    const tensors = listing.items.filter((item) => item.type === "Spectroscopy DataTree");
+    const crystals = listing.items.filter(
+        (item) => /crystal/i.test(item.type) || /structure/i.test(item.type)
+    );
+    const select = el("vol-name");
+    const prev = select.value;
+    select.innerHTML = "";
+    if (!tensors.length) {
+        select.innerHTML = '<option value="">No spectroscopy data</option>';
+    } else {
+        tensors.forEach((item) => {
+            const option = document.createElement("option");
+            option.value = item.name;
+            option.textContent = item.name;
+            select.appendChild(option);
+        });
+        if ([...select.options].some((o) => o.value === prev)) select.value = prev;
+    }
+    const csel = el("vol-crystal");
+    const cprev = csel.value;
+    csel.innerHTML = '<option value="">— data box —</option>';
+    crystals.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.name;
+        option.textContent = item.name;
+        csel.appendChild(option);
+    });
+    if ([...csel.options].some((o) => o.value === cprev)) csel.value = cprev;
+}
+
+function volumeOptionsFromUI() {
+    return {
+        indentSectors: Number(el("vol-indent").value) || 0,
+        indentDepth: Number(el("vol-depth").value) / 100,
+        showFermi: el("vol-fermi").checked,
+        eFermi: Number(el("vol-ef").value) || 0,
+    };
+}
+
+async function loadVolumeView() {
+    volumeEnsureViewer();
+    const name = el("vol-name").value;
+    if (!name) throw new Error("Select a dataset.");
+    const crystal = el("vol-crystal").value || null;
+    const { header, values } = await TensorSpecAPI.tensorVolume(name, {
+        shape_mode: el("vol-shape").value,
+        crystal_name: crystal,
+        max_per_axis: 64,
+    });
+    volumeState.viewer.setVolume(header, values, volumeOptionsFromUI());
+    const prism = header.prism || {};
+    el("vol-badge").textContent = `${header.shape.join("×")} · ${prism.shape || "?"} (${prism.n_vertices || "?"} sides)`;
+    el("vol-status").textContent = `${name}: ${header.z_label} × ${header.y_label} × ${header.x_label} · prism from ${prism.source || "?"}`;
+}
+
+el("vol-indent").addEventListener("input", () => {
+    el("vol-indent-label").textContent = el("vol-indent").value;
+    if (volumeState.viewer) volumeState.viewer.setOptions(volumeOptionsFromUI());
+});
+el("vol-depth").addEventListener("input", () => {
+    if (volumeState.viewer) volumeState.viewer.setOptions(volumeOptionsFromUI());
+});
+el("vol-ef").addEventListener("change", () => {
+    if (volumeState.viewer) volumeState.viewer.setOptions(volumeOptionsFromUI());
+});
+el("vol-fermi").addEventListener("change", () => {
+    if (volumeState.viewer) volumeState.viewer.setOptions(volumeOptionsFromUI());
+});
+el("vol-load").addEventListener("click", async () => {
+    el("vol-load").disabled = true;
+    try {
+        await loadVolumeView();
+    } catch (err) {
+        el("vol-status").textContent = err.message;
+    } finally {
+        el("vol-load").disabled = false;
+    }
+});
+el("t5").addEventListener("change", () => {
+    if (!el("t5").checked) return;
+    volumeEnsureViewer();
+    refreshVolumeDatasets().catch((e) => {
+        el("vol-status").textContent = e.message;
+    });
 });

@@ -123,7 +123,8 @@
 #t1:checked ~ .tab-bar label[for="t1"],
 #t2:checked ~ .tab-bar label[for="t2"],
 #t3:checked ~ .tab-bar label[for="t3"],
-#t4:checked ~ .tab-bar label[for="t4"] {
+#t4:checked ~ .tab-bar label[for="t4"],
+#t5:checked ~ .tab-bar label[for="t5"] {
     color: var(--text);
     border-bottom-color: var(--accent);
     background: var(--bg-panel);
@@ -132,7 +133,8 @@
 #t1:checked ~ .tab-body > .tab-panel:nth-child(1),
 #t2:checked ~ .tab-body > .tab-panel:nth-child(2),
 #t3:checked ~ .tab-body > .tab-panel:nth-child(3),
-#t4:checked ~ .tab-body > .tab-panel:nth-child(4) {
+#t4:checked ~ .tab-body > .tab-panel:nth-child(4),
+#t5:checked ~ .tab-body > .tab-panel:nth-child(5) {
     display: block;
 }
 

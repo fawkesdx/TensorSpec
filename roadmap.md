@@ -25,6 +25,8 @@ note says otherwise. Deferred items stay unchecked.
           - [x] Matrix-element simulator: Option A + B1 via job queue (crystal → 2D TB mesh)
     - [x] Slice 3c — ARPES load + Process + Analysis (MAESTRO upload; k∥/kz Process tab;
           peakfit / QP / gap / DFT·sim overlay Analysis tab)
+    - [x] Slice 3d — ARPES Volume tab: BZ-prism cutout viewer (rect/hex), indentation faces,
+          Fermi / energy plane inside the prism
     - [x] Slice 4a — DFT Suite: tight-binding band structures solved server-side and plotted
     - [x] Slice 4b — QE pipeline: input generation, downloadable HPC bundle, job queue,
           live log stream. Commands are argv lists from a server allowlist; the browser
@@ -133,6 +135,7 @@ Grand App
 	- Data Viewer: kind-aware multi-panel layouts (cut / Fermi map / hv scan), Sync crosshair + fixed-dim sliders, EDC/MDC profiles, CSV/PDF/PNG export
 	- Process: in-plane → k∥ (Γ click/suggest, surface BZ overlay); photon → kz (Vo, ⊥ BZ); writes `/processed`
 	- Analysis: EDC/MDC Lorentzian/Voigt peakfit → `/analysis/*_peakfit`; QP curves (δE–E, k_F, m*, v_F, FL/MFL) → `/analysis/qp_results`; Dynes SC/CDW gap → `/analysis/gap_fit`; DFT bands + sim intensity overlay on cuts
+	- Volume: BZ-prism 3D cutout (rectangle or hexagon from crystal/data); indent sectors to reveal interior walls; horizontal E-plane (Fermi surface)
 	- Simulator: matrix-element Option A + B1 (job queue + log stream)
 	- Deferred (not started): other beamline loaders; sim B2/B3; PEEM / XAS / Transport suites
 
