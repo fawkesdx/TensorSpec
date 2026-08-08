@@ -3,9 +3,13 @@
  * Draws the payload from /api/dft/{name}/bands. Every eigenvalue is computed
  * by chinook through core.dft.band_service; this module only maps numbers to
  * pixels. Zero energy is the Fermi level, which is why it gets its own line.
+ *
+ * When `weights` are present (unfold_hex), bands are drawn faint and spectral
+ * weight is shown as bright scatter points (ARPES-like intensity).
  */
 
 const MARGIN = { left: 58, right: 16, top: 16, bottom: 34 };
+const WEIGHT_FLOOR = 0.05;
 
 export class BandPlot {
     constructor(container) {
@@ -67,10 +71,11 @@ export class BandPlot {
         };
         if (rect.width <= 0 || rect.height <= 0) return;
 
-        const { k_dist, bands, node_positions, node_labels } = this.result;
+        const { k_dist, bands, node_positions, node_labels, weights } = this.result;
         const kMax = k_dist[k_dist.length - 1] || 1;
         const { min: eMin, max: eMax } = this.range;
         const eSpan = eMax - eMin || 1;
+        const unfolded = Array.isArray(weights) && weights.length === bands.length;
 
         const px = (k) => rect.left + (k / kMax) * rect.width;
         const py = (e) => rect.top + rect.height - ((e - eMin) / eSpan) * rect.height;
@@ -98,24 +103,55 @@ export class BandPlot {
         ctx.stroke();
         ctx.setLineDash([]);
 
-        ctx.strokeStyle = "#60a5fa";
-        ctx.lineWidth = 1.2;
-        bands.forEach((band) => {
-            ctx.beginPath();
-            for (let i = 0; i < band.length; i++) {
-                const x = px(k_dist[i]);
-                const y = py(band[i]);
-                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        if (unfolded) {
+            // Faint guide lines for all supercell bands
+            ctx.strokeStyle = "rgba(96, 165, 250, 0.18)";
+            ctx.lineWidth = 1;
+            bands.forEach((band) => {
+                ctx.beginPath();
+                for (let i = 0; i < band.length; i++) {
+                    const x = px(k_dist[i]);
+                    const y = py(band[i]);
+                    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+            });
+
+            // Spectral-weight scatter (bright = monolayer character)
+            for (let b = 0; b < bands.length; b++) {
+                const band = bands[b];
+                const wband = weights[b];
+                for (let i = 0; i < band.length; i++) {
+                    const w = wband[i] ?? 0;
+                    if (w < WEIGHT_FLOOR) continue;
+                    const alpha = Math.min(1, 0.15 + 0.85 * w);
+                    const r = 1.2 + 2.2 * w;
+                    ctx.beginPath();
+                    ctx.fillStyle = `rgba(251, 191, 36, ${alpha})`;
+                    ctx.arc(px(k_dist[i]), py(band[i]), r, 0, Math.PI * 2);
+                    ctx.fill();
+                }
             }
-            ctx.stroke();
-        });
+        } else {
+            ctx.strokeStyle = "#60a5fa";
+            ctx.lineWidth = 1.2;
+            bands.forEach((band) => {
+                ctx.beginPath();
+                for (let i = 0; i < band.length; i++) {
+                    const x = px(k_dist[i]);
+                    const y = py(band[i]);
+                    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+            });
+        }
 
         ctx.restore();
 
-        this._drawAxes(ctx, rect, eMin, eMax, node_positions, node_labels, px);
+        this._drawAxes(ctx, rect, eMin, eMax, node_positions, node_labels, px, unfolded);
     }
 
-    _drawAxes(ctx, rect, eMin, eMax, nodes, labels, px) {
+    _drawAxes(ctx, rect, eMin, eMax, nodes, labels, px, unfolded = false) {
         ctx.strokeStyle = "#3a3a4a";
         ctx.lineWidth = 1;
         ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
@@ -148,5 +184,13 @@ export class BandPlot {
         ctx.textBaseline = "top";
         ctx.fillText("Energy (eV)", 0, 0);
         ctx.restore();
+
+        if (unfolded) {
+            ctx.fillStyle = "#fbbf24";
+            ctx.font = "10px ui-sans-serif, system-ui";
+            ctx.textAlign = "right";
+            ctx.textBaseline = "top";
+            ctx.fillText("spectral weight", rect.left + rect.width - 4, rect.top + 4);
+        }
     }
 }

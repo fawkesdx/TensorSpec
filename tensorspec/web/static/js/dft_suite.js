@@ -60,6 +60,7 @@ const dom = {
 const PATH_VALUES = {
     "Auto-Detect BZ Path (PyMatgen)": "auto",
     "Primitive hex reference (folded into supercell)": "primitive_hex_ref",
+    "Unfold hex (spectral weight)": "unfold_hex",
     "Arbitrary Custom Path": "custom",
     "Hexagonal (Template)": "hexagonal",
     "Rectangular / Orthorhombic (Template)": "rectangular",
@@ -151,9 +152,12 @@ async function refreshBzNote() {
     try {
         const ctx = await TensorSpecAPI.dftBzContext(structure.name);
         const mode = PATH_VALUES[dom.pathMode?.value] || "auto";
-        if (mode === "primitive_hex_ref") {
+        if (mode === "unfold_hex") {
             dom.pathNote.textContent =
-                "Primitive hex Γ–K–M–Γ in Å⁻¹, folded into this cell’s BZ. Educational — not ARPES spectral-weight unfolding.";
+                "Unfold hex: supercell bands with Popescu–Zunger spectral weight on graphene-like Γ–K–M. Bright = monolayer character.";
+        } else if (mode === "primitive_hex_ref") {
+            dom.pathNote.textContent =
+                "Primitive hex Γ–K–M–Γ in Å⁻¹, folded into this cell’s BZ. Educational — use Unfold hex for spectral weights.";
         } else if (ctx.likely_folded) {
             dom.pathNote.textContent = `${ctx.title}: ${ctx.message}`;
         } else {

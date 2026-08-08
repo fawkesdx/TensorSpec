@@ -76,7 +76,7 @@ Grand App
 - DFT Suite
 	- [x] Establish Data Pipeline: Pull crystal structure from `workspace.py` (drawn from Crystal Viewer Suite) to perform bulk band structure calculations.
 	- [x] Core Math: High-Symmetry K-Path Generator (calculate k-points between high symmetry nodes like Gamma, M, K).
-	- [x] Folded vs educational path: Auto = supercell/moiré BZ (folded for twists); optional primitive-hex Γ–K–M reference folded into supercell (not true spectral-weight unfolding yet).
+	- [x] Folded vs educational path: Auto = supercell/moiré BZ (folded for twists); optional primitive-hex Γ–K–M reference folded into supercell; **unfold_hex** = TB Popescu–Zunger spectral weights on that path (ARPES-like intensity).
 	- [x] Core Math: Pull exact Wigner-Seitz BZ nodes (Gamma, M, K, etc.) directly from Tab 4 of the Crystal Suite via global_workspace to define arbitrary 3D k-paths.
 	- [x] Toy Tight Binding (TB) Engine: Built-in simple models (1D chain, 2D square lattice, 2D honeycomb/graphene) to test the solver and plotting.
 	- [x] Generalized TB Capability: UI to define custom hopping parameters and on-site energies.Engine dynamically scales Slater-Koster integrals using Harrison's rules and auto-detects materials via database.

@@ -433,4 +433,12 @@ def compute_bands(
         path_title=str(result.get("path_title") or ""),
         path_note=str(result.get("path_note") or ""),
         likely_folded=bool(result.get("likely_folded")),
+        weights=(
+            [[float(v) for v in result["weights"][:, b]] for b in range(eigenvalues.shape[1])]
+            if result.get("weights") is not None
+            else None
+        ),
+        weight_min=float(np.min(result["weights"])) if result.get("weights") is not None else 0.0,
+        weight_max=float(np.max(result["weights"])) if result.get("weights") is not None else 1.0,
+        unfolded=result.get("weights") is not None,
     )

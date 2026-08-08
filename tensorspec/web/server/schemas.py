@@ -46,7 +46,13 @@ class BandRequest(BaseModel):
     """Tight-binding parameters. Bounds mirror the DFT Suite spin boxes."""
 
     path_mode: Literal[
-        "auto", "custom", "hexagonal", "rectangular", "square", "primitive_hex_ref"
+        "auto",
+        "custom",
+        "hexagonal",
+        "rectangular",
+        "square",
+        "primitive_hex_ref",
+        "unfold_hex",
     ] = "auto"
     custom_coords: str = Field(default="", max_length=2000)
     custom_labels: str = Field(default="", max_length=500)
@@ -87,6 +93,11 @@ class BandResult(BaseModel):
     path_title: str = ""
     path_note: str = ""
     likely_folded: bool = False
+    # Popescu–Zunger spectral weights (nk × nband), only for unfold_hex
+    weights: list[list[float]] | None = None
+    weight_min: float = 0.0
+    weight_max: float = 1.0
+    unfolded: bool = False
 
 
 class StructureOption(BaseModel):

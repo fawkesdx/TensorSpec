@@ -18,11 +18,13 @@ import numpy as np
 # symmetry; "custom" takes explicit fractional coordinates from the caller.
 # "primitive_hex_ref" samples a graphene-like Γ–K–M–Γ path in absolute Å⁻¹,
 # then folds each k into the supercell BZ (educational for twisted stacks).
+# "unfold_hex" does the same and attaches Popescu–Zunger-style spectral weights.
 PATH_AUTO = "auto"
 PATH_CUSTOM = "custom"
 PATH_PRIMITIVE_HEX_REF = "primitive_hex_ref"
+PATH_UNFOLD_HEX = "unfold_hex"
 PATH_TEMPLATES = ("hexagonal", "rectangular", "square")
-PATH_MODES = (PATH_AUTO, PATH_CUSTOM, PATH_PRIMITIVE_HEX_REF) + PATH_TEMPLATES
+PATH_MODES = (PATH_AUTO, PATH_CUSTOM, PATH_PRIMITIVE_HEX_REF, PATH_UNFOLD_HEX) + PATH_TEMPLATES
 
 TB_SCALAR = "Simple Scalar (Isotropic)"
 TB_SLATER_KOSTER = "Slater-Koster (Rigorous)"
@@ -47,13 +49,11 @@ def describe_bz_context(structure) -> dict:
             "title": "Supercell / moiré BZ (folded)",
             "message": (
                 "This cell looks like a stacked or large supercell. "
-                "Default Auto path uses THIS cell's Brillouin zone, so monolayer Dirac cones "
-                "appear as many folded mini-bands (correct for the moiré cell, hard to read). "
-                "For lab intuition: (1) MEGNet gap for a quick scale, (2) path mode "
-                "'Primitive hex reference (folded into supercell)' to walk graphene-like Γ–K–M "
-                "while still solving the supercell Hamiltonian. "
-                "True ARPES-style unfolding (spectral weight onto the monolayer BZ) is not "
-                "implemented yet — that would be the next educational step."
+                "Default Auto path uses THIS cell's Brillouin zone (folded mini-bands). "
+                "For lab intuition: MEGNet gap for scale; "
+                "'Primitive hex reference' for Γ–K–M labels; "
+                "'Unfold hex (spectral weight)' for ARPES-like intensity on the monolayer path "
+                "(TB Popescu–Zunger weights onto a reference hex BZ)."
             ),
             "likely_folded": True,
         }
@@ -76,7 +76,13 @@ def _fold_k_into_supercell(k_cart: np.ndarray, recip_sc: np.ndarray) -> np.ndarr
     return np.dot(frac, recip_sc)
 
 
-def build_primitive_hex_reference_path(structure, points_per_segment: int = 100, a0: float = 2.46):
+def build_primitive_hex_reference_path(
+    structure,
+    points_per_segment: int = 100,
+    a0: float = 2.46,
+    *,
+    return_primitive: bool = False,
+):
     """
     Dense Γ–K–M–Γ path of a reference hexagonal monolayer (Å⁻¹), with each
     point folded into the supercell's BZ for diagonalisation.
@@ -119,7 +125,60 @@ def build_primitive_hex_reference_path(structure, points_per_segment: int = 100,
     for i in range(1, len(prim_pts)):
         k_dist[i] = k_dist[i - 1] + float(np.linalg.norm(prim_pts[i] - prim_pts[i - 1]))
 
+    if return_primitive:
+        return k_vecs, k_dist, node_idx, labels, prim_pts
     return k_vecs, k_dist, node_idx, labels
+
+
+def orbital_basis_positions(engine, structure, *, use_soc: bool = False) -> np.ndarray:
+    """Cartesian Å positions for each TB basis orbital (atom-major W90 order)."""
+    positions = []
+    for site in structure:
+        n_orbs = len(engine._get_orbital_basis(site.species_string))
+        coord = np.asarray(site.coords, dtype=float)
+        for _ in range(n_orbs):
+            positions.append(coord)
+    if use_soc:
+        # Chinook spin-doubles the basis; both spins share the same atomic sites.
+        positions = positions + positions
+    return np.asarray(positions, dtype=float)
+
+
+def spectral_weight_unfold(
+    eigenvectors: np.ndarray,
+    orbital_positions: np.ndarray,
+    g_vecs: np.ndarray,
+) -> np.ndarray:
+    """
+    Popescu–Zunger-style TB spectral weights onto primitive-path k-points.
+
+    For each supercell eigenstate |ψ_n(k_sc)> with coefficients C_μn and
+    unfolding vector G = k_prim − k_sc:
+
+        W_n(k_prim) = |Σ_μ C_μn exp(−i G · r_μ)|²
+
+    Assumes an orthogonal localized basis (standard TB approximation).
+    Returns shape (nk, nband) with values clipped to [0, 1].
+    """
+    evecs = np.asarray(eigenvectors)
+    if evecs.ndim != 3:
+        raise ValueError(f"eigenvectors must be (nk, norb, nband); got {evecs.shape}")
+    nk, norb, _nband = evecs.shape
+    pos = np.asarray(orbital_positions, dtype=float)
+    g = np.asarray(g_vecs, dtype=float)
+    if pos.shape[0] != norb:
+        raise ValueError(
+            f"orbital_positions length {pos.shape[0]} != eigenvector basis {norb}"
+        )
+    if g.shape != (nk, 3):
+        raise ValueError(f"g_vecs must be (nk, 3); got {g.shape}")
+
+    # phase[k, μ] = exp(−i G_k · r_μ)
+    phase = np.exp(-1j * (g @ pos.T))  # (nk, norb)
+    # amp[k, n] = Σ_μ C[k,μ,n] * phase[k,μ]
+    amp = np.einsum("km,kmn->kn", phase, evecs)
+    weights = np.abs(amp) ** 2
+    return np.clip(weights.real, 0.0, 1.0)
 
 
 def build_kpath(engine, path_mode: str = PATH_AUTO, custom_coords: str = "",
@@ -135,9 +194,9 @@ def build_kpath(engine, path_mode: str = PATH_AUTO, custom_coords: str = "",
         raise ValueError(f"Unknown path mode '{path_mode}'. Expected one of {PATH_MODES}.")
 
     structure = engine.crystal_structure
-    if path_mode == PATH_PRIMITIVE_HEX_REF:
+    if path_mode in (PATH_PRIMITIVE_HEX_REF, PATH_UNFOLD_HEX):
         if structure is None:
-            raise ValueError("primitive_hex_ref path needs a loaded crystal structure.")
+            raise ValueError(f"{path_mode} path needs a loaded crystal structure.")
         return build_primitive_hex_reference_path(structure, points_per_segment=points_per_segment)
 
     if path_mode == PATH_AUTO:
@@ -204,12 +263,25 @@ def calculate_bands(engine, *, path_mode: str = PATH_AUTO, custom_coords: str = 
 
     `engine` must already hold a crystal structure. Energies come back shifted
     so that zero is the Fermi level.
+
+    path_mode ``unfold_hex`` also returns Popescu–Zunger spectral weights
+    onto a reference hexagonal Γ–K–M path (ARPES-like intensity).
     """
     shifts = orbital_shifts or {"0": -10.0, "1": -2.0, "2": 0.0}
+    structure = engine.crystal_structure
+    do_unfold = path_mode == PATH_UNFOLD_HEX
+    prim_pts = None
 
-    k_vecs, k_dist, node_idx, labels = build_kpath(
-        engine, path_mode, custom_coords, custom_labels, points_per_segment
-    )
+    if do_unfold:
+        if structure is None:
+            raise ValueError("unfold_hex needs a loaded crystal structure.")
+        k_vecs, k_dist, node_idx, labels, prim_pts = build_primitive_hex_reference_path(
+            structure, points_per_segment=points_per_segment, return_primitive=True
+        )
+    else:
+        k_vecs, k_dist, node_idx, labels = build_kpath(
+            engine, path_mode, custom_coords, custom_labels, points_per_segment
+        )
 
     eigenvalues, eigenvectors, orb_labels = engine.solve_bands(
         k_vecs,
@@ -225,24 +297,47 @@ def calculate_bands(engine, *, path_mode: str = PATH_AUTO, custom_coords: str = 
 
     fermi_energy = read_fermi_energy(w90_filepath)
     eigenvalues = np.asarray(eigenvalues) - fermi_energy
+    eigenvectors = np.asarray(eigenvectors)
 
-    structure = engine.crystal_structure
+    weights = None
+    if do_unfold and prim_pts is not None:
+        g_vecs = np.asarray(prim_pts, dtype=float) - np.asarray(k_vecs, dtype=float)
+        orb_pos = orbital_basis_positions(engine, structure, use_soc=use_soc)
+        norb = eigenvectors.shape[1]
+        if orb_pos.shape[0] > norb:
+            orb_pos = orb_pos[:norb]
+        elif orb_pos.shape[0] < norb:
+            pad = np.repeat(orb_pos[-1:], norb - orb_pos.shape[0], axis=0)
+            orb_pos = np.vstack([orb_pos, pad])
+        weights = spectral_weight_unfold(eigenvectors, orb_pos, g_vecs)
+
     bz = describe_bz_context(structure)
-    if path_mode == PATH_PRIMITIVE_HEX_REF:
+    if path_mode == PATH_UNFOLD_HEX:
+        path_kind = "unfold_hex"
+        path_title = "Unfolded hex path (spectral weight)"
+        path_note = (
+            "Supercell H(k) at folded k; intensity = |Σ_μ C_μ exp(−iG·r_μ)|² "
+            "with G = k_prim − k_folded (TB Popescu–Zunger). Bright = strong monolayer "
+            "character. Approximate for twisted/orthorhombic stacks (reference a₀=2.46 Å)."
+        )
+    elif path_mode == PATH_PRIMITIVE_HEX_REF:
+        path_kind = "primitive_hex_ref_folded"
+        path_title = "Primitive hex reference (folded)"
         path_note = (
             "Primitive hex Γ–K–M–Γ in absolute Å⁻¹, each k folded into this supercell BZ. "
             "X-axis uses the monolayer path length; eigenvalues are still supercell H(k). "
-            "Not true spectral-weight unfolding."
+            "Use Unfold hex for spectral weights."
         )
-        path_kind = "primitive_hex_ref_folded"
     elif bz["likely_folded"]:
-        path_note = bz["message"]
         path_kind = bz["kind"]
+        path_title = bz["title"]
+        path_note = bz["message"]
     else:
-        path_note = bz["message"]
         path_kind = bz["kind"]
+        path_title = bz["title"]
+        path_note = bz["message"]
 
-    return {
+    out = {
         "k_vecs": np.asarray(k_vecs),
         "k_dist": np.asarray(k_dist),
         "eigenvalues": eigenvalues,
@@ -253,10 +348,13 @@ def calculate_bands(engine, *, path_mode: str = PATH_AUTO, custom_coords: str = 
         "fermi_energy": fermi_energy,
         "n_bands": int(eigenvalues.shape[1]) if eigenvalues.ndim == 2 else 0,
         "path_kind": path_kind,
-        "path_title": bz["title"] if path_mode != PATH_PRIMITIVE_HEX_REF else "Primitive hex reference (folded)",
+        "path_title": path_title,
         "path_note": path_note,
         "likely_folded": bool(bz["likely_folded"]),
     }
+    if weights is not None:
+        out["weights"] = weights
+    return out
 
 
 def calculate_2d_mesh(
