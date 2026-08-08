@@ -73,6 +73,8 @@ class BandRequest(BaseModel):
     tb_mode: Literal["Simple Scalar (Isotropic)", "Slater-Koster (Rigorous)"] = "Simple Scalar (Isotropic)"
     # When true, solve from an uploaded wannier90_hr.dat for this crystal (see POST …/wannier).
     use_wannier: bool = False
+    # Optional companion W90 solve drawn dashed-red on BandPlot (same k-path).
+    overlay_wannier: bool = False
 
 
 class BandResult(BaseModel):
@@ -104,6 +106,8 @@ class BandResult(BaseModel):
     fat_weights: list[list[float]] | None = None
     fat_target: str = "none"
     fat_n_orbitals: int = 0
+    # Optional W90 companion bands (same k_dist); None when overlay_wannier is false
+    overlay_bands: list[list[float]] | None = None
 
 
 class FatBandRequest(BaseModel):

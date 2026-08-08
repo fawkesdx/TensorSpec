@@ -39,6 +39,7 @@ const dom = {
     w90File: el("tb-w90-file"),
     w90Load: el("tb-w90-load"),
     w90Use: el("tb-w90-use"),
+    w90Overlay: el("tb-w90-overlay"),
     w90Status: el("tb-w90-status"),
 
     qeCutoff: el("qe-cutoff"),
@@ -399,6 +400,7 @@ function readParameters() {
         soc_strength: Number(dom.socStrength.value) || 0.5,
         tb_mode: dom.hamiltonian.value,
         use_wannier: Boolean(dom.w90Use?.checked),
+        overlay_wannier: Boolean(dom.w90Overlay?.checked),
     };
 }
 
@@ -587,10 +589,13 @@ async function onWannierFileChosen(event) {
             dom.w90Use.disabled = false;
             dom.w90Use.checked = true;
         }
+        if (dom.w90Overlay) {
+            dom.w90Overlay.disabled = false;
+        }
         if (dom.w90Status) {
             const scf = result.scf_out_saved ? " (+ scf.out)" : "";
             dom.w90Status.textContent =
-                `Loaded ${file.name} (${result.bytes} bytes)${scf}. Check “Use uploaded W90” then Calculate.`;
+                `Loaded ${file.name} (${result.bytes} bytes)${scf}. Check “Use uploaded W90” and/or Overlay, then Calculate.`;
         }
         setStatus(`Wannier HR stored for ${structure.name}`);
     } catch (err) {
