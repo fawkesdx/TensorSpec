@@ -58,6 +58,7 @@ const dom = {
     qeRanks: el("qe-ranks"),
     qeGenerate: el("qe-generate"),
     qeBundle: el("qe-bundle"),
+    qeBackend: el("qe-backend"),
     qeQueue: el("qe-queue"),
     qeCancel: el("qe-cancel"),
     qeStatus: el("qe-status"),
@@ -93,6 +94,7 @@ let structures = [];
 let activeJobId = null;
 let logSocket = null;
 let maxMpiRanks = 8;
+let lastSolversInfo = null;
 let lastBandResult = null;
 let lastCrystalName = null;
 
@@ -533,6 +535,7 @@ function readQeParameters() {
         mpi_ranks: Number(dom.qeRanks.value) || 4,
         slab_mode: slab,
         functional: dom.qeXc?.value || "PBE",
+        backend: dom.qeBackend?.value || "local",
     };
 }
 
@@ -761,26 +764,36 @@ async function onWannierFileChosen(event) {
     }
 }
 
+function applyQueueEnable(info) {
+    const einstein = dom.qeBackend?.value === "einstein_ssh";
+    if (info.available) {
+        setQeStatus(
+            `Solvers ready — max ${maxMpiRanks} MPI ranks`
+            + (info.mpirun ? "" : " (mpirun not found; runs will be serial)")
+        );
+        dom.qeQueue.disabled = false;
+    } else if (einstein) {
+        setQeStatus(
+            `Local solvers unavailable (${info.detail || "check server config"}); Einstein (SSH) queue still enabled`
+        );
+        dom.qeQueue.disabled = false;
+    } else {
+        setQeStatus(`Solvers unavailable: ${info.detail || "check server config"}`, true);
+        dom.qeQueue.disabled = true;
+    }
+}
+
 async function refreshSolvers() {
     try {
         const info = await TensorSpecAPI.dftSolvers();
+        lastSolversInfo = info;
         maxMpiRanks = info.max_mpi_ranks || 8;
         dom.qeRanks.max = maxMpiRanks;
         if (Number(dom.qeRanks.value) > maxMpiRanks) dom.qeRanks.value = maxMpiRanks;
-
-        if (info.available) {
-            setQeStatus(
-                `Solvers ready — max ${maxMpiRanks} MPI ranks`
-                + (info.mpirun ? "" : " (mpirun not found; runs will be serial)")
-            );
-            dom.qeQueue.disabled = false;
-        } else {
-            setQeStatus(`Solvers unavailable: ${info.detail || "check server config"}`, true);
-            dom.qeQueue.disabled = true;
-        }
+        applyQueueEnable(info);
     } catch (err) {
         setQeStatus(err.message, true);
-        dom.qeQueue.disabled = true;
+        dom.qeQueue.disabled = dom.qeBackend?.value !== "einstein_ssh";
     }
 }
 
@@ -808,6 +821,11 @@ if (dom.qeSlabPrepare) dom.qeSlabPrepare.addEventListener("click", prepareSlab);
 if (dom.qeSlabMode) {
     dom.qeSlabMode.addEventListener("change", () => {
         if (dom.qeSlabMode.checked && dom.qeKz) dom.qeKz.value = 1;
+    });
+}
+if (dom.qeBackend) {
+    dom.qeBackend.addEventListener("change", () => {
+        if (lastSolversInfo) applyQueueEnable(lastSolversInfo);
     });
 }
 dom.qeGenerate.addEventListener("click", generateInputs);

@@ -135,6 +135,14 @@
 
                         <button type="button" class="btn btn--block" id="qe-generate">&#128196; Generate Input Files</button>
                         <button type="button" class="btn btn--block" id="qe-bundle">&#11015; Download Bundle for HPC</button>
+                        <div class="form-row">
+                            <label for="qe-backend">Queue backend:</label>
+                            <select class="field" id="qe-backend">
+                                <option value="local">Local</option>
+                                <option value="einstein_ssh">Einstein (SSH)</option>
+                            </select>
+                        </div>
+                        <p class="hint">Einstein (SSH): Mac must reach host <code>einstein</code>; runs <code>scripts/remote_qe.sh</code> (minimal pull). Cancel may leave remote scratch.</p>
                         <button type="button" class="btn btn--block" id="qe-queue">&#128640; Queue Run on Server</button>
                         <button type="button" class="btn btn--block" id="qe-cancel" disabled>&#10005; Cancel Job</button>
 
