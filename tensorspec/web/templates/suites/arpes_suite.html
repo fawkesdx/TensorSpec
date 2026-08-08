@@ -144,18 +144,22 @@
                                 <fieldset class="fieldset">
                                     <legend>4. Analyzer Domain &amp; Resolution</legend>
                                     <div class="form-row">
-                                        <label for="ar-slitsize">Analyzer Slit Size:</label>
-                                        <input class="field" id="ar-slitsize" type="number" min="0.1" max="5" step="0.1" value="0.5" disabled title="HTML viewer: not yet">
+                                        <label for="ar-slitsize">Analyzer Slit Size (mm):</label>
+                                        <input class="field" id="ar-slitsize" type="number" min="0.1" max="5" step="0.1" value="0.5" title="Analyzer entrance slit opening">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-pe">Pass Energy (eV):</label>
+                                        <input class="field" id="ar-pe" type="number" min="1" max="500" step="1" value="20">
                                     </div>
                                     <div class="form-row">
                                         <label for="ar-slitang">Analyzer Slit Angle:</label>
                                         <input class="field" id="ar-slitang" type="number" min="-180" max="180" step="1" value="0.0">
                                     </div>
                                     <div class="form-row">
-                                        <label for="ar-defl">Deflector Angle:</label>
-                                        <input class="field" id="ar-defl" type="number" min="-15" max="15" step="1" value="0.0" disabled title="HTML viewer: not yet — use ky domain">
+                                        <label for="ar-defl">Deflector Angle (°):</label>
+                                        <input class="field" id="ar-defl" type="number" min="-15" max="15" step="1" value="0.0" title="Shifts ky window; kx stays along-slit">
                                     </div>
-                                    <p class="hint">Slit size / deflector offset: not wired. Use slit angle + ky bounds / res_k.</p>
+                                    <p class="hint">Slit+PE → analyzer ΔE (Scienta-like R₀≈200 mm estimate, not a calibrated table). Total ΔE = quadrature of ana/beam/extra — not analyzer alone. Deflector shifts ky; kx is along-slit.</p>
 
                                     <h3 class="section-heading">Domain</h3>
                                     <div class="form-row form-row--stacked">
@@ -198,9 +202,22 @@
                                         <input class="field" id="ar-se" type="number" min="0.001" max="1" step="0.01" value="0.010">
                                     </div>
                                     <div class="form-row">
-                                        <label for="ar-de">Energy Resolution (dE):</label>
-                                        <input class="field" id="ar-de" type="number" min="0.001" max="1" step="0.01" value="0.020">
+                                        <label for="ar-de-beam">Beamline ΔE (eV):</label>
+                                        <input class="field" id="ar-de-beam" type="number" min="0" max="1" step="0.001" value="0.01">
                                     </div>
+                                    <div class="form-row">
+                                        <label for="ar-de-extra">Extra ΔE (eV):</label>
+                                        <input class="field" id="ar-de-extra" type="number" min="0" max="1" step="0.001" value="0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-de">Energy Resolution (dE):</label>
+                                        <input class="field" id="ar-de" type="number" min="0.001" max="1" step="0.001" value="0.020" readonly>
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-de-manual">Manual dE override:</label>
+                                        <input class="field" id="ar-de-manual" type="checkbox">
+                                    </div>
+                                    <p class="hint" id="ar-res-status">ana — / beam — / extra — / total — eV</p>
                                     <div class="form-row">
                                         <label for="ar-dk">Momentum Resolution (dk):</label>
                                         <input class="field" id="ar-dk" type="number" min="0.001" max="1" step="0.01" value="0.020">

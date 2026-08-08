@@ -918,7 +918,7 @@ def _require_job(job_id: str, session: Session) -> Job:
 
 
 def _experiment_kwargs(request: ArpesSimRequest) -> dict:
-    return {
+    kwargs = {
         "photon_energy": request.photon_energy,
         "work_function": request.work_function,
         "inner_potential": request.inner_potential,
@@ -941,6 +941,20 @@ def _experiment_kwargs(request: ArpesSimRequest) -> dict:
         "res_k": request.res_k,
         "slit_angle": request.slit_angle,
     }
+    # Optional UI metadata — Chinook ignores these and uses res_E + ky only.
+    if request.deflector_angle is not None:
+        kwargs["deflector_angle"] = request.deflector_angle
+    if request.slit_size_mm is not None:
+        kwargs["slit_size_mm"] = request.slit_size_mm
+    if request.pass_energy is not None:
+        kwargs["pass_energy"] = request.pass_energy
+    if request.res_E_beam is not None:
+        kwargs["res_E_beam"] = request.res_E_beam
+    if request.res_E_extra is not None:
+        kwargs["res_E_extra"] = request.res_E_extra
+    if request.res_E_manual is not None:
+        kwargs["res_E_manual"] = request.res_E_manual
+    return kwargs
 
 
 def _build_sim_worker(session_id: str, request: ArpesSimRequest):
