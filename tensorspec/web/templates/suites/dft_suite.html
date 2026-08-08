@@ -152,16 +152,20 @@
 
                         <div class="form-row">
                             <label for="tb-kgrid">k-Space Grid:</label>
-                            <select class="field" id="tb-kgrid" disabled title="HTML viewer: not yet — 1D path only">
-                                <option>1D High-Symmetry Path</option>
-                                <option disabled>2D k-Mesh (kx, ky) — not yet</option>
+                            <select class="field" id="tb-kgrid">
+                                <option value="path">1D High-Symmetry Path</option>
+                                <option value="isoenergy">2D Isoenergy (kx, ky)</option>
                             </select>
                         </div>
                         <div class="form-row">
                             <label for="tb-isoe">2D Isoenergy Cut (eV):</label>
-                            <input class="field" id="tb-isoe" type="number" min="-20" max="20" step="0.1" value="0.0" disabled title="HTML viewer: not yet">
+                            <input class="field" id="tb-isoe" type="number" min="-20" max="20" step="0.1" value="0.0" disabled>
                         </div>
-                        <p class="hint">2D k-mesh / isoenergy cuts: HTML viewer: not yet. Use 1D path below.</p>
+                        <p class="hint" id="tb-iso-hint">
+                            1D path uses high-symmetry segments below. Isoenergy mode: TB Gaussian density
+                            I=Σ<sub>n</sub>exp(−(E<sub>n</sub>−E)²/(2σ²)) on a kx–ky mesh (defaults −2…2 Å⁻¹,
+                            resolution 24, smear 0.05 eV) — not a QE Fermi surface.
+                        </p>
                         <div class="form-row">
                             <label for="tb-path">1D Path Template:</label>
                             <select class="field" id="tb-path">

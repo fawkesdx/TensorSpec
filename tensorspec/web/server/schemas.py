@@ -110,6 +110,46 @@ class BandResult(BaseModel):
     overlay_bands: list[list[float]] | None = None
 
 
+class IsoenergyRequest(BaseModel):
+    """2D TB isoenergy cut on a kx–ky mesh (Gaussian DOS density)."""
+
+    energy: float = Field(default=0.0, ge=-50, le=50)
+    kx_min: float = Field(default=-2.0, ge=-20, le=20)
+    kx_max: float = Field(default=2.0, ge=-20, le=20)
+    ky_min: float = Field(default=-2.0, ge=-20, le=20)
+    ky_max: float = Field(default=2.0, ge=-20, le=20)
+    resolution: int = Field(default=24, ge=4, le=48)
+    smear: float = Field(default=0.05, ge=0.001, le=1)
+
+    hoppings: list[float] = Field(default=[2.7, 0.0, 0.0, -0.3], max_length=8)
+    cutoffs: list[float] = Field(default=[1.6, 2.6, 3.1, 4.5], max_length=8)
+
+    onsite_e: float = Field(default=0.0, ge=-10, le=10)
+    shift_s: float = Field(default=-10.0, ge=-50, le=50)
+    shift_p: float = Field(default=-2.0, ge=-50, le=50)
+    shift_d: float = Field(default=0.0, ge=-50, le=50)
+
+    use_soc: bool = False
+    soc_strength: float = Field(default=0.5, ge=0, le=5)
+    tb_mode: Literal["Simple Scalar (Isotropic)", "Slater-Koster (Rigorous)"] = "Simple Scalar (Isotropic)"
+    use_wannier: bool = False
+
+
+class IsoenergyResult(BaseModel):
+    """kx–ky isoenergy density map ready for a heatmap."""
+
+    name: str
+    kx: list[float]
+    ky: list[float]
+    intensity: list[list[float]]
+    energy: float
+    smear: float
+    n_bands: int
+    resolution: int
+    elapsed_seconds: float
+    fermi_energy: float = 0.0
+
+
 class FatBandRequest(BaseModel):
     """Re-project cached eigenvectors onto an orbital / shell / element target."""
 

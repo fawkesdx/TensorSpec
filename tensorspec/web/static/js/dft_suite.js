@@ -19,6 +19,8 @@ const dom = {
 
     pathMode: el("tb-path"),
     pathNote: el("dft-path-note"),
+    kgrid: el("tb-kgrid"),
+    isoe: el("tb-isoe"),
     gapFid: el("dft-gap-fid"),
     gapPredict: el("dft-gap-predict"),
     gapStatus: el("dft-gap-status"),
@@ -86,6 +88,7 @@ const PATH_VALUES = {
 };
 
 let plot = null;
+let heatmapCanvas = null;
 let structures = [];
 let activeJobId = null;
 let logSocket = null;
@@ -103,11 +106,121 @@ function setQeStatus(message, isError = false) {
     dom.qeStatus.style.color = isError ? "#ff6b6b" : "";
 }
 
+function isIsoenergyMode() {
+    return dom.kgrid && dom.kgrid.value === "isoenergy";
+}
+
+function syncKgridMode() {
+    const iso = isIsoenergyMode();
+    if (dom.isoe) dom.isoe.disabled = !iso;
+    if (dom.pathMode) dom.pathMode.disabled = iso;
+    if (dom.coords) dom.coords.disabled = iso || PATH_VALUES[dom.pathMode.value] !== "custom";
+    if (dom.labels) dom.labels.disabled = iso || PATH_VALUES[dom.pathMode.value] !== "custom";
+    if (dom.points) dom.points.disabled = iso;
+    if (dom.fat) dom.fat.disabled = iso || !lastBandResult;
+}
+
 function ensurePlot() {
-    if (plot) return plot;
+    hideHeatmap();
+    if (plot) {
+        if (plot.canvas) plot.canvas.style.display = "block";
+        return plot;
+    }
     if (dom.placeholder) dom.placeholder.remove();
     plot = new BandPlot(dom.viewport);
     return plot;
+}
+
+function hideHeatmap() {
+    if (heatmapCanvas) {
+        heatmapCanvas.hidden = true;
+    }
+}
+
+function ensureHeatmap() {
+    if (dom.placeholder) dom.placeholder.remove();
+    if (plot && plot.canvas) {
+        plot.canvas.style.display = "none";
+    }
+    if (!heatmapCanvas) {
+        heatmapCanvas = document.createElement("canvas");
+        heatmapCanvas.id = "dft-isoenergy-heatmap";
+        heatmapCanvas.style.width = "100%";
+        heatmapCanvas.style.height = "100%";
+        heatmapCanvas.style.display = "block";
+        heatmapCanvas.style.background = "#111";
+        dom.viewport.appendChild(heatmapCanvas);
+    }
+    heatmapCanvas.hidden = false;
+    return heatmapCanvas;
+}
+
+function renderIsoenergyHeatmap(result) {
+    const canvas = ensureHeatmap();
+    const intensity = result.intensity;
+    const nx = intensity.length;
+    const ny = intensity[0] ? intensity[0].length : 0;
+    if (!nx || !ny) return;
+
+    const padL = 56;
+    const padR = 16;
+    const padT = 16;
+    const padB = 44;
+    const cssW = canvas.clientWidth || dom.viewport.clientWidth || 640;
+    const cssH = canvas.clientHeight || dom.viewport.clientHeight || 480;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.max(1, Math.floor(cssW * dpr));
+    canvas.height = Math.max(1, Math.floor(cssH * dpr));
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, cssW, cssH);
+
+    let vmax = 0;
+    for (let ix = 0; ix < nx; ix++) {
+        for (let iy = 0; iy < ny; iy++) {
+            const v = intensity[ix][iy];
+            if (v > vmax) vmax = v;
+        }
+    }
+    if (vmax <= 0) vmax = 1;
+
+    const plotW = Math.max(1, cssW - padL - padR);
+    const plotH = Math.max(1, cssH - padT - padB);
+    const cellW = plotW / nx;
+    const cellH = plotH / ny;
+
+    for (let ix = 0; ix < nx; ix++) {
+        for (let iy = 0; iy < ny; iy++) {
+            const t = intensity[ix][iy] / vmax;
+            const r = Math.round(20 + 220 * t);
+            const g = Math.round(30 + 180 * t);
+            const b = Math.round(80 + 100 * (1 - t));
+            ctx.fillStyle = `rgb(${r},${g},${b})`;
+            // iy=0 at bottom (ky_min)
+            const x = padL + ix * cellW;
+            const y = padT + (ny - 1 - iy) * cellH;
+            ctx.fillRect(x, y, Math.ceil(cellW) + 0.5, Math.ceil(cellH) + 0.5);
+        }
+    }
+
+    ctx.strokeStyle = "#888";
+    ctx.strokeRect(padL, padT, plotW, plotH);
+    ctx.fillStyle = "#ddd";
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+    const kx0 = result.kx[0];
+    const kx1 = result.kx[result.kx.length - 1];
+    const ky0 = result.ky[0];
+    const ky1 = result.ky[result.ky.length - 1];
+    ctx.fillText(`kx (${kx0.toFixed(2)} … ${kx1.toFixed(2)})`, padL + plotW / 2, cssH - 12);
+    ctx.save();
+    ctx.translate(14, padT + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(`ky (${ky0.toFixed(2)} … ${ky1.toFixed(2)})`, 0, 0);
+    ctx.restore();
+    ctx.textAlign = "left";
+    ctx.fillText(`E = ${result.energy.toFixed(3)} eV  σ = ${result.smear}`, padL, 12);
 }
 
 function selected() {
@@ -423,6 +536,29 @@ function readQeParameters() {
     };
 }
 
+function readIsoenergyParameters() {
+    const base = readParameters();
+    return {
+        energy: Number(dom.isoe?.value) || 0.0,
+        kx_min: -2.0,
+        kx_max: 2.0,
+        ky_min: -2.0,
+        ky_max: 2.0,
+        resolution: 24,
+        smear: 0.05,
+        hoppings: base.hoppings,
+        cutoffs: base.cutoffs,
+        onsite_e: base.onsite_e,
+        shift_s: base.shift_s,
+        shift_p: base.shift_p,
+        shift_d: base.shift_d,
+        use_soc: base.use_soc,
+        soc_strength: base.soc_strength,
+        tb_mode: base.tb_mode,
+        use_wannier: false,
+    };
+}
+
 async function calculate() {
     const structure = selected();
     if (!structure) return;
@@ -430,6 +566,23 @@ async function calculate() {
     dom.calculate.disabled = true;
     setStatus(`Solving ${structure.formula}\u2026`);
     try {
+        if (isIsoenergyMode()) {
+            const result = await TensorSpecAPI.dftIsoenergy(
+                structure.name,
+                readIsoenergyParameters(),
+            );
+            lastCrystalName = structure.name;
+            lastBandResult = null;
+            populateFatOptions([]);
+            renderIsoenergyHeatmap(result);
+            dom.statBands.textContent =
+                `${result.n_bands} bands, ${result.resolution}\u00d7${result.resolution} mesh`;
+            dom.statTime.textContent = `solved in ${result.elapsed_seconds}s`;
+            dom.badge.textContent = `isoenergy @ ${result.energy.toFixed(2)} eV`;
+            setStatus(`Isoenergy map ${result.name}`);
+            return;
+        }
+
         const result = await TensorSpecAPI.dftBands(structure.name, readParameters());
         lastCrystalName = structure.name;
         lastBandResult = { ...result, fat_weights: null, fat_target: "none" };
@@ -673,12 +826,15 @@ dom.soc.addEventListener("change", () => {
 );
 
 function syncPathFields() {
+    syncKgridMode();
+    if (isIsoenergyMode()) return;
     const isCustom = PATH_VALUES[dom.pathMode.value] === "custom";
     dom.coords.disabled = !isCustom;
     dom.labels.disabled = !isCustom;
     refreshBzNote();
 }
 dom.pathMode.addEventListener("change", syncPathFields);
+if (dom.kgrid) dom.kgrid.addEventListener("change", syncPathFields);
 syncPathFields();
 
 refreshStructures();

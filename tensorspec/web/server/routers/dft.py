@@ -31,6 +31,8 @@ from tensorspec.web.server.schemas import (
     FatBandRequest,
     FatBandResult,
     GapPredictRequest,
+    IsoenergyRequest,
+    IsoenergyResult,
     JobInfo,
     QEGenerateResponse,
     QERequest,
@@ -609,6 +611,86 @@ def compute_bands(
         weight_max=float(np.max(result["weights"])) if result.get("weights") is not None else 1.0,
         unfolded=result.get("weights") is not None,
         overlay_bands=overlay_bands,
+    )
+
+
+@router.post("/{name}/isoenergy", response_model=IsoenergyResult)
+def compute_isoenergy(
+    name: str,
+    request: IsoenergyRequest,
+    session: Session = Depends(current_session),
+) -> IsoenergyResult:
+    """Diagonalises a kx–ky mesh and returns Gaussian isoenergy density."""
+    structure = _require_structure(session, name)
+    engine = _engine_for(structure)
+
+    orbitals = _orbital_count(engine, structure, request.use_soc)
+    res = int(request.resolution)
+    estimated_k = res * res
+    if estimated_k * orbitals ** 3 > DIAGONALISATION_BUDGET:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"About {estimated_k} k-points on {orbitals} orbitals is too large to solve "
+                "in one request. Reduce resolution, or use a smaller cell."
+            ),
+        )
+
+    if request.use_wannier:
+        raise HTTPException(
+            status_code=422,
+            detail="Isoenergy mesh does not support Wannier90 yet; use manual TB hoppings.",
+        )
+
+    shells = engine.get_default_hopping(structure.composition.reduced_formula)
+
+    started = time.perf_counter()
+    try:
+        mesh = band_service.calculate_2d_mesh(
+            engine,
+            kx_min=request.kx_min,
+            kx_max=request.kx_max,
+            ky_min=request.ky_min,
+            ky_max=request.ky_max,
+            resolution=res,
+            shell_keys=list(shells.keys()),
+            hoppings=request.hoppings,
+            cutoffs=request.cutoffs,
+            onsite_e=request.onsite_e,
+            orbital_shifts={
+                "0": request.shift_s,
+                "1": request.shift_p,
+                "2": request.shift_d,
+            },
+            use_soc=request.use_soc,
+            soc_strength=request.soc_strength,
+            tb_mode=request.tb_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    eigenvalues = np.asarray(mesh["eigenvalues"])
+    intensity = band_service.isoenergy_density(
+        eigenvalues,
+        energy=request.energy,
+        smear=request.smear,
+        grid_shape=mesh["grid_shape"],
+    )
+    elapsed = time.perf_counter() - started
+    kx = np.asarray(mesh["kx"], dtype=float)
+    ky = np.asarray(mesh["ky"], dtype=float)
+
+    return IsoenergyResult(
+        name=f"{name}_isoenergy",
+        kx=[float(v) for v in kx],
+        ky=[float(v) for v in ky],
+        intensity=[[float(v) for v in row] for row in intensity],
+        energy=float(request.energy),
+        smear=float(request.smear),
+        n_bands=int(mesh["n_bands"]),
+        resolution=res,
+        elapsed_seconds=round(elapsed, 3),
+        fermi_energy=float(mesh.get("fermi_energy") or 0.0),
     )
 
 

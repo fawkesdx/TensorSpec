@@ -509,3 +509,17 @@ def calculate_2d_mesh(
         "recip_matrix": recip,
         "n_bands": int(eigenvalues.shape[1]) if eigenvalues.ndim == 2 else 0,
     }
+
+
+def isoenergy_density(eigenvalues, energy, smear, grid_shape):
+    """Gaussian density of states on a 2D k-mesh at fixed energy.
+
+    I = Σ_n exp(−(E_n − E)² / (2 σ²)) per k-point, reshaped to ``grid_shape``.
+    ``eigenvalues`` is (nk, nb) with nk = prod(grid_shape), matching
+    ``calculate_2d_mesh`` ravel order (indexing='ij').
+    """
+    ev = np.asarray(eigenvalues, dtype=float)
+    sigma = float(smear)
+    gauss = np.exp(-((ev - float(energy)) ** 2) / (2.0 * sigma * sigma))
+    intensity = np.sum(gauss, axis=-1)
+    return intensity.reshape(tuple(grid_shape))
