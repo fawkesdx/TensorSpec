@@ -1,6 +1,9 @@
 import datetime
+
+import numpy as np
 import xarray as xr
 from xarray import DataTree
+
 from tensorspec.core.data_models import TensorData
 
 class DataTreeBuilder:
@@ -17,30 +20,49 @@ class DataTreeBuilder:
         """
         # 1. Map labels and axes to xarray coordinates
         coords = {
-            label: (label, ax, {"units": unit}) 
+            label: (label, ax, {"units": unit})
             for label, ax, unit in zip(tensor_data.labels, tensor_data.axes, tensor_data.units)
         }
-        
+
         # 2. Build the primary DataArray
         da = xr.DataArray(
             data=tensor_data.value,
             coords=coords,
             dims=tensor_data.labels,
             name="intensity",
-            attrs={"long_name": tensor_data.data_type}
+            attrs={"long_name": tensor_data.data_type},
         )
-        
-        # 3. Package into a Dataset with full metadata attached
+
+        # 3. Package into a Dataset with metadata (motors go under /raw/motors)
+        metadata = dict(tensor_data.metadata or {})
+        motors = metadata.pop("motors", None)
         ds_raw = xr.Dataset({"data": da})
-        ds_raw.attrs.update(tensor_data.metadata)
-        
-        # 4. Construct the strict hierarchical tree
-        tree = DataTree.from_dict({
-            "/": xr.Dataset(attrs={"dataset_name": name, "creation_time": datetime.datetime.now().isoformat()}),
-            "/raw": ds_raw,                          # Immutable raw data
-            "/processed": xr.Dataset(),              # Calibrated/transformed data
-            "/analysis": xr.Dataset(),               # Mathematical fits (EDC/MDC)
-            "/history": xr.Dataset(attrs={"log": [f"[{datetime.datetime.now().time()}] Initialized from {tensor_data.data_type}"]})
-        })
-        
-        return tree
+        ds_raw.attrs.update(metadata)
+
+        nodes = {
+            "/": xr.Dataset(
+                attrs={
+                    "dataset_name": name,
+                    "creation_time": datetime.datetime.now().isoformat(),
+                }
+            ),
+            "/raw": ds_raw,
+            "/processed": xr.Dataset(),
+            "/analysis": xr.Dataset(),
+            "/history": xr.Dataset(
+                attrs={
+                    "log": [
+                        f"[{datetime.datetime.now().time()}] Initialized from {tensor_data.data_type}"
+                    ]
+                }
+            ),
+        }
+
+        if isinstance(motors, dict) and motors:
+            motor_vars = {
+                key: (("point",), np.asarray(values, dtype=float))
+                for key, values in motors.items()
+            }
+            nodes["/raw/motors"] = xr.Dataset(motor_vars)
+
+        return DataTree.from_dict(nodes)

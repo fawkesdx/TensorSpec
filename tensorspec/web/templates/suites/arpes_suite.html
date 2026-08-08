@@ -256,7 +256,15 @@
                             </div>
                             <div class="panel__body" style="padding:12px">
                                 <button type="button" class="btn btn--primary" id="av-demo">&#10133; Seed Demo Cube</button>
-                                <button type="button" class="btn btn--block" id="av-add-panel">&#10133; Spawn Panel (Below)</button>
+                                <label class="btn btn--block" for="av-load-file" style="display:block;text-align:center;cursor:pointer;margin-top:8px">
+                                    Load MAESTRO .h5
+                                </label>
+                                <input type="file" id="av-load-file" accept=".h5,.hdf5" hidden>
+                                <label class="hint" for="av-load-log" style="display:block;margin-top:6px">
+                                    Optional measurement log
+                                    <input type="file" id="av-load-log" accept=".csv,text/csv" style="display:block;margin-top:4px;width:100%">
+                                </label>
+                                <button type="button" class="btn btn--block" id="av-add-panel" style="margin-top:8px">&#10133; Spawn Panel (Below)</button>
                                 <h3 class="section-heading">Datasets</h3>
                                 <ul class="window-registry__list" id="av-datasets">
                                     <li class="empty-state">Loading&hellip;</li>
