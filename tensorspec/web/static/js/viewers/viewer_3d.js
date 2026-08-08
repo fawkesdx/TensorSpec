@@ -75,13 +75,22 @@ export function millerNormal(cell, h, k, l) {
   return norm(add(add(scale(aS, h), scale(bS, k)), scale(cS, l)));
 }
 
+function cellCenter(cell) {
+  const a = cell[0], b = cell[1], c = cell[2];
+  const corners = [
+    [0,0,0], a, b, c,
+    add(a,b), add(a,c), add(b,c), add(add(a,b),c),
+  ];
+  return scale(corners.reduce((s, p) => add(s, p), [0,0,0]), 1/8);
+}
+
 export function planeOffsetFromCenter(cell, normal, depthFrac) {
   const a = cell[0], b = cell[1], c = cell[2];
   const corners = [
     [0,0,0], a, b, c,
     add(a,b), add(a,c), add(b,c), add(add(a,b),c),
   ];
-  const center = scale(corners.reduce((s, p) => add(s, p), [0,0,0]), 1/8);
+  const center = cellCenter(cell);
   const projs = corners.map((p) => dot(sub(p, center), normal));
   const half = 0.5 * (Math.max(...projs) - Math.min(...projs));
   const frac = Math.max(-1, Math.min(1, depthFrac));
@@ -187,6 +196,7 @@ export class CrystalViewer {
       if (obj.material) obj.material.dispose();
     });
     this.content.clear();
+    this._cutMesh = null;
   }
 
   /* Draws a payload from POST /api/crystal/{name}/geometry. */
@@ -610,8 +620,15 @@ export class CrystalViewer {
       side: THREE.DoubleSide,
     });
     const mesh = new THREE.Mesh(geom, mat);
-    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...n));
-    mesh.position.set(...offset);
+    const zAxis = new THREE.Vector3(0, 0, 1);
+    const normal = new THREE.Vector3(...n);
+    if (normal.dot(zAxis) < -0.999999) {
+      mesh.quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+    } else {
+      mesh.quaternion.setFromUnitVectors(zAxis, normal);
+    }
+    const pos = sub(add(cellCenter(this.geometry.cell), offset), this.geometry.center);
+    mesh.position.set(...pos);
     this._cutMesh = mesh;
     this.content.add(mesh);
   }
