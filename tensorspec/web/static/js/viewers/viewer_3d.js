@@ -570,6 +570,17 @@ export class CrystalViewer {
     this.controls.update();
   }
 
+  lookAlongMiller(h, k, l) {
+    if (!this.geometry) return;
+    const n = millerNormal(this.geometry.cell, h, k, l);
+    if (!n || (n[0] === 0 && n[1] === 0 && n[2] === 0)) return;
+    const dir = new THREE.Vector3(...n).normalize();
+    const dist = this.camera.position.length() || 30;
+    this.camera.position.copy(dir.multiplyScalar(dist));
+    this.controls.target.set(0, 0, 0);
+    this.controls.update();
+  }
+
   setAzEl(azDeg, elDeg) {
     const dist = this.camera.position.length() || 30;
     const az = (azDeg * Math.PI) / 180;
