@@ -18,6 +18,10 @@ const dom = {
     placeholder: el("dft-placeholder"),
 
     pathMode: el("tb-path"),
+    pathNote: el("dft-path-note"),
+    gapFid: el("dft-gap-fid"),
+    gapPredict: el("dft-gap-predict"),
+    gapStatus: el("dft-gap-status"),
     coords: el("tb-coords"),
     labels: el("tb-labels"),
     points: el("tb-pts"),
@@ -55,6 +59,7 @@ const dom = {
 
 const PATH_VALUES = {
     "Auto-Detect BZ Path (PyMatgen)": "auto",
+    "Primitive hex reference (folded into supercell)": "primitive_hex_ref",
     "Arbitrary Custom Path": "custom",
     "Hexagonal (Template)": "hexagonal",
     "Rectangular / Orthorhombic (Template)": "rectangular",
@@ -117,6 +122,7 @@ async function refreshStructures() {
         if (!structures.length) {
             dom.structures.innerHTML = '<option value="">No structures available</option>';
             dom.calculate.disabled = true;
+            if (dom.gapPredict) dom.gapPredict.disabled = true;
             setStatus("Load a CIF in the Crystal Suite first.");
             renderShells();
             return;
@@ -130,10 +136,54 @@ async function refreshStructures() {
         });
 
         dom.calculate.disabled = false;
+        if (dom.gapPredict) dom.gapPredict.disabled = false;
         renderShells();
         setStatus(`${structures.length} structure(s) available`);
+        refreshBzNote();
     } catch (err) {
         setStatus(err.message, true);
+    }
+}
+
+async function refreshBzNote() {
+    const structure = selected();
+    if (!structure || !dom.pathNote) return;
+    try {
+        const ctx = await TensorSpecAPI.dftBzContext(structure.name);
+        const mode = PATH_VALUES[dom.pathMode?.value] || "auto";
+        if (mode === "primitive_hex_ref") {
+            dom.pathNote.textContent =
+                "Primitive hex Γ–K–M–Γ in Å⁻¹, folded into this cell’s BZ. Educational — not ARPES spectral-weight unfolding.";
+        } else if (ctx.likely_folded) {
+            dom.pathNote.textContent = `${ctx.title}: ${ctx.message}`;
+        } else {
+            dom.pathNote.textContent = ctx.message || dom.pathNote.textContent;
+        }
+    } catch (_) {
+        /* keep default hint */
+    }
+}
+
+async function predictGap() {
+    const structure = selected();
+    if (!structure) return;
+    if (dom.gapPredict) dom.gapPredict.disabled = true;
+    if (dom.gapStatus) dom.gapStatus.textContent = "Predicting gap (may download MEGNet weights)…";
+    try {
+        const result = await TensorSpecAPI.dftGapPredict(
+            structure.name,
+            dom.gapFid?.value || "PBE"
+        );
+        if (dom.gapStatus) {
+            dom.gapStatus.textContent =
+                `Eg ≈ ${result.gap_eV.toFixed(3)} eV (${result.fidelity}) · ${result.formula} · scalar only`;
+        }
+        setStatus(`MEGNet gap ≈ ${result.gap_eV.toFixed(3)} eV`);
+    } catch (err) {
+        if (dom.gapStatus) dom.gapStatus.textContent = err.message;
+        setStatus(err.message, true);
+    } finally {
+        if (dom.gapPredict) dom.gapPredict.disabled = false;
     }
 }
 
@@ -189,6 +239,10 @@ async function calculate() {
         dom.statBands.textContent = `${result.n_bands} bands, ${result.n_kpoints} k-points`;
         dom.statTime.textContent = `solved in ${result.elapsed_seconds}s`;
         dom.badge.textContent = result.node_labels.join(" \u2192 ") || "computed";
+        if (dom.pathNote && result.path_note) {
+            const title = result.path_title ? `${result.path_title}. ` : "";
+            dom.pathNote.textContent = `${title}${result.path_note}`;
+        }
         setStatus(`Pushed to workspace as ${result.name}`);
     } catch (err) {
         setStatus(err.message, true);
@@ -331,8 +385,12 @@ async function refreshSolvers() {
 }
 
 dom.refresh.addEventListener("click", refreshStructures);
-dom.structures.addEventListener("change", renderShells);
+dom.structures.addEventListener("change", () => {
+    renderShells();
+    refreshBzNote();
+});
 dom.calculate.addEventListener("click", calculate);
+if (dom.gapPredict) dom.gapPredict.addEventListener("click", predictGap);
 dom.qeGenerate.addEventListener("click", generateInputs);
 dom.qeBundle.addEventListener("click", downloadBundle);
 dom.qeQueue.addEventListener("click", queueRun);
@@ -352,6 +410,7 @@ function syncPathFields() {
     const isCustom = PATH_VALUES[dom.pathMode.value] === "custom";
     dom.coords.disabled = !isCustom;
     dom.labels.disabled = !isCustom;
+    refreshBzNote();
 }
 dom.pathMode.addEventListener("change", syncPathFields);
 syncPathFields();

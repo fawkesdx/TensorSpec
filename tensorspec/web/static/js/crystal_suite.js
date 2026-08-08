@@ -47,6 +47,8 @@ const dom = {
     stSteps: el("st-steps"),
     stRelaxCell: el("st-relax-cell"),
     stRelax: el("st-relax"),
+    stGapFid: el("st-gap-fid"),
+    stGap: el("st-gap"),
     stCif: el("st-cif"),
     stPush: el("st-push"),
     crExportCif: el("cr-export-cif"),
@@ -508,7 +510,30 @@ async function relaxActiveStack() {
     }
 }
 
+async function predictStackGap() {
+    if (!activeCrystal) {
+        setStackStatus("Render or load a stack first.", true);
+        return;
+    }
+    if (dom.stGap) dom.stGap.disabled = true;
+    setStackStatus(`MEGNet gap for ${activeCrystal}\u2026`);
+    try {
+        const result = await TensorSpecAPI.crystalGapPredict(
+            activeCrystal,
+            dom.stGapFid?.value || "PBE"
+        );
+        setStackStatus(
+            `Eg ≈ ${result.gap_eV.toFixed(3)} eV (${result.fidelity}) · ${result.formula} · scalar only — use DFT Suite for E(k)`
+        );
+    } catch (err) {
+        setStackStatus(err.message, true);
+    } finally {
+        if (dom.stGap) dom.stGap.disabled = false;
+    }
+}
+
 if (dom.stRelax) dom.stRelax.addEventListener("click", relaxActiveStack);
+if (dom.stGap) dom.stGap.addEventListener("click", predictStackGap);
 if (dom.stCif) dom.stCif.addEventListener("click", downloadActiveCif);
 if (dom.stPush) dom.stPush.addEventListener("click", () => pushActiveCrystal());
 if (dom.crExportCif) dom.crExportCif.addEventListener("click", downloadActiveCif);

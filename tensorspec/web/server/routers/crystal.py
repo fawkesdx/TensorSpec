@@ -22,6 +22,7 @@ from tensorspec.web.server.schemas import (
     CrystalSummary,
     ExfoliateRequest,
     ExfoliateResult,
+    GapPredictRequest,
     GeometryRequest,
     MoireRequest,
     MoireResult,
@@ -467,10 +468,8 @@ def relax_crystal(
             steps=request.steps,
             relax_cell=request.relax_cell,
         )
-    except ValueError as exc:
+    except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     store_as = request.store_as.strip() or f"{name}_relaxed"
     label = _safe_label(store_as, f"{name}_relaxed")
@@ -492,3 +491,18 @@ def relax_crystal(
         "final_energy_eV": result["final_energy_eV"],
         "stored_as": label,
     }
+
+
+@router.post("/{name}/gap-predict")
+def predict_gap(
+    name: str,
+    request: GapPredictRequest,
+    session: Session = Depends(current_session),
+):
+    """MEGNet scalar band-gap prediction for a lab stack (not full E(k))."""
+    structure = _require_structure(session, name)
+    try:
+        return mlip_engine.predict_band_gap(structure, fidelity=request.fidelity)
+    except (RuntimeError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+

@@ -19,11 +19,13 @@ from tensorspec.core.dft import band_service
 from tensorspec.core.dft import qe_pipeline
 from tensorspec.core.dft.qe_pipeline import PipelineParams, SolverPaths
 from tensorspec.core.dft_engine import DFTEngineRouter
+from tensorspec.core import mlip_engine
 from tensorspec.web.server.config import load_solver_config
 from tensorspec.web.server.jobs import get_job_queue
 from tensorspec.web.server.schemas import (
     BandRequest,
     BandResult,
+    GapPredictRequest,
     JobInfo,
     QEGenerateResponse,
     QERequest,
@@ -329,6 +331,27 @@ async def job_logs(websocket: WebSocket, job_id: str):
         unsubscribe()
 
 
+@router.get("/{name}/bz-context")
+def bz_context(name: str, session: Session = Depends(current_session)):
+    """Educational note: folded supercell BZ vs standard high-symmetry path."""
+    structure = _require_structure(session, name)
+    return band_service.describe_bz_context(structure)
+
+
+@router.post("/{name}/gap-predict")
+def predict_gap(
+    name: str,
+    request: GapPredictRequest,
+    session: Session = Depends(current_session),
+):
+    """MEGNet scalar band-gap prediction (surrogate when full bands are heavy)."""
+    structure = _require_structure(session, name)
+    try:
+        return mlip_engine.predict_band_gap(structure, fidelity=request.fidelity)
+    except (RuntimeError, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.post("/{name}/bands", response_model=BandResult)
 def compute_bands(
     name: str,
@@ -406,4 +429,8 @@ def compute_bands(
         energy_max=float(eigenvalues.max()),
         orbital_labels=[str(l) for l in (result["orbital_labels"] or [])],
         elapsed_seconds=round(elapsed, 3),
+        path_kind=str(result.get("path_kind") or "standard"),
+        path_title=str(result.get("path_title") or ""),
+        path_note=str(result.get("path_note") or ""),
+        likely_folded=bool(result.get("likely_folded")),
     )

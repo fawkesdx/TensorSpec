@@ -49,15 +49,106 @@ def mlip_available() -> bool:
 
 def list_models() -> List[Dict[str, Any]]:
     ready = mlip_available()
-    return [
+    models = [
         {
             "id": key,
             "label": meta["label"],
             "description": meta["description"],
             "available": ready,
+            "kind": "relax",
         }
         for key, meta in MODEL_CATALOG.items()
     ]
+    models.append(
+        {
+            "id": "megnet_gap",
+            "label": "MEGNet band gap (multi-fidelity)",
+            "description": (
+                "Predicts a scalar band gap (not full E(k)). Useful when the stack is too "
+                "large for DFT bands — gives a quick electronic scale (PBE/HSE/… fidelity)."
+            ),
+            "available": ready,
+            "kind": "gap",
+        }
+    )
+    return models
+
+
+def predict_band_gap(
+    structure,
+    *,
+    fidelity: str = "PBE",
+) -> Dict[str, Any]:
+    """
+    Predict band gap with pretrained MEGNet multi-fidelity model.
+
+    This is a scalar surrogate — not a full band-structure dispersion.
+    """
+    from pymatgen.core import Structure
+
+    if not isinstance(structure, Structure):
+        raise TypeError("structure must be a pymatgen Structure.")
+    fidelity_map = {"PBE": 0, "GLLB-SC": 1, "HSE": 2, "SCAN": 3}
+    key = fidelity.upper().replace("_", "-")
+    # normalize
+    aliases = {
+        "PBE": "PBE",
+        "GLLB": "GLLB-SC",
+        "GLLB-SC": "GLLB-SC",
+        "HSE": "HSE",
+        "SCAN": "SCAN",
+    }
+    fid_name = aliases.get(key, aliases.get(fidelity.upper(), "PBE"))
+    fid_idx = fidelity_map[fid_name]
+
+    try:
+        import matgl
+        import torch
+    except Exception as exc:
+        raise RuntimeError(
+            "Band-gap prediction needs matgl (+ torch). "
+            "Install with: pip install matgl torch"
+        ) from exc
+
+    candidates = [
+        "MEGNet-MP-2019.4.1-BandGap-mfi",
+    ]
+    # Also try HF-style ids if short name fails
+    errors = []
+    model = None
+    loaded_as = None
+    for name in candidates:
+        try:
+            model = matgl.load_model(name)
+            loaded_as = name
+            break
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+    if model is None:
+        raise RuntimeError(
+            "Could not load MEGNet band-gap weights. Tried:\n" + "\n".join(errors)
+        )
+
+    state = torch.tensor([fid_idx])
+    try:
+        gap = model.predict_structure(structure=structure, state_attr=state)
+    except TypeError:
+        # Older API variants
+        gap = model.predict_structure(structure)
+    gap_eV = float(gap)
+    return {
+        "gap_eV": gap_eV,
+        "fidelity": fid_name,
+        "fidelity_index": fid_idx,
+        "model": loaded_as,
+        "formula": structure.composition.reduced_formula,
+        "n_sites": len(structure),
+        "note": (
+            "Scalar band-gap estimate only — not a full E(k) dispersion. "
+            "For stack/twist intuition use DFT Suite TB bands (folded supercell path) "
+            "or the primitive-hex reference path."
+        ),
+    }
 
 
 def _load_potential(model_id: str):
