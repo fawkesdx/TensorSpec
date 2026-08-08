@@ -116,6 +116,7 @@
                             <select class="field" id="tb-path">
                                 <option>Auto-Detect BZ Path (PyMatgen)</option>
                                 <option>Primitive hex reference (folded into supercell)</option>
+                                <option>Unfold hex (spectral weight)</option>
                                 <option>Arbitrary Custom Path</option>
                                 <option>Hexagonal (Template)</option>
                                 <option>Rectangular / Orthorhombic (Template)</option>
@@ -124,8 +125,8 @@
                         </div>
                         <p class="hint" id="dft-path-note">
                             Auto path = Brillouin zone of the loaded cell (folded for twisted/stacked supercells).
-                            Primitive hex reference walks graphene-like Γ–K–M in Å⁻¹, then folds each k into the supercell BZ
-                            (educational — not true spectral-weight unfolding).
+                            Primitive hex reference walks graphene-like Γ–K–M in Å⁻¹, then folds each k into the supercell BZ.
+                            Unfold hex adds Popescu–Zunger spectral weights (ARPES-like brightness on the monolayer path).
                         </p>
                         <div class="form-row">
                             <label for="dft-gap-fid">MEGNet gap fidelity:</label>
