@@ -52,24 +52,24 @@
 
                         <!-- Tab 1 -->
                         <section class="tab-panel">
-                            <input type="file" id="cr-file" accept=".cif" hidden>
-                            <button type="button" class="btn btn--block" id="cr-load">&#128194; Load CIF File</button>
+                            <input type="file" id="cr-file" accept=".cif,.vasp,.poscar,.POSCAR" hidden>
+                            <button type="button" class="btn btn--block" id="cr-load">Load Structure File</button>
                             <p class="status-line" id="cr-status">No file loaded</p>
                             <p class="hint"><em id="cr-spacegroup">Space Group: N/A</em></p>
 
                             <div class="form-row form-row--stacked">
                                 <label for="cr-backend">Graphics Backend:</label>
-                                <select class="field" id="cr-backend">
-                                    <option>CPU Safe Mode (Matplotlib)</option>
-                                    <option selected>GPU Fast Mode (PyVista)</option>
+                                <select class="field" id="cr-backend" disabled title="HTML viewer: not yet">
+                                    <option>three.js (GPU)</option>
                                 </select>
+                                <p class="hint">Graphics backends Matplotlib/PyVista: HTML viewer: not yet.</p>
                             </div>
 
                             <fieldset class="fieldset">
                                 <legend>Geometry &amp; Scaling</legend>
                                 <div class="radio-group">
-                                    <label><input type="radio" name="cr-basis" checked> Conventional Basis</label>
-                                    <label><input type="radio" name="cr-basis"> Primitive Basis</label>
+                                    <label><input type="radio" name="cr-basis" id="cr-basis-conv" value="conventional" checked> Conventional Basis</label>
+                                    <label><input type="radio" name="cr-basis" id="cr-basis-prim" value="primitive"> Primitive Basis</label>
                                 </div>
                                 <div class="form-row">
                                     <label>Supercell (X,Y,Z):</label>
@@ -94,44 +94,41 @@
                                 <div class="form-row">
                                     <label for="cr-conn">Connections:</label>
                                     <select class="field" id="cr-conn">
-                                        <option>Bonds (Sticks)</option>
-                                        <option>Polyhedra (Planes)</option>
-                                        <option>None</option>
+                                        <option value="bonds">Bonds (Sticks)</option>
+                                        <option value="none">None</option>
+                                        <option value="polyhedra" disabled>Polyhedra (Planes) — HTML viewer: not yet</option>
                                     </select>
                                 </div>
                                 <div class="form-row">
                                     <label for="cr-thresh">Bond Thresh:</label>
                                     <input class="field" id="cr-thresh" type="number" min="0.1" max="5.0" step="0.05" value="1.15">
                                 </div>
-                                <label class="check"><input type="checkbox"> PBR Shiny</label>
-                                <label class="check"><input type="checkbox" checked> Show Axes</label>
-                                <label class="check"><input type="checkbox" checked> Show Conv. Box</label>
-                                <label class="check"><input type="checkbox"> Show Prim. Box</label>
-                                <label class="check"><input type="checkbox"> Enable Interactive Eraser Brush</label>
+                                <label class="check"><input type="checkbox" id="cr-pbr" disabled> PBR Shiny (HTML viewer: not yet)</label>
+                                <label class="check"><input type="checkbox" id="cr-axes" checked> Show Axes</label>
+                                <label class="check"><input type="checkbox" id="cr-show-cell" checked> Show Conv. Box</label>
+                                <label class="check"><input type="checkbox" id="cr-show-prim" disabled> Show Prim. Box (use Primitive Basis)</label>
+                                <label class="check"><input type="checkbox" id="cr-eraser" disabled> Enable Interactive Eraser Brush (HTML viewer: not yet)</label>
                             </fieldset>
 
                             <fieldset class="fieldset">
                                 <legend>Dynamic Element Colors</legend>
-                                <p class="hint">Populated per element once a structure is loaded. Defaults shown.</p>
-                                <div class="swatch-row"><span>Ta:</span><input type="color" value="#b041ff"></div>
-                                <div class="swatch-row"><span>Ir:</span><input type="color" value="#0080ff"></div>
-                                <div class="swatch-row"><span>Te:</span><input type="color" value="#ff8c00"></div>
-                                <div class="swatch-row"><span>Bonds:</span><input type="color" value="#d3d3d3"></div>
+                                <p class="hint">Populated per element once a structure is loaded.</p>
+                                <div id="cr-swatches"></div>
                             </fieldset>
 
                             <fieldset class="fieldset">
                                 <legend>Camera &amp; Projection</legend>
-                                <select class="field" style="margin-bottom:8px">
-                                    <option>Perspective Projection</option>
-                                    <option>Orthogonal Projection</option>
+                                <select class="field" id="cr-projection" style="margin-bottom:8px">
+                                    <option value="perspective">Perspective Projection</option>
+                                    <option value="orthographic">Orthogonal Projection</option>
                                 </select>
                                 <div class="form-row">
                                     <label>Quick View:</label>
                                     <div class="inline">
-                                        <button type="button" class="btn" disabled>+a</button>
-                                        <button type="button" class="btn" disabled>+b</button>
-                                        <button type="button" class="btn" disabled>+c</button>
-                                        <button type="button" class="btn" disabled>111</button>
+                                        <button type="button" class="btn" id="cr-view-a">+a</button>
+                                        <button type="button" class="btn" id="cr-view-b">+b</button>
+                                        <button type="button" class="btn" id="cr-view-c">+c</button>
+                                        <button type="button" class="btn" id="cr-view-111">111</button>
                                     </div>
                                 </div>
                                 <div class="form-row">
@@ -186,6 +183,7 @@
                                 </div>
                             </fieldset>
 
+                            <p class="hint">Cut plane, Align, 3ds/Blender, hi-res render: HTML viewer: not yet.</p>
                             <button type="button" class="btn btn--primary" disabled>&#127912; Render Structure</button>
                             <button type="button" class="btn btn--block" disabled>&#128444; Save High-Res Image</button>
                             <button type="button" class="btn btn--block" id="cr-export-cif">&#128190; Export Structure to CIF</button>
