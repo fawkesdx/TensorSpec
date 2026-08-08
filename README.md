@@ -36,6 +36,7 @@ Move beyond technique-specific file formats and flat structs. `TensorSpec` utili
 * **QP result curves:** from peak tables — δE(Γ) vs E, integrated intensity vs E, E(k), k_F, parabolic m*/m_e, v_F; Fermi-liquid / marginal-FL linewidth fits. Stored as `/analysis/qp_results` (`qp_results_v1`).
 * **Gap tools:** Dynes SC/CDW density of states × Fermi–Dirac (± analyzer resolution) on EDCs; stack → Δ(k) under `/analysis/gap_fit` (`gap_fit_v1`).
 * **Cut overlays:** DFT path bands as polylines and/or resampled simulated ARPES intensity on experimental cuts (Analysis tab).
+* **Volume / BZ prism:** 3D cutout viewer — rectangular or hexagonal prism from crystal surface BZ (or data box); indent sectors to expose interior walls; horizontal energy plane for Fermi-surface cuts (`POST /api/arpes/{name}/volume`).
 * **Still planned:** richer XPS-style backgrounds; image filtering utilities; additional beamline loaders.
 
 ### 4. Machine Learning Integration (In Development)

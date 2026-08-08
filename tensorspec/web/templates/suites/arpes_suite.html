@@ -25,12 +25,14 @@
             <input class="tab-radio" type="radio" name="arpes-tabs" id="t2">
             <input class="tab-radio" type="radio" name="arpes-tabs" id="t3">
             <input class="tab-radio" type="radio" name="arpes-tabs" id="t4">
+            <input class="tab-radio" type="radio" name="arpes-tabs" id="t5">
 
             <nav class="tab-bar">
                 <label for="t1">Matrix Element Simulator</label>
                 <label for="t2">Data Viewer</label>
                 <label for="t3">Process</label>
                 <label for="t4">Analysis</label>
+                <label for="t5">Volume</label>
             </nav>
 
             <div class="tab-body">
@@ -656,6 +658,58 @@
                         </div>
                         <div class="panel__body" style="padding:12px">
                             <div class="viewport" id="an-overlay-cut" style="min-height:360px"></div>
+                        </div>
+                    </section>
+                </section>
+
+                <!-- ===== Tab 5: Volume (BZ prism cutout) ===== -->
+                <section class="tab-panel" data-tab="t5">
+                    <div class="controls" style="margin-bottom:12px">
+                        <div class="control">
+                            <label for="vol-name">Dataset (≥3D)</label>
+                            <select id="vol-name"></select>
+                        </div>
+                        <div class="control">
+                            <label for="vol-crystal">Crystal (BZ shape)</label>
+                            <select id="vol-crystal"><option value="">— data box —</option></select>
+                        </div>
+                        <div class="control">
+                            <label for="vol-shape">Prism</label>
+                            <select id="vol-shape">
+                                <option value="auto" selected>Auto (crystal / box)</option>
+                                <option value="rectangle">Rectangle</option>
+                                <option value="hexagon">Hexagon</option>
+                                <option value="crystal">Crystal surface BZ</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <label for="vol-indent">Indent sectors</label>
+                            <input id="vol-indent" type="range" min="0" max="3" step="1" value="1" style="width:8rem">
+                            <span class="hint" id="vol-indent-label">1</span>
+                        </div>
+                        <div class="control">
+                            <label for="vol-depth">Indent depth</label>
+                            <input id="vol-depth" type="range" min="0" max="100" value="55" style="width:8rem">
+                        </div>
+                        <div class="control">
+                            <label for="vol-ef">E slice</label>
+                            <input id="vol-ef" type="number" step="0.01" value="0" style="width:5rem">
+                        </div>
+                        <div class="control">
+                            <label><input type="checkbox" id="vol-fermi" checked> Show E-plane</label>
+                        </div>
+                        <div class="control">
+                            <button class="btn" id="vol-load" type="button">Build volume</button>
+                        </div>
+                    </div>
+                    <p class="hint" id="vol-status">Needs a 3D cube (e.g. Fermi map with energy, or simulated E×kx×ky). Indent cuts into the BZ prism to reveal interior dispersions; the E-plane shows the Fermi surface cut.</p>
+                    <section class="panel">
+                        <div class="panel__header">
+                            <h2 class="panel__title">BZ prism cutout</h2>
+                            <span class="badge" id="vol-badge">—</span>
+                        </div>
+                        <div class="panel__body" style="padding:12px">
+                            <div class="viewport" id="vol-view" style="min-height:480px;height:60vh"></div>
                         </div>
                     </section>
                 </section>
