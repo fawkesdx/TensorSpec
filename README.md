@@ -47,7 +47,7 @@ A dedicated module for attaching ML routines to experimental data:
 * Peak / QP tables under `/analysis` carry `usable_for_ml` / `usable_for_tb_feedback` attrs for later TB feedback.
 
 ### 5. Browser-Based Interface
-The user interface is a browser application served by FastAPI (per-session workspace), replacing the earlier PySide6 desktop GUI:
+The user interface is a browser application served by FastAPI (per-session workspace). There is no Qt / PySide desktop GUI.
 * **Workspace Browser:** Central explorer for active data variables, metadata inspector, and suite launcher ribbon.
 * **Suite Panels:** Crystal, DFT, and ARPES suites are live end-to-end (HTML → API → `core/`). PEEM / XAS / Transport / ML shells exist; engines still pending.
 * **Static-First front end:** plain HTML/CSS/vanilla JS (no bundler). Physics stays in Python.
