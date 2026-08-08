@@ -21,6 +21,7 @@ from tensorspec.core.data_models import TensorData
 from tensorspec.core.dft import band_service
 from tensorspec.core.dft_engine import DFTEngineRouter
 from tensorspec.core.io.arpes_loader import ARPESLoader
+from tensorspec.core import arpes_process
 from tensorspec.plotting.backends.arpes_figure import export_slice_figure
 from tensorspec.web.server.jobs import Job, JobStatus, get_job_queue
 from tensorspec.web.server.schemas import (
@@ -30,10 +31,14 @@ from tensorspec.web.server.schemas import (
     AxisInfo,
     Curve,
     FigureExportRequest,
+    InplaneApplyRequest,
+    InplaneConvertRequest,
     JobInfo,
     ProfileRequest,
     ProfileResponse,
     SliceRequest,
+    SuggestCenterRequest,
+    SurfaceBZRequest,
     TensorAxes,
 )
 from tensorspec.web.server.session import SESSION_COOKIE, Session, current_session, session_store
@@ -111,6 +116,180 @@ async def load_arpes_file(
         measurement_type=meta.get("Measurement_Type"),
         source_file=safe_file,
     )
+
+
+def _photon_from_metadata(tensor) -> float | None:
+    meta = tensor.metadata or {}
+    for key in ("Photon_Energy_eV", "Log_Photon_Energy"):
+        val = meta.get(key)
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, str):
+            import re as _re
+
+            match = _re.search(r"([0-9]+(?:\.[0-9]+)?)", val)
+            if match:
+                return float(match.group(1))
+    return None
+
+
+def _default_deg_per_unit(tensor, axis_index: int) -> float:
+    unit = (tensor.units[axis_index] or "").lower()
+    label = tensor.labels[axis_index].lower()
+    if "deg" in unit or "angle" in label or "defl" in label:
+        return 1.0
+    axis = np.asarray(tensor.axes[axis_index], dtype=float)
+    span = float(np.nanmax(axis) - np.nanmin(axis)) or 1.0
+    # Angular30 lens ≈ ±15° across the detector window.
+    return 30.0 / span
+
+
+def _convert_from_request(tensor, request: InplaneConvertRequest):
+    return arpes_process.convert_inplane_to_k(
+        tensor,
+        angle_axis=request.angle_axis,
+        energy_axis=request.energy_axis,
+        beta_axis=request.beta_axis,
+        center=request.center,
+        deg_per_unit=request.deg_per_unit,
+        beta_center=request.beta_center,
+        beta_deg_per_unit=request.beta_deg_per_unit,
+        photon_energy=request.photon_energy,
+        work_function=request.work_function,
+        energy_mode=request.energy_mode,
+        e_kin_ref=request.e_kin_ref,
+    )
+
+
+@router.get("/process/{name}/roles")
+def process_axis_roles(name: str, session: Session = Depends(current_session)):
+    """Infer energy / angle axes and sensible Γ / scale defaults."""
+    tensor = _require_tensor(session, name)
+    roles = arpes_process.infer_axis_roles(tensor)
+    angle_axis = roles["angle_axis"]
+    energy_axis = roles["energy_axis"]
+    beta_axis = roles["beta_axis"]
+    angle = np.asarray(tensor.axes[angle_axis], dtype=float)
+    center = float(angle[len(angle) // 2])
+    photon = _photon_from_metadata(tensor) or 80.0
+    return {
+        "name": name,
+        "labels": list(tensor.labels),
+        "units": list(tensor.units),
+        "shape": [int(n) for n in tensor.value.shape],
+        "energy_axis": energy_axis,
+        "angle_axis": angle_axis,
+        "beta_axis": beta_axis,
+        "center": center,
+        "beta_center": float(np.asarray(tensor.axes[beta_axis])[len(tensor.axes[beta_axis]) // 2])
+        if beta_axis is not None
+        else 0.0,
+        "deg_per_unit": _default_deg_per_unit(tensor, angle_axis),
+        "beta_deg_per_unit": _default_deg_per_unit(tensor, beta_axis) if beta_axis is not None else 1.0,
+        "photon_energy": photon,
+        "work_function": 4.5,
+        "data_type": tensor.data_type,
+    }
+
+
+@router.post("/process/{name}/suggest-center")
+def process_suggest_center(
+    name: str,
+    request: SuggestCenterRequest,
+    session: Session = Depends(current_session),
+):
+    tensor = _require_tensor(session, name)
+    return arpes_process.suggest_center(
+        tensor,
+        angle_axis=request.angle_axis,
+        energy_axis=request.energy_axis,
+        fixed=request.fixed,
+    )
+
+
+@router.post("/process/{name}/inplane/preview")
+def process_inplane_preview(
+    name: str,
+    request: InplaneConvertRequest,
+    session: Session = Depends(current_session),
+) -> Response:
+    """Convert with the given Γ center and return a 2D preview plane."""
+    tensor = _require_tensor(session, name)
+    try:
+        converted = _convert_from_request(tensor, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    x_idx, y_idx = request.x_idx, request.y_idx
+    if converted.ndim == 1:
+        raise HTTPException(status_code=422, detail="Need at least 2D data to preview.")
+    if x_idx == y_idx:
+        raise HTTPException(status_code=422, detail="X and Y axes must differ.")
+    _validate_axes(converted, x_idx, y_idx)
+
+    result = ops.extract_slice(converted, x_idx, y_idx, request.fixed)
+    plane, x_axis, y_axis, steps = ops.downsample_plane(
+        result["values"], result["x_axis"], result["y_axis"], request.max_points
+    )
+    header = {
+        "shape": [int(plane.shape[0]), int(plane.shape[1])],
+        "x_axis": [float(v) for v in x_axis],
+        "y_axis": [float(v) for v in y_axis],
+        "extent": [float(x_axis[0]), float(x_axis[-1]), float(y_axis[0]), float(y_axis[-1])],
+        "x_label": converted.labels[x_idx],
+        "y_label": converted.labels[y_idx],
+        "x_unit": converted.units[x_idx],
+        "y_unit": converted.units[y_idx],
+        "vmin": float(np.nanmin(plane)),
+        "vmax": float(np.nanmax(plane)),
+        "steps": steps,
+        "e_kin_ref": converted.metadata.get("E_kin_Ref_eV"),
+        "energy_mode": converted.metadata.get("Energy_Mode"),
+    }
+    return Response(content=_pack_plane(header, plane), media_type="application/octet-stream")
+
+
+@router.post("/process/{name}/inplane/apply")
+def process_inplane_apply(
+    name: str,
+    request: InplaneApplyRequest,
+    session: Session = Depends(current_session),
+):
+    """Persist the k∥ conversion as a new dataset and/or /processed node."""
+    tensor = _require_tensor(session, name)
+    try:
+        converted = _convert_from_request(tensor, request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    store_as = (request.store_as or f"{name}_k").strip()
+    label = _safe_label(store_as, f"{name}_k")
+    session.workspace.push_spectroscopy_data(label, converted)
+    wrote_processed = False
+    if request.also_write_processed:
+        wrote_processed = session.workspace.write_processed_data(name, converted)
+    return {
+        "name": label,
+        "source": name,
+        "shape": [int(n) for n in converted.value.shape],
+        "labels": list(converted.labels),
+        "units": list(converted.units),
+        "wrote_processed": wrote_processed,
+        "e_kin_ref": converted.metadata.get("E_kin_Ref_eV"),
+    }
+
+
+@router.post("/process/surface-bz")
+def process_surface_bz(
+    request: SurfaceBZRequest,
+    session: Session = Depends(current_session),
+):
+    """2D projected surface BZ polygon for overlay on k-maps."""
+    structure = _require_structure(session, request.crystal_name)
+    poly = arpes_process.surface_bz_polygon_2d(structure, request.h, request.k, request.l)
+    if poly is None:
+        raise HTTPException(status_code=422, detail="Could not build a surface BZ polygon.")
+    return {"crystal_name": request.crystal_name, **poly}
 
 
 def _require_tensor(session: Session, name: str):

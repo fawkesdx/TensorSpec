@@ -172,6 +172,45 @@ class ArpesLoadSummary(BaseModel):
     source_file: str | None = None
 
 
+class InplaneConvertRequest(BaseModel):
+    """User-driven angle → k∥ conversion with a chosen Γ center."""
+
+    angle_axis: int = Field(ge=0, le=15)
+    energy_axis: int | None = Field(default=None, ge=0, le=15)
+    beta_axis: int | None = Field(default=None, ge=0, le=15)
+    center: float
+    beta_center: float = 0.0
+    deg_per_unit: float = Field(default=1.0, gt=0, le=10)
+    beta_deg_per_unit: float = Field(default=1.0, gt=0, le=10)
+    photon_energy: float = Field(default=80.0, gt=0, le=5000)
+    work_function: float = Field(default=4.5, ge=0, le=10)
+    energy_mode: str = Field(default="auto")
+    e_kin_ref: float | None = Field(default=None, gt=0, le=5000)
+    # For preview slice packing
+    x_idx: int = Field(default=0, ge=0, le=15)
+    y_idx: int = Field(default=1, ge=0, le=15)
+    fixed: dict[int, int] = Field(default_factory=dict)
+    max_points: int = Field(default=512, ge=32, le=2048)
+
+
+class InplaneApplyRequest(InplaneConvertRequest):
+    store_as: str = Field(default="", max_length=64)
+    also_write_processed: bool = True
+
+
+class SuggestCenterRequest(BaseModel):
+    angle_axis: int = Field(ge=0, le=15)
+    energy_axis: int | None = Field(default=None, ge=0, le=15)
+    fixed: dict[int, int] = Field(default_factory=dict)
+
+
+class SurfaceBZRequest(BaseModel):
+    crystal_name: str = Field(min_length=1, max_length=64)
+    h: int = Field(default=0, ge=-10, le=10)
+    k: int = Field(default=0, ge=-10, le=10)
+    l: int = Field(default=1, ge=-10, le=10)
+
+
 class SliceRequest(BaseModel):
     """Which 2D plane to cut out of an N-dimensional tensor."""
 

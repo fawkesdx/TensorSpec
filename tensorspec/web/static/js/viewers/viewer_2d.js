@@ -36,6 +36,7 @@ export class ImageViewer {
         this.crosshair = { x: 0, y: 0 };
         this.window = { dx: 0, dy: 0 };
         this.dragging = false;
+        this.overlays = { polygons: [], vlines: [], hlines: [] };
 
         this.canvas.addEventListener("pointerdown", (e) => this._onPointer(e, true));
         this.canvas.addEventListener("pointermove", (e) => {
@@ -72,6 +73,11 @@ export class ImageViewer {
 
     setCrosshair(x, y) {
         this.crosshair = { x, y };
+        this.draw();
+    }
+
+    setOverlays({ polygons = [], vlines = [], hlines = [] } = {}) {
+        this.overlays = { polygons, vlines, hlines };
         this.draw();
     }
 
@@ -177,8 +183,57 @@ export class ImageViewer {
         ctx.drawImage(this.buffer, rect.left, rect.top, rect.width, rect.height);
 
         this._drawWindow(ctx, rect);
+        this._drawOverlays(ctx, rect);
         this._drawCrosshair(ctx, rect);
         this._drawAxes(ctx, rect);
+    }
+
+    _dataToPixel(xData, yData, rect) {
+        const extent = this.header.extent;
+        const xSpan = extent[1] - extent[0] || 1;
+        const ySpan = extent[3] - extent[2] || 1;
+        return {
+            x: rect.left + ((xData - extent[0]) / xSpan) * rect.width,
+            y: rect.top + rect.height - ((yData - extent[2]) / ySpan) * rect.height,
+        };
+    }
+
+    _drawOverlays(ctx, rect) {
+        const { polygons, vlines, hlines } = this.overlays || {};
+        ctx.save();
+        if (polygons && polygons.length) {
+            ctx.strokeStyle = "#22d3ee";
+            ctx.lineWidth = 1.5;
+            polygons.forEach((poly) => {
+                if (!poly || poly.length < 2) return;
+                ctx.beginPath();
+                poly.forEach((pt, i) => {
+                    const p = this._dataToPixel(pt.x, pt.y, rect);
+                    if (i === 0) ctx.moveTo(p.x, p.y);
+                    else ctx.lineTo(p.x, p.y);
+                });
+                ctx.stroke();
+            });
+        }
+        ctx.strokeStyle = "#fbbf24";
+        ctx.setLineDash([4, 3]);
+        ctx.lineWidth = 1.25;
+        (vlines || []).forEach((xData) => {
+            const p = this._dataToPixel(xData, this.header.extent[2], rect);
+            ctx.beginPath();
+            ctx.moveTo(p.x, rect.top);
+            ctx.lineTo(p.x, rect.top + rect.height);
+            ctx.stroke();
+        });
+        (hlines || []).forEach((yData) => {
+            const p = this._dataToPixel(this.header.extent[0], yData, rect);
+            ctx.beginPath();
+            ctx.moveTo(rect.left, p.y);
+            ctx.lineTo(rect.left + rect.width, p.y);
+            ctx.stroke();
+        });
+        ctx.setLineDash([]);
+        ctx.restore();
     }
 
     _drawWindow(ctx, rect) {

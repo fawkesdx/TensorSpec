@@ -145,6 +145,14 @@ class WorkspaceManager:
         }
         print(f"DataTree '{name}' successfully pushed to Global Workspace.")
 
+    def write_processed_data(self, name: str, tensor_data: TensorData) -> bool:
+        """Write a processed cube into ``/processed`` of an existing spectroscopy tree."""
+        item = self._data.get(name)
+        if not item or item.get('type') != 'spectroscopy_tree':
+            return False
+        item['tree'] = DataTreeBuilder.write_processed(item['tree'], tensor_data)
+        return True
+
     def pull_tensor_data(self, name: str, node: str = "raw") -> TensorData:
         """
         Extracts a specific node from a stored DataTree and packages it back 
