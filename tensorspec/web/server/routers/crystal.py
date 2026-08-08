@@ -25,10 +25,14 @@ from tensorspec.web.server.schemas import (
     GeometryRequest,
     MoireRequest,
     MoireResult,
+    PushCrystalRequest,
+    RelaxRequest,
     StackRequest,
     TemplateRequest,
 )
 from tensorspec.web.server.session import Session, current_session
+from tensorspec.core import mlip_engine
+from fastapi.responses import Response
 
 router = APIRouter(prefix="/api/crystal", tags=["crystal"])
 
@@ -206,7 +210,9 @@ def build_stack(
             detail=f"{projected} atoms exceeds the {MAX_RENDER_ATOMS} the browser can draw.",
         )
 
-    stacked = CrystalEngine.build_heterostructure_stack(layers_data)
+    stacked = CrystalEngine.build_heterostructure_stack(
+        layers_data, vacuum=request.vacuum
+    )
     label = _safe_label(request.store_as, "heterostructure")
     _store(session, label, stacked)
     return _geometry_from_structure(
@@ -409,3 +415,80 @@ def get_brillouin_zone(
         surface_simplices=surface_simplices,
         projection_lines=projection_lines,
     )
+
+
+@router.get("/mlip/models")
+def mlip_models():
+    """List pretrained MLIP options for Tab 3 relaxation."""
+    return {"models": mlip_engine.list_models(), "installed": mlip_engine.mlip_available()}
+
+
+@router.get("/{name}/cif")
+def download_cif(name: str, session: Session = Depends(current_session)):
+    """Download the workspace structure as a CIF (for DFT / archiving)."""
+    structure = _require_structure(session, name)
+    try:
+        text = structure.to(fmt="cif")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"CIF export failed: {exc}") from exc
+    filename = f"{name}.cif"
+    return Response(
+        content=text.encode("utf-8"),
+        media_type="chemical/x-cif",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/{name}/push", response_model=CrystalSummary)
+def push_crystal_alias(
+    name: str,
+    request: PushCrystalRequest,
+    session: Session = Depends(current_session),
+) -> CrystalSummary:
+    """Store a copy under ``store_as`` so DFT Suite can pick it by that name."""
+    structure = _require_structure(session, name)
+    label = _safe_label(request.store_as, name)
+    return _store(session, label, structure)
+
+
+@router.post("/{name}/relax")
+def relax_crystal(
+    name: str,
+    request: RelaxRequest,
+    session: Session = Depends(current_session),
+):
+    """Relax ions with a pretrained MLIP (CHGNet or M3GNet) and store the result."""
+    structure = _require_structure(session, name)
+    try:
+        result = mlip_engine.relax_structure(
+            structure,
+            model=request.model,
+            fmax=request.fmax,
+            steps=request.steps,
+            relax_cell=request.relax_cell,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    store_as = request.store_as.strip() or f"{name}_relaxed"
+    label = _safe_label(store_as, f"{name}_relaxed")
+    summary = _store(session, label, result["structure"])
+    geometry = _geometry_from_structure(
+        label,
+        result["structure"],
+        show_bonds=request.show_bonds,
+        bond_threshold=request.bond_threshold,
+    )
+    return {
+        "summary": summary.model_dump(),
+        "geometry": geometry.model_dump(),
+        "model": result["model"],
+        "fmax": result["fmax"],
+        "steps_requested": result["steps_requested"],
+        "steps_taken": result["steps_taken"],
+        "relax_cell": result["relax_cell"],
+        "final_energy_eV": result["final_energy_eV"],
+        "stored_as": label,
+    }

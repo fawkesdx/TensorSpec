@@ -52,8 +52,8 @@ fastapi>=0.115
 uvicorn[standard]>=0.32
 python-multipart>=0.0.9
 
-# --- ARPES SIMULATION ENGINES ---
-chinook==1.1.3
-oscarpes==3.1.1
-psutil==5.9.8
-h5py>=3.10.0
+# --- OPTIONAL MLIP RELAXATION (Crystal Suite Tab 3) ---
+# Uncomment / install when you want CHGNet / M3GNet stack relaxation:
+# matgl>=1.1.0
+# ase>=3.22
+# torch>=2.0

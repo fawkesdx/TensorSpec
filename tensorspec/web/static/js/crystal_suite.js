@@ -41,6 +41,16 @@ const dom = {
     stRender: el("st-render"),
     stMoire: el("st-moire"),
     stStatus: el("st-status"),
+    stStore: el("st-store"),
+    stMlip: el("st-mlip"),
+    stFmax: el("st-fmax"),
+    stSteps: el("st-steps"),
+    stRelaxCell: el("st-relax-cell"),
+    stRelax: el("st-relax"),
+    stCif: el("st-cif"),
+    stPush: el("st-push"),
+    crExportCif: el("cr-export-cif"),
+    crPush: el("cr-push"),
 
     exSource: el("ex-source"),
     exRefresh: el("ex-refresh"),
@@ -234,11 +244,12 @@ async function renderStack() {
     }
     setStackStatus("Building stack\u2026");
     try {
+        const storeAs = (dom.stStore?.value || "heterostructure").trim() || "heterostructure";
         const geometry = await TensorSpecAPI.crystalStack({
             layers: stackLayers.map(({ name, sc_x, sc_y, z_shift, twist }) => ({
                 name, sc_x, sc_y, z_shift, twist,
             })),
-            store_as: "heterostructure",
+            store_as: storeAs,
             show_bonds: true,
         });
         activeCrystal = geometry.name;
@@ -424,6 +435,98 @@ dom.bzClear.addEventListener("click", () => {
     if (viewer) viewer.clearBrillouinZone();
     setStatus("BZ cleared");
 });
+
+function downloadActiveCif() {
+    if (!activeCrystal) {
+        setStatus("Load or stack a structure first.", true);
+        return;
+    }
+    const link = document.createElement("a");
+    link.href = TensorSpecAPI.crystalCifUrl(activeCrystal);
+    link.download = `${activeCrystal}.cif`;
+    link.click();
+}
+
+async function pushActiveCrystal(preferredName) {
+    if (!activeCrystal) {
+        setStatus("Nothing to push — load or render a stack first.", true);
+        return;
+    }
+    const storeAs = (preferredName || dom.stStore?.value || activeCrystal).trim();
+    if (!storeAs) {
+        setStatus("Enter a workspace name.", true);
+        return;
+    }
+    setStackStatus(`Pushing as ${storeAs}\u2026`);
+    try {
+        const summary = await TensorSpecAPI.crystalPush(activeCrystal, storeAs);
+        activeCrystal = summary.name;
+        if (dom.stStore) dom.stStore.value = summary.name;
+        setStackStatus(`Pushed ${summary.name} (${summary.formula}, ${summary.n_sites} sites) — available in DFT Suite`);
+        setStatus(`${summary.name} in workspace`);
+    } catch (err) {
+        setStackStatus(err.message, true);
+        setStatus(err.message, true);
+    }
+}
+
+async function relaxActiveStack() {
+    if (!activeCrystal) {
+        setStackStatus("Render a stack first, then relax.", true);
+        return;
+    }
+    const storeAs = `${(dom.stStore?.value || activeCrystal).trim() || activeCrystal}_relaxed`;
+    setStackStatus(`Relaxing ${activeCrystal} with ${dom.stMlip.value}\u2026 (first run may download weights)`);
+    if (dom.stRelax) dom.stRelax.disabled = true;
+    try {
+        const result = await TensorSpecAPI.crystalRelax(activeCrystal, {
+            model: dom.stMlip.value,
+            fmax: Number(dom.stFmax.value) || 0.1,
+            steps: Number(dom.stSteps.value) || 200,
+            relax_cell: !!dom.stRelaxCell?.checked,
+            store_as: storeAs,
+            show_bonds: true,
+        });
+        activeCrystal = result.stored_as;
+        if (dom.stStore) dom.stStore.value = result.stored_as;
+        const view = ensureViewer();
+        view.clearBrillouinZone();
+        view.atomScale = Number(dom.radius.value) || 0.5;
+        view.render(result.geometry, { frame: true });
+        fillTargets(result.geometry.elements);
+        dom.statAtoms.textContent = `${result.geometry.n_atoms} atoms`;
+        dom.statBonds.textContent = `${result.geometry.bonds.length} bonds`;
+        const e = result.final_energy_eV != null ? ` · E=${result.final_energy_eV.toFixed(3)} eV` : "";
+        setStackStatus(
+            `Relaxed → ${result.stored_as} (${result.model}${e}). Ready for DFT Suite / CIF.`
+        );
+        setStatus(`${result.stored_as} active`);
+    } catch (err) {
+        setStackStatus(err.message, true);
+    } finally {
+        if (dom.stRelax) dom.stRelax.disabled = false;
+    }
+}
+
+if (dom.stRelax) dom.stRelax.addEventListener("click", relaxActiveStack);
+if (dom.stCif) dom.stCif.addEventListener("click", downloadActiveCif);
+if (dom.stPush) dom.stPush.addEventListener("click", () => pushActiveCrystal());
+if (dom.crExportCif) dom.crExportCif.addEventListener("click", downloadActiveCif);
+if (dom.crPush) {
+    dom.crPush.addEventListener("click", () => {
+        const name = window.prompt("Workspace name for this structure:", activeCrystal || "structure");
+        if (name) pushActiveCrystal(name);
+    });
+}
+
+// Prefill MLIP availability hint
+TensorSpecAPI.crystalMlipModels()
+    .then((info) => {
+        if (!info.installed && dom.stStatus) {
+            setStackStatus("MLIP packages not installed yet — stack/CIF/push still work. For relax: pip install matgl ase torch");
+        }
+    })
+    .catch(() => {});
 
 renderLayerRows();
 syncExfoliateMode();

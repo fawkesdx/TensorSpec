@@ -188,7 +188,7 @@
 
                             <button type="button" class="btn btn--primary" disabled>&#127912; Render Structure</button>
                             <button type="button" class="btn btn--block" disabled>&#128444; Save High-Res Image</button>
-                            <button type="button" class="btn btn--block" disabled>&#128190; Export Structure to CIF</button>
+                            <button type="button" class="btn btn--block" id="cr-export-cif">&#128190; Export Structure to CIF</button>
                         </section>
 
                         <!-- Tab 2 -->
@@ -302,6 +302,34 @@
 
                             <button type="button" class="btn btn--block" id="st-render">&#129521; Render Heterostructure Stack</button>
                             <button type="button" class="btn btn--block" id="st-moire">&#127744; Calculate Moir&#233; Superlattice</button>
+
+                            <fieldset class="fieldset" style="margin-top:12px">
+                                <legend>Save · Push · MLIP Relax</legend>
+                                <div class="form-row">
+                                    <label for="st-store">Workspace name:</label>
+                                    <input class="field" id="st-store" type="text" value="heterostructure" maxlength="64">
+                                </div>
+                                <div class="form-row">
+                                    <label for="st-mlip">ML potential:</label>
+                                    <select class="field" id="st-mlip">
+                                        <option value="chgnet">CHGNet (fast universal)</option>
+                                        <option value="m3gnet">M3GNet (MP universal)</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label for="st-fmax">fmax (eV/&#197;):</label>
+                                    <input class="field field--num" id="st-fmax" type="number" min="0.01" max="1" step="0.01" value="0.1">
+                                </div>
+                                <div class="form-row">
+                                    <label for="st-steps">Max steps:</label>
+                                    <input class="field field--num" id="st-steps" type="number" min="10" max="2000" step="10" value="200">
+                                </div>
+                                <label class="check"><input type="checkbox" id="st-relax-cell"> Also relax cell (usually off for 2D + vacuum)</label>
+                                <button type="button" class="btn btn--block" id="st-relax">&#9881; Relax stack (MLIP)</button>
+                                <button type="button" class="btn btn--block" id="st-cif">&#128190; Download CIF</button>
+                                <button type="button" class="btn btn--block" id="st-push">&#128229; Push / rename in workspace</button>
+                                <p class="hint">Stack already saves to the workspace for DFT Suite. CIF download exports the active structure. MLIP needs <code>pip install matgl ase torch</code> (first run downloads pretrained weights).</p>
+                            </fieldset>
                             <p class="status-line" id="st-status">Status: Waiting for stack...</p>
                         </section>
 
@@ -343,7 +371,7 @@
                 </div>
 
                 <div class="inspector__footer">
-                    <button type="button" class="btn btn--primary" disabled>&#128229; Push Structure to Central Workspace</button>
+                    <button type="button" class="btn btn--primary" id="cr-push">&#128229; Push Structure to Workspace</button>
                 </div>
             </section>
 

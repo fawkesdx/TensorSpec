@@ -305,13 +305,18 @@ class CrystalEngine:
         )
 
     @staticmethod
-    def build_heterostructure_stack(layers_data: list[dict]) -> Structure:
+    def build_heterostructure_stack(layers_data: list[dict], *, vacuum: float = 20.0, pad_xy: float = 3.0) -> Structure:
         """
         Rotates, shifts, and combines multiple 2D structures into a unified stacked supercell.
-        Each dictionary in layers_data must contain: {'struct': Structure, 'sc_x': int, 'sc_y': int, 'z_shift': float, 'twist': float}
+
+        Each dictionary in ``layers_data`` must contain:
+        ``{'struct': Structure, 'sc_x': int, 'sc_y': int, 'z_shift': float, 'twist': float}``.
+
+        The result uses a tight orthorhombic cell with vacuum (DFT-ready), not a
+        500 Å dummy cube.
         """
         all_species, all_coords, layer_tags = [], [], []
-        
+
         for idx, l in enumerate(layers_data):
             supercell = l['struct'] * (l['sc_x'], l['sc_y'], 1)
             theta = np.radians(l['twist'])
@@ -320,27 +325,63 @@ class CrystalEngine:
                 [np.sin(theta),  np.cos(theta), 0],
                 [            0,              0, 1]
             ])
-            
+
             coords = supercell.cart_coords.copy()
             center_xy = np.mean(coords[:, :2], axis=0)
             coords[:, :2] -= center_xy
-            
+
             rotated_coords = np.dot(coords, rot_matrix.T)
-            shifted_coords = rotated_coords + np.array([0, 0, l['z_shift'] - 12.5])
+            shifted_coords = rotated_coords + np.array([0, 0, l['z_shift']])
             layer_tag = f"_L{idx + 1}"
-            
+
             for i, site in enumerate(supercell):
                 all_species.append(site.specie.symbol)
                 all_coords.append(shifted_coords[i])
                 layer_tags.append(f"{site.specie.symbol}{layer_tag}")
-                
-        dummy_lattice = Lattice.cubic(500.0)
+
+        return CrystalEngine.structure_from_cartesian(
+            all_species,
+            all_coords,
+            site_properties={"layer_tag": layer_tags},
+            vacuum=vacuum,
+            pad_xy=pad_xy,
+        )
+
+    @staticmethod
+    def structure_from_cartesian(
+        species,
+        coords,
+        *,
+        site_properties=None,
+        vacuum: float = 20.0,
+        pad_xy: float = 3.0,
+    ) -> Structure:
+        """Build an orthorhombic cell around Cartesian coordinates with vacuum."""
+        coords = np.asarray(coords, dtype=float)
+        if coords.size == 0:
+            raise ValueError("No atomic coordinates to pack into a cell.")
+        mins = coords.min(axis=0)
+        shift = np.array([
+            pad_xy - mins[0],
+            pad_xy - mins[1],
+            max(vacuum * 0.5, 1.0) - mins[2],
+        ])
+        shifted = coords + shift
+        maxs = shifted.max(axis=0)
+        a = float(maxs[0] + pad_xy)
+        b = float(maxs[1] + pad_xy)
+        c = float(maxs[2] + max(vacuum * 0.5, 1.0))
+        # Guard against degenerate in-plane extent (single atom column)
+        a = max(a, 5.0)
+        b = max(b, 5.0)
+        c = max(c, 10.0)
+        lattice = Lattice.from_parameters(a, b, c, 90.0, 90.0, 90.0)
         return Structure(
-            dummy_lattice, 
-            all_species, 
-            all_coords, 
+            lattice,
+            species,
+            shifted,
             coords_are_cartesian=True,
-            site_properties={"layer_tag": layer_tags}
+            site_properties=site_properties or {},
         )
 
     @staticmethod
