@@ -21,6 +21,7 @@ export class LineViewer {
         this.ctx = this.canvas.getContext("2d");
 
         this.curve = null;
+        this.overlays = [];
         this.marker = null;
 
         this._resize = this._resize.bind(this);
@@ -30,6 +31,12 @@ export class LineViewer {
 
     setCurve(curve) {
         this.curve = curve;
+        this.draw();
+    }
+
+    /* Extra series drawn on the same axes as the primary curve. */
+    setOverlays(overlays = []) {
+        this.overlays = overlays;
         this.draw();
     }
 
@@ -74,8 +81,13 @@ export class LineViewer {
         const aMin = axis[0];
         const aMax = axis[axis.length - 1];
         const aSpan = aMax - aMin || 1;
-        const vMin = Math.min(...values);
-        const vMax = Math.max(...values);
+        let vMin = Math.min(...values);
+        let vMax = Math.max(...values);
+        for (const overlay of this.overlays) {
+            if (!overlay?.values?.length) continue;
+            vMin = Math.min(vMin, ...overlay.values);
+            vMax = Math.max(vMax, ...overlay.values);
+        }
         const vSpan = vMax - vMin || 1;
 
         ctx.strokeStyle = "#3a3a4a";
@@ -92,14 +104,25 @@ export class LineViewer {
                 : { x: rect.left + fv * rect.width, y: rect.top + rect.height - fa * rect.height };
         };
 
-        ctx.strokeStyle = this.color;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        for (let i = 0; i < values.length; i++) {
-            const p = toPixel(axis[i], values[i]);
-            if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+        const strokeSeries = (xs, ys, color, width = 1.5, dash = null) => {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            if (dash) ctx.setLineDash(dash);
+            ctx.beginPath();
+            for (let i = 0; i < ys.length; i++) {
+                const p = toPixel(xs[i], ys[i]);
+                if (i === 0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+            }
+            ctx.stroke();
+            if (dash) ctx.setLineDash([]);
+        };
+
+        strokeSeries(axis, values, this.color);
+        for (const overlay of this.overlays) {
+            if (!overlay?.values?.length) continue;
+            const xs = overlay.axis || axis;
+            strokeSeries(xs, overlay.values, overlay.color || "#f472b6", overlay.width || 1.5, overlay.dash || null);
         }
-        ctx.stroke();
 
         if (this.marker !== null && this.marker >= Math.min(aMin, aMax) && this.marker <= Math.max(aMin, aMax)) {
             const fa = (this.marker - aMin) / aSpan;

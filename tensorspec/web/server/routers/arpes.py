@@ -22,6 +22,7 @@ from tensorspec.core.dft import band_service
 from tensorspec.core.dft_engine import DFTEngineRouter
 from tensorspec.core.io.arpes_loader import ARPESLoader
 from tensorspec.core import arpes_process
+from tensorspec.core import arpes_peakfit, arpes_results
 from tensorspec.plotting.backends.arpes_figure import export_slice_figure
 from tensorspec.web.server.jobs import Job, JobStatus, get_job_queue
 from tensorspec.web.server.schemas import (
@@ -36,6 +37,9 @@ from tensorspec.web.server.schemas import (
     JobInfo,
     KzApplyRequest,
     KzConvertRequest,
+    PeakFitCurveRequest,
+    PeakFitStackRequest,
+    QPResultsRequest,
     PerpBZRequest,
     ProfileRequest,
     ProfileResponse,
@@ -404,6 +408,241 @@ def process_perp_bz(
     return {"crystal_name": request.crystal_name, **guides}
 
 
+def _analysis_plane(tensor, request):
+    _validate_axes(tensor, request.x_idx, request.y_idx)
+    result = ops.extract_slice(tensor, request.x_idx, request.y_idx, request.fixed)
+    return (
+        np.asarray(result["values"], dtype=float),
+        np.asarray(result["x_axis"], dtype=float),
+        np.asarray(result["y_axis"], dtype=float),
+    )
+
+
+def _analysis_defaults(tensor):
+    meta = tensor.metadata or {}
+    return {
+        "temperature": arpes_peakfit.parse_temperature_K(meta) or 10.0,
+        "analyzer_fwhm": arpes_peakfit.parse_resolution_eV(meta) or 0.0,
+    }
+
+
+@router.get("/analysis/{name}/defaults")
+def analysis_defaults(name: str, session: Session = Depends(current_session)):
+    tensor = _require_tensor(session, name)
+    roles = arpes_process.infer_axis_roles(tensor)
+    defaults = _analysis_defaults(tensor)
+    return {
+        "name": name,
+        "labels": list(tensor.labels),
+        "units": list(tensor.units),
+        "shape": [int(n) for n in tensor.value.shape],
+        "energy_axis": roles["energy_axis"],
+        "angle_axis": roles["angle_axis"],
+        "photon_axis": roles["photon_axis"],
+        "beta_axis": roles["beta_axis"],
+        **defaults,
+    }
+
+
+@router.post("/analysis/{name}/curve")
+def analysis_fit_curve(
+    name: str,
+    request: PeakFitCurveRequest,
+    session: Session = Depends(current_session),
+):
+    tensor = _require_tensor(session, name)
+    plane, x_axis, y_axis = _analysis_plane(tensor, request)
+    line = arpes_peakfit.extract_plane_line(
+        plane,
+        x_axis,
+        y_axis,
+        mode=request.mode,
+        index=request.index,
+        half_width=request.half_width,
+    )
+    seeds = [s.model_dump(exclude_none=True) for s in request.seeds]
+    if request.suggest or not seeds:
+        seeds = arpes_peakfit.suggest_seeds(
+            line["axis"], line["values"], request.n_peaks
+        )
+    try:
+        fit = arpes_peakfit.fit_curve(
+            line["axis"],
+            line["values"],
+            seeds,
+            lineshape=request.lineshape,
+            analyzer_fwhm=request.analyzer_fwhm,
+            include_fd=request.include_fd,
+            temperature=request.temperature,
+            mu=request.mu,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    fit["scan_value"] = line["scan_value"]
+    fit["seeds_used"] = seeds
+    return fit
+
+
+@router.post("/analysis/{name}/stack")
+def analysis_fit_stack(
+    name: str,
+    request: PeakFitStackRequest,
+    session: Session = Depends(current_session),
+):
+    tensor = _require_tensor(session, name)
+    plane, x_axis, y_axis = _analysis_plane(tensor, request)
+    n_scan = plane.shape[0] if request.mode.lower() == "mdc" else plane.shape[1]
+    start = 0 if request.scan_start is None else int(request.scan_start)
+    stop = n_scan if request.scan_stop is None else int(request.scan_stop)
+    start = int(np.clip(start, 0, n_scan - 1))
+    stop = int(np.clip(stop, start + 1, n_scan))
+    indices = list(range(start, stop, request.scan_step))
+
+    line0 = arpes_peakfit.extract_plane_line(
+        plane, x_axis, y_axis, mode=request.mode, index=indices[0], half_width=request.half_width
+    )
+    seeds = [s.model_dump(exclude_none=True) for s in request.seeds]
+    if request.suggest or not seeds:
+        seeds = arpes_peakfit.suggest_seeds(line0["axis"], line0["values"], request.n_peaks)
+
+    try:
+        stack = arpes_peakfit.fit_stack(
+            plane,
+            x_axis,
+            y_axis,
+            seeds,
+            mode=request.mode,
+            lineshape=request.lineshape,
+            analyzer_fwhm=request.analyzer_fwhm,
+            include_fd=request.include_fd,
+            temperature=request.temperature,
+            mu=request.mu,
+            half_width=request.half_width,
+            scan_indices=indices,
+            propagate_seeds=request.propagate_seeds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    node_name = "mdc_peakfit" if request.mode.lower() == "mdc" else "edc_peakfit"
+    stored = False
+    if request.store:
+        ds = arpes_peakfit.stack_to_xarray(stack)
+        stored = session.workspace.write_analysis_data(name, node_name, ds)
+
+    # JSON-safe summary (full arrays for plotting)
+    return {
+        "node": node_name,
+        "stored": stored,
+        "mode": stack["mode"],
+        "lineshape": stack["lineshape"],
+        "scan_coord_name": stack["scan_coord_name"],
+        "fit_axis_name": stack["fit_axis_name"],
+        "scan": stack["scan"].tolist(),
+        "peak": stack["peak"].tolist(),
+        "center": stack["center"].tolist(),
+        "amplitude": stack["amplitude"].tolist(),
+        "width": stack["width"].tolist(),
+        "sigma": stack["sigma"].tolist(),
+        "integrated": stack["integrated"].tolist(),
+        "chi2": stack["chi2"].tolist(),
+        "success": stack["success"].astype(bool).tolist(),
+        "n_peaks": stack["n_peaks"],
+        "ml_schema_version": stack["ml_schema_version"],
+        "seeds_used": seeds,
+    }
+
+
+@router.post("/analysis/{name}/qp-results")
+def analysis_qp_results(
+    name: str,
+    request: QPResultsRequest,
+    session: Session = Depends(current_session),
+):
+    """Derive δE–E, k_F, m*/v_F, and FL/MFL fits from a stored peakfit table."""
+    _require_tensor(session, name)
+    ds = session.workspace.pull_analysis_data(name, request.peakfit_node)
+    if ds is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No analysis node '{request.peakfit_node}' on '{name}'. Run Fit stack first.",
+        )
+    mode = str(ds.attrs.get("mode") or ("mdc" if "mdc" in request.peakfit_node else "edc"))
+    scan_name = (
+        "energy"
+        if "energy" in ds.dims
+        else ("momentum" if "momentum" in ds.dims else list(ds.dims)[0])
+    )
+    try:
+        results = arpes_results.build_qp_results(
+            mode=mode,
+            scan=ds.coords[scan_name].values,
+            center=ds["center"].values,
+            width=ds["width"].values,
+            integrated=ds["integrated"].values,
+            success=ds["success"].values if "success" in ds else None,
+            peak=request.peak,
+            e_fermi=request.e_fermi,
+            fit_mass=request.fit_mass,
+            fit_vf=request.fit_vf,
+            se_model=request.se_model,
+            se_e_min=request.se_e_min,
+            se_e_max=request.se_e_max,
+            vf_e_window=request.vf_e_window,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    stored = False
+    if request.store:
+        qp_ds = arpes_results.qp_results_to_xarray(results)
+        stored = session.workspace.write_analysis_data(name, "qp_results", qp_ds)
+    return {"node": "qp_results", "stored": stored, **results}
+
+
+@router.get("/analysis/{name}/{node}")
+def analysis_get_node(
+    name: str,
+    node: str,
+    session: Session = Depends(current_session),
+):
+    ds = session.workspace.pull_analysis_data(name, node)
+    if ds is None:
+        raise HTTPException(status_code=404, detail=f"No analysis node '{node}' on '{name}'.")
+    # Peakfit tables
+    if "center" in ds and ("energy" in ds.dims or "momentum" in ds.dims):
+        scan_name = (
+            "energy"
+            if "energy" in ds.dims
+            else ("momentum" if "momentum" in ds.dims else list(ds.dims)[0])
+        )
+        return {
+            "node": node,
+            "kind": "peakfit",
+            "attrs": {k: ds.attrs[k] for k in ds.attrs if k != "seeds"},
+            "seeds": ds.attrs.get("seeds"),
+            "scan_coord_name": scan_name,
+            "scan": ds.coords[scan_name].values.tolist(),
+            "peak": ds.coords["peak"].values.tolist() if "peak" in ds.coords else [],
+            "center": ds["center"].values.tolist() if "center" in ds else [],
+            "amplitude": ds["amplitude"].values.tolist() if "amplitude" in ds else [],
+            "width": ds["width"].values.tolist() if "width" in ds else [],
+            "integrated": ds["integrated"].values.tolist() if "integrated" in ds else [],
+            "chi2": ds["chi2"].values.tolist() if "chi2" in ds else [],
+        }
+    # QP result curves
+    return {
+        "node": node,
+        "kind": "qp_results",
+        "attrs": dict(ds.attrs),
+        "k": ds["k"].values.tolist() if "k" in ds else [],
+        "energy": ds["energy"].values.tolist() if "energy" in ds else [],
+        "width": ds["width"].values.tolist() if "width" in ds else [],
+        "integrated": ds["integrated"].values.tolist() if "integrated" in ds else [],
+        "width_fit": ds["width_fit"].values.tolist() if "width_fit" in ds else [],
+    }
+
+
 def _require_tensor(session: Session, name: str):
     tensor = session.workspace.pull_tensor_data(name)
     if tensor is None:
@@ -732,9 +971,12 @@ def get_axes(name: str, session: Session = Depends(current_session)) -> TensorAx
     """Dimensions of a tensor, plus a sensible opening view."""
     tensor = _require_tensor(session, name)
     described = ops.describe_axes(tensor)
+    roles = arpes_process.infer_axis_roles(tensor)
 
-    default_y = 0 if tensor.ndim > 1 else 0
-    default_x = 1 if tensor.ndim > 1 else 0
+    default_y = roles["energy_axis"] if roles["energy_axis"] is not None else 0
+    default_x = roles["angle_axis"] if roles["angle_axis"] is not None else (1 if tensor.ndim > 1 else 0)
+    if default_x == default_y and tensor.ndim > 1:
+        default_x = 0 if default_y != 0 else 1
     fixed = {
         axis["index"]: axis["size"] // 2
         for axis in described

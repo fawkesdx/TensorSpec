@@ -111,16 +111,26 @@ Grand App
 			- [x] In-plane angle → k∥ Process tab (user Γ center via click/drag, Suggest assist, Apply → new dataset + `/processed`)
 			- [x] Overlay projected surface BZ from workspace crystal (Crystal Suite Tab 4 machinery)
 			- [x] Photon-energy → kz module (Vo slider + perpendicular BZ)
-		- [ ] `/analysis`: Attach mathematical model outputs (e.g., `/analysis/mdc_peakfit` or `/analysis/edc_peakfit` containing Lorentzian parameters and residuals).
+		- [x] `/analysis`: Attach mathematical model outputs (ML-ready peak tables + QP summaries).
+			- [x] Phase 1 — EDC/MDC peakfit: Lorentzian or Voigt (+ optional FD on EDC); N peaks/seeds; stack fit → `/analysis/mdc_peakfit` or `/edc_peakfit`; ARPES Suite **Analysis** tab (curve + stack plots).
+			- [x] Phase 2 — QP result curves from peak tables: δE(Γ)–E, integrated intensity vs E, dispersion E(k), k_F, parabolic m*/m_e, v_F; FL (Γ₀+αω²) / MFL (Γ₀+α|ω|) fits → `/analysis/qp_results`.
+			- [ ] Phase 3 — Gap tools (SC / CDW gap from EDCs); overlay DFT / simulated ARPES on cuts.
 		- [x] `/history`: Append sequential audit trail logs of every functional transformation applied to the dataset.
-	- [ ] once the data is loaded, there is option to launch a general viewer where it will plot the data according to the kind of data
-		- [ ] it will display the data.energy, data.slitangle, data.value of the dispersion
-			- [ ] I want to have the option to toggle to plot the EDC and MDC on the right and lower panel
-			- [ ] I want the cross hair to have option to define delta x and delta y to integrate the EDC and MDC
-		- [ ] if it has data.motor1, then I want the middle panel to show the data.value along the data.slitangle (x axis), data.motor1 (y axis), then the lower panel show the dispersion of the data.slitangle (x axis), data.energy (y axis), the right panel will show the data.motor1 (x axis), data.energy (y axis).
-			- [ ] I want each panel to have crosshair that will dynamically update the display on the other panel
-			- [ ] I want the crosshair to also have option to define delta x and delta y so that the other panel can update the view accordingly
-		- [ ] if it also has data.motor2, then I want to be able to view all of the panel accordingly where each panel has crosshair and it has option to integrate too.
+	- [x] once the data is loaded, there is option to launch a general viewer where it will plot the data according to the kind of data
+		- [x] it will display the data.energy, data.slitangle, data.value of the dispersion
+			- [x] I want to have the option to toggle to plot the EDC and MDC on the right and lower panel
+			- [x] I want the cross hair to have option to define delta x and delta y to integrate the EDC and MDC
+		- [x] if it has data.motor1, then I want the middle panel to show the data.value along the data.slitangle (x axis), data.motor1 (y axis), then the lower panel show the dispersion of the data.slitangle (x axis), data.energy (y axis), the right panel will show the data.motor1 (x axis), data.energy (y axis).
+			- [x] I want each panel to have crosshair that will dynamically update the display on the other panel
+			- [x] I want the crosshair to also have option to define delta x and delta y so that the other panel can update the view accordingly
+		- [x] if it also has data.motor2, then I want to be able to view all of the panel accordingly where each panel has crosshair and it has option to integrate too.
+
+	**ARPES Suite — available in HTML now (keep in sync when shipping features):**
+	- Load: MAESTRO HDF5 (+ optional Measurement Log CSV) via upload / `POST /api/arpes/load`
+	- Data Viewer: kind-aware multi-panel layouts (cut / Fermi map / hv scan), Sync crosshair + fixed-dim sliders, EDC/MDC profiles, CSV/PDF/PNG export
+	- Process: in-plane → k∥ (Γ click/suggest, surface BZ overlay); photon → kz (Vo, ⊥ BZ); writes `/processed`
+	- Analysis: EDC/MDC Lorentzian/Voigt peakfit → `/analysis/*_peakfit`; QP curves (δE–E, k_F, m*, v_F, FL/MFL) → `/analysis/qp_results`
+	- Simulator: matrix-element Option A + B1 (job queue + log stream)
 
 - [ ] PEEM Suite
 	- [ ] loader of tif file stacks

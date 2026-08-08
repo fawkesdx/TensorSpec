@@ -227,6 +227,55 @@ class PerpBZRequest(BaseModel):
     n_zones: int = Field(default=4, ge=1, le=12)
 
 
+class PeakSeed(BaseModel):
+    center: float
+    amplitude: float = Field(gt=0)
+    width: float = Field(gt=0)
+    sigma: float | None = Field(default=None, gt=0)
+
+
+class PeakFitCurveRequest(BaseModel):
+    """Fit one EDC or MDC extracted from a 2D view of a tensor."""
+
+    x_idx: int = Field(ge=0, le=15)
+    y_idx: int = Field(ge=0, le=15)
+    fixed: dict[int, int] = Field(default_factory=dict)
+    mode: str = Field(default="mdc")
+    index: int = Field(ge=0)
+    half_width: int = Field(default=0, ge=0, le=50)
+    lineshape: str = Field(default="lorentzian")
+    analyzer_fwhm: float = Field(default=0.0, ge=0, le=5)
+    include_fd: bool = False
+    temperature: float = Field(default=10.0, ge=0.01, le=400)
+    mu: float = 0.0
+    seeds: list[PeakSeed] = Field(default_factory=list)
+    n_peaks: int = Field(default=1, ge=1, le=12)
+    suggest: bool = False
+
+
+class PeakFitStackRequest(PeakFitCurveRequest):
+    scan_start: int | None = None
+    scan_stop: int | None = None
+    scan_step: int = Field(default=1, ge=1, le=50)
+    propagate_seeds: bool = True
+    store: bool = True
+
+
+class QPResultsRequest(BaseModel):
+    """Build δE–E / k_F / m* / FL–MFL curves from a stored peakfit node."""
+
+    peakfit_node: str = Field(default="mdc_peakfit", min_length=1, max_length=64)
+    peak: int = Field(default=0, ge=0, le=12)
+    e_fermi: float = 0.0
+    fit_mass: bool = True
+    fit_vf: bool = True
+    se_model: str | None = Field(default="fl")  # "fl", "mfl", or null to skip
+    se_e_min: float | None = None
+    se_e_max: float | None = None
+    vf_e_window: float = Field(default=0.08, gt=0, le=2)
+    store: bool = True
+
+
 class SuggestCenterRequest(BaseModel):
     angle_axis: int = Field(ge=0, le=15)
     energy_axis: int | None = Field(default=None, ge=0, le=15)
