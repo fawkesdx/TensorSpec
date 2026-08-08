@@ -4,7 +4,7 @@
  * live in core.crystallography; this file only orchestrates requests.
  */
 
-import { CrystalViewer, elementColor } from "/static/js/viewers/viewer_3d.js";
+import { CrystalViewer, elementColor, bondColor } from "/static/js/viewers/viewer_3d.js";
 
 const el = (id) => document.getElementById(id);
 
@@ -125,6 +125,13 @@ function fillTargets(elements) {
     }
 }
 
+function shouldRevertPrimitiveBasis(err) {
+    if (!dom.basisPrim?.checked) return false;
+    if (err?.status === 422) return true;
+    const msg = String(err?.message || "").toLowerCase();
+    return msg.includes("primitive") || /\b422\b/.test(msg);
+}
+
 function rebuildSwatches(elements) {
     if (!dom.swatches) return;
     dom.swatches.innerHTML = "";
@@ -150,7 +157,7 @@ function rebuildSwatches(elements) {
     bondLabel.textContent = "Bonds:";
     const bondInput = document.createElement("input");
     bondInput.type = "color";
-    bondInput.value = "#d3d3d3";
+    bondInput.value = bondColor();
     bondInput.addEventListener("input", () => ensureViewer().setBondColor(bondInput.value));
     bondRow.append(bondLabel, bondInput);
     dom.swatches.appendChild(bondRow);
@@ -209,7 +216,7 @@ async function refreshGeometry({ frame = true } = {}) {
         setStatus(`${activeCrystal} rendered`);
     } catch (err) {
         setStatus(err.message, true);
-        if (dom.basisPrim?.checked) {
+        if (shouldRevertPrimitiveBasis(err)) {
             dom.basisConv.checked = true;
             dom.basisPrim.checked = false;
         }
@@ -317,7 +324,7 @@ async function renderStack() {
                 name, sc_x, sc_y, z_shift, twist,
             })),
             store_as: storeAs,
-            show_bonds: true,
+            show_bonds: dom.conn?.value !== "none",
         });
         activeCrystal = geometry.name;
         const view = ensureViewer();
@@ -572,7 +579,7 @@ async function relaxActiveStack() {
             steps: Number(dom.stSteps.value) || 200,
             relax_cell: !!dom.stRelaxCell?.checked,
             store_as: storeAs,
-            show_bonds: true,
+            show_bonds: dom.conn?.value !== "none",
         });
         activeCrystal = result.stored_as;
         if (dom.stStore) dom.stStore.value = result.stored_as;
