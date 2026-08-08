@@ -713,6 +713,14 @@ class ArpesSimRequest(BaseModel):
     res_E: float = Field(default=0.020, ge=0.001, le=1)
     res_k: float = Field(default=0.020, ge=0.001, le=1)
 
+    # Optional resolution / deflector metadata (UI logging). Chinook uses res_E + ky only.
+    deflector_angle: float | None = Field(default=None, ge=-15, le=15)
+    slit_size_mm: float | None = Field(default=None, ge=0.1, le=5)
+    pass_energy: float | None = Field(default=None, ge=1, le=500)
+    res_E_beam: float | None = Field(default=None, ge=0, le=1)
+    res_E_extra: float | None = Field(default=None, ge=0, le=1)
+    res_E_manual: bool | None = None
+
     # TB mesh used to feed Option A (and to build the B1 model).
     mesh_resolution: int = Field(default=20, ge=4, le=40)
     hoppings: list[float] = Field(default=[2.7, 0.0, 0.0, -0.3], max_length=8)

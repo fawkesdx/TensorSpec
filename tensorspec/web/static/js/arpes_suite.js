@@ -833,6 +833,60 @@ const sim = {
     viewer: null,
 };
 
+/* ---- Resolution / deflector (client-side; mirrors tensorspec.core.arpes.resolution) ---- */
+
+const AR_K_FACTOR = 0.5123; // Å^-1 / sqrt(eV)
+
+const baseKy = {
+    min: Number(el("ar-ky-min").value),
+    max: Number(el("ar-ky-max").value),
+};
+
+function analyzerDeltaE(slitMm, passEnergy) {
+    return (Number(slitMm) / 400.0) * Number(passEnergy);
+}
+
+function totalDeltaE(ana, beam = 0, extra = 0) {
+    return Math.sqrt(
+        Math.max(Number(ana), 0) ** 2
+        + Math.max(Number(beam), 0) ** 2
+        + Math.max(Number(extra), 0) ** 2
+    );
+}
+
+function deflectorDk(hv, workFunction, deflectorDeg) {
+    const ek = Math.max(Number(hv) - Number(workFunction), 0);
+    return AR_K_FACTOR * Math.sqrt(ek) * Math.sin((Number(deflectorDeg) * Math.PI) / 180);
+}
+
+function syncResolution() {
+    const ana = analyzerDeltaE(el("ar-slitsize").value, el("ar-pe").value);
+    const beam = Number(el("ar-de-beam").value);
+    const extra = Number(el("ar-de-extra").value);
+    const total = totalDeltaE(ana, beam, extra);
+    const manual = el("ar-de-manual").checked;
+    const de = el("ar-de");
+    de.readOnly = !manual;
+    if (!manual) {
+        de.value = total.toFixed(4);
+    }
+    el("ar-res-status").textContent =
+        `ana ${ana.toFixed(4)} / beam ${beam.toFixed(4)} / extra ${extra.toFixed(4)} / total ${total.toFixed(4)} eV`;
+}
+
+function syncKyFromDeflector() {
+    const dk = deflectorDk(el("ar-hv").value, el("ar-phi").value, el("ar-defl").value);
+    el("ar-ky-min").value = (baseKy.min + dk).toFixed(4);
+    el("ar-ky-max").value = (baseKy.max + dk).toFixed(4);
+}
+
+function captureBaseKyFromInputs() {
+    const dk = deflectorDk(el("ar-hv").value, el("ar-phi").value, el("ar-defl").value);
+    // With defl=0 this is identity; with nonzero defl, undo shift so base never stacks.
+    baseKy.min = Number(el("ar-ky-min").value) - dk;
+    baseKy.max = Number(el("ar-ky-max").value) - dk;
+}
+
 function appendLog(line) {
     const box = el("ar-log");
     if (box.textContent === "Waiting to run…") box.textContent = "";
@@ -899,6 +953,12 @@ function simPayload() {
         se_width: Number(el("ar-se").value),
         res_E: Number(el("ar-de").value),
         res_k: Number(el("ar-dk").value),
+        deflector_angle: Number(el("ar-defl").value),
+        slit_size_mm: Number(el("ar-slitsize").value),
+        pass_energy: Number(el("ar-pe").value),
+        res_E_beam: Number(el("ar-de-beam").value),
+        res_E_extra: Number(el("ar-de-extra").value),
+        res_E_manual: el("ar-de-manual").checked,
         mesh_resolution: 16,
     };
 }
@@ -1047,6 +1107,39 @@ el("av-load-file").addEventListener("change", async (event) => {
 });
 
 el("ar-crystal-refresh").addEventListener("click", () => refreshCrystals().catch((e) => appendLog(e.message)));
+
+["ar-slitsize", "ar-pe", "ar-de-beam", "ar-de-extra"].forEach((id) => {
+    el(id).addEventListener("input", syncResolution);
+    el(id).addEventListener("change", syncResolution);
+});
+el("ar-de-manual").addEventListener("change", () => {
+    syncResolution();
+    if (el("ar-de-manual").checked) el("ar-de").focus();
+});
+["ar-hv", "ar-phi", "ar-defl"].forEach((id) => {
+    el(id).addEventListener("input", () => {
+        syncKyFromDeflector();
+        syncResolution();
+    });
+    el(id).addEventListener("change", () => {
+        syncKyFromDeflector();
+        syncResolution();
+    });
+});
+["ar-ky-min", "ar-ky-max"].forEach((id) => {
+    el(id).addEventListener("change", () => {
+        // Prefer updating base when defl≈0; always subtract current dk so edits never stack.
+        const defl = Number(el("ar-defl").value);
+        if (Math.abs(defl) < 1e-12) {
+            baseKy.min = Number(el("ar-ky-min").value);
+            baseKy.max = Number(el("ar-ky-max").value);
+        } else {
+            captureBaseKyFromInputs();
+        }
+    });
+});
+syncResolution();
+
 el("ar-run").addEventListener("click", async () => {
     if (!el("ar-crystal").value) {
         appendLog("Select a crystal first (Crystal Suite → load CIF → it appears here).");
