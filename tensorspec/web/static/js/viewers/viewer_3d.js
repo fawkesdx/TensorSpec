@@ -116,7 +116,7 @@ export class CrystalViewer {
     this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
     this.camera.position.set(0, 0, 30);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(this.renderer.domElement);
 
@@ -652,5 +652,20 @@ export class CrystalViewer {
     if (color !== undefined) this._cut.color = color;
     if (visible !== undefined) this._cut.visible = Boolean(visible);
     this._syncCutPlane();
+  }
+
+  capturePNG(scale = 2) {
+    const canvas = this.renderer.domElement;
+    const w = canvas.width;
+    const h = canvas.height;
+    const prevPR = this.renderer.getPixelRatio();
+    this.renderer.setPixelRatio(scale);
+    this._resize();
+    this.renderer.render(this.scene, this.camera);
+    const url = this.renderer.domElement.toDataURL("image/png");
+    this.renderer.setPixelRatio(prevPR);
+    this._resize();
+    this.renderer.render(this.scene, this.camera);
+    return url;
   }
 }

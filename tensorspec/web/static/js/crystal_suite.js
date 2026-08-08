@@ -50,6 +50,8 @@ const dom = {
     expBz: el("cr-exp-bz"),
     export3ds: el("cr-export-3ds"),
     exportBlender: el("cr-export-blender"),
+    crRender: el("cr-render"),
+    crHires: el("cr-hires"),
 
     cdwEnable: el("cdw-enable"),
     cdwTarget: el("cdw-target"),
@@ -733,6 +735,16 @@ if (dom.stPush) dom.stPush.addEventListener("click", () => pushActiveCrystal());
 if (dom.crExportCif) dom.crExportCif.addEventListener("click", downloadActiveCif);
 if (dom.export3ds) dom.export3ds.addEventListener("click", () => exportScene("3dsmax"));
 if (dom.exportBlender) dom.exportBlender.addEventListener("click", () => exportScene("blender"));
+dom.crRender?.addEventListener("click", () => refreshGeometry({ frame: true }));
+dom.crHires?.addEventListener("click", () => {
+    if (!activeCrystal) { setStatus("Load a crystal first.", true); return; }
+    const url = ensureViewer().capturePNG(2);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${activeCrystal || "structure"}.png`;
+    a.click();
+    setStatus("Saved high-res PNG");
+});
 if (dom.crPush) {
     dom.crPush.addEventListener("click", () => {
         const name = window.prompt("Workspace name for this structure:", activeCrystal || "structure");
