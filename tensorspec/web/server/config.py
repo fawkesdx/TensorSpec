@@ -39,24 +39,28 @@ class SolverConfig:
                 raise FileNotFoundError(f"{label} not found at {path}")
 
 
-def _resolve_executable(env_key: str, default_name: str) -> Path:
+def _resolve_executable(env_key: str, default_name: str, *, require: bool = True) -> Path:
     """Prefer an absolute path from the environment; otherwise search PATH."""
     override = os.environ.get(env_key, "").strip()
     if override:
         path = Path(override).expanduser()
         if not path.is_file():
-            raise FileNotFoundError(f"{env_key}={override} is not an executable file.")
+            if require:
+                raise FileNotFoundError(f"{env_key}={override} is not an executable file.")
+            return path
         return path.resolve()
 
     found = shutil.which(default_name)
     if not found:
-        raise FileNotFoundError(
-            f"'{default_name}' is not on PATH. Set {env_key} to its absolute path."
-        )
+        if require:
+            raise FileNotFoundError(
+                f"'{default_name}' is not on PATH. Set {env_key} to its absolute path."
+            )
+        return Path(default_name)
     return Path(found).resolve()
 
 
-def load_solver_config() -> SolverConfig:
+def load_solver_config(*, require_binaries: bool = True) -> SolverConfig:
     """Build the allowlist from the environment, with sensible local defaults."""
     pseudo = Path(os.environ.get("TENSORSPEC_PSEUDO_DIR", REPO_ROOT / "Pseudo")).expanduser()
     mpirun_override = os.environ.get("TENSORSPEC_MPIRUN", "").strip()
@@ -67,9 +71,11 @@ def load_solver_config() -> SolverConfig:
         mpirun = Path(found).resolve() if found else None
 
     return SolverConfig(
-        pw=_resolve_executable("TENSORSPEC_PW", "pw.x"),
-        wannier90=_resolve_executable("TENSORSPEC_WANNIER90", "wannier90.x"),
-        pw2wannier90=_resolve_executable("TENSORSPEC_PW2WANNIER90", "pw2wannier90.x"),
+        pw=_resolve_executable("TENSORSPEC_PW", "pw.x", require=require_binaries),
+        wannier90=_resolve_executable("TENSORSPEC_WANNIER90", "wannier90.x", require=require_binaries),
+        pw2wannier90=_resolve_executable(
+            "TENSORSPEC_PW2WANNIER90", "pw2wannier90.x", require=require_binaries
+        ),
         mpirun=mpirun,
         pseudo_dir=pseudo.resolve(),
         max_mpi_ranks=int(os.environ.get("TENSORSPEC_MAX_MPI_RANKS", "8")),

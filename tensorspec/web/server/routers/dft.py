@@ -94,7 +94,7 @@ def _wannier_hr_path(session: Session, name: str) -> Path | None:
 
 def _solver_status() -> SolverStatus:
     try:
-        cfg = load_solver_config()
+        cfg = load_solver_config(require_binaries=False)
         cfg.require_exists()
         return SolverStatus(
             available=True,
@@ -172,7 +172,7 @@ def _prepare_run(
 ):
     structure = _require_structure(session, crystal_name)
     try:
-        cfg = load_solver_config()
+        cfg = load_solver_config(require_binaries=False)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
