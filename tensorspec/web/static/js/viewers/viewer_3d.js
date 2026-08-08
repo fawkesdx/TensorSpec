@@ -47,6 +47,10 @@ export function setGlobalBondColor(hex) {
   BOND_COLOR = hex;
 }
 
+export function bondColor() {
+  return BOND_COLOR;
+}
+
 export class CrystalViewer {
   constructor(container) {
     this.container = container;
