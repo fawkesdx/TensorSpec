@@ -863,7 +863,7 @@ function syncResolution() {
     const ana = analyzerDeltaE(el("ar-slitsize").value, el("ar-pe").value);
     const beam = Number(el("ar-de-beam").value);
     const extra = Number(el("ar-de-extra").value);
-    const total = totalDeltaE(ana, beam, extra);
+    const total = Math.max(totalDeltaE(ana, beam, extra), 0.001);
     const manual = el("ar-de-manual").checked;
     const de = el("ar-de");
     de.readOnly = !manual;
@@ -951,7 +951,7 @@ function simPayload() {
             steps: Number(el("ar-e-pts").value),
         },
         se_width: Number(el("ar-se").value),
-        res_E: Number(el("ar-de").value),
+        res_E: Math.max(Number(el("ar-de").value), 0.001),
         res_k: Number(el("ar-dk").value),
         deflector_angle: Number(el("ar-defl").value),
         slit_size_mm: Number(el("ar-slitsize").value),
