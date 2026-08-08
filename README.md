@@ -53,6 +53,7 @@ The user interface is a browser application served by FastAPI (per-session works
 * **Suite Panels:** Crystal, DFT, and ARPES suites are live end-to-end (HTML → API → `core/`). PEEM / XAS / Transport / ML shells exist; engines still pending.
 * **Crystal Tab 3:** stack/twist/exfoliate; optional **MLIP relax** (CHGNet / M3GNet via `matgl`); **MEGNet band-gap** (scalar Eg); **CIF download**; **push/rename** into the session workspace for DFT.
 * **DFT bands / stacks:** Auto k-path is the **loaded cell’s BZ** (folded for twisted/large supercells). Optional **primitive hex reference** walks graphene-like Γ–K–M then folds into the supercell. **Unfold hex** adds TB Popescu–Zunger spectral weights. **Fat bands** re-project cached eigenvectors by shell / element / orbital (no re-solve).
+* **QE slabs:** DFT Suite **Prepare slab** (presets + custom hkl/layers/vacuum) for Tab 1 / bulk CIF; Tab 3 stacks skip re-cut and use **Slab QE** (`kz=1`, `assume_isolated='2D'`).
 * **Static-First front end:** plain HTML/CSS/vanilla JS (no bundler). Physics stays in Python.
 
 ## Running the App

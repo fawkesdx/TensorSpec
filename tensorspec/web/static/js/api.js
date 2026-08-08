@@ -344,6 +344,12 @@ const TensorSpecAPI = (() => {
         },
 
         dftStructures: () => request("/api/dft/structures"),
+        dftSlabPresets: () => request("/api/dft/slab-presets"),
+        dftPrepareSlab: (name, payload) =>
+            request(`/api/dft/${encodeURIComponent(name)}/prepare-slab`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
         dftBands: (name, payload) =>
             request(`/api/dft/${encodeURIComponent(name)}/bands`, {
                 method: "POST",

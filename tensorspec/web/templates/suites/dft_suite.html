@@ -41,8 +41,48 @@
                     </fieldset>
 
                     <fieldset class="fieldset">
+                        <legend>Prepare slab (bulk &#8594; vacuum)</legend>
+                        <p class="hint">Tab&nbsp;1 / CIF bulk: cleave with preset or custom hkl. Tab&nbsp;3 stacks: skip this — just enable Slab QE below.</p>
+                        <div class="form-row">
+                            <label for="qe-slab-preset">Preset:</label>
+                            <select class="field" id="qe-slab-preset">
+                                <option value="thin_001">thin 001</option>
+                                <option value="medium_001">medium 001</option>
+                                <option value="thick_001">thick 001</option>
+                                <option value="thin_111">thin 111</option>
+                                <option value="medium_111">medium 111</option>
+                                <option value="thick_111">thick 111</option>
+                                <option value="thin_110">thin 110</option>
+                                <option value="medium_110">medium 110</option>
+                                <option value="custom">Custom (hkl below)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>hkl / layers / vacuum:</label>
+                            <div class="inline">
+                                <input class="field field--num" id="qe-slab-h" type="number" min="-10" max="10" value="0" title="h">
+                                <input class="field field--num" id="qe-slab-k" type="number" min="-10" max="10" value="0" title="k">
+                                <input class="field field--num" id="qe-slab-l" type="number" min="-10" max="10" value="1" title="l">
+                                <input class="field field--num" id="qe-slab-layers" type="number" min="1" max="10" value="1" title="layers">
+                                <input class="field field--num" id="qe-slab-vac" type="number" min="0" max="100" step="1" value="15" title="vacuum &#197;">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label for="qe-slab-store">Store as:</label>
+                            <input class="field field--mono" id="qe-slab-store" type="text" value="" placeholder="{name}_slab" maxlength="64">
+                        </div>
+                        <button type="button" class="btn btn--block" id="qe-slab-prepare" disabled>Prepare slab</button>
+                        <p class="status-line" id="qe-slab-status">Select a bulk crystal, then Prepare.</p>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
                         <legend>Quantum Espresso &amp; Wannier90 Pipeline</legend>
 
+                        <div class="form-row">
+                            <label>Slab QE:</label>
+                            <label class="check" style="margin:0"><input type="checkbox" id="qe-slab-mode"> 2D / vacuum slab (<code>kz=1</code>, <code>assume_isolated='2D'</code>)</label>
+                        </div>
+                        <p class="hint">Auto-suggested for Tab&nbsp;3 stacks and prepared slabs (large <em>c</em>). Leave off for true 3D bulk.</p>
                         <div class="form-row">
                             <label for="qe-cutoff">Wavefunction Cutoff (Ry):</label>
                             <input class="field" id="qe-cutoff" type="number" min="20" max="200" step="1" value="60">

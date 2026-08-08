@@ -87,7 +87,8 @@ Grand App
 		- [x] GUI component for defining pseudo_dir, k-mesh, and functionals (PBE, LDA, HSE).
 		- [x] Local subprocess execution runner with thread-safety.
 		- [x] Parse resulting wannier90_hr.dat back into the Tight Binding engine.
-		- [ ] Slab creation for surface slab calculations (drawn from the structure from the crystal suite).
+		- [x] Slab creation for surface slab calculations (drawn from the structure from the crystal suite).
+		  DFT Suite: Prepare slab (presets + custom hkl/layers/vacuum) for Tab&nbsp;1/CIF bulk; Tab&nbsp;3 stacks use Slab QE (`kz=1`, `assume_isolated='2D'`) without re-cut.
 		- [ ] Semi-infinite structure setup for Green's function calculation (drawn from the crystal suite).
 		- [ ] Define which termination to stop at so we know which band belongs to the surface.
 		- [ ] Toggle for Wannier90 Hybridization (Atomic Projections vs. Maximally Localized).

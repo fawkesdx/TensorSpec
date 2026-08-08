@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 
 from tensorspec.core.dft import band_service
 from tensorspec.core.dft import qe_pipeline
+from tensorspec.core.dft import qe_slab
 from tensorspec.core.dft.qe_pipeline import PipelineParams, SolverPaths
 from tensorspec.core.dft_engine import DFTEngineRouter
 from tensorspec.core import mlip_engine
@@ -31,6 +32,8 @@ from tensorspec.web.server.schemas import (
     JobInfo,
     QEGenerateResponse,
     QERequest,
+    SlabPrepareRequest,
+    SlabPrepareResult,
     SolverStatus,
     StructureOption,
 )
@@ -104,7 +107,21 @@ def _params_from_request(request: QERequest, max_mpi_ranks: int) -> PipelinePara
         mlwf_mode=request.mlwf_mode,
         use_mpi=request.use_mpi,
         mpi_ranks=min(request.mpi_ranks, max_mpi_ranks),
+        slab_mode=bool(request.slab_mode),
     )
+
+
+def _safe_crystal_label(name: str, fallback: str) -> str:
+    import re
+
+    cleaned = (name.strip() or fallback)[:64]
+    if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$", cleaned):
+        raise HTTPException(
+            status_code=422,
+            detail="Name must start with a letter or digit and contain only "
+            "letters, digits, '.', '_' or '-'.",
+        )
+    return cleaned
 
 
 def _prepare_run(
@@ -166,8 +183,57 @@ def list_structures(session: Session = Depends(current_session)) -> list[Structu
             n_sites=len(structure),
             shell_keys=list(shells.keys()),
             default_hoppings=[float(v) for v in shells.values()],
+            suggest_slab_qe=qe_slab.suggest_slab_qe(structure),
+            lattice_c=float(structure.lattice.c),
         ))
     return options
+
+
+@router.get("/slab-presets")
+def slab_presets():
+    """Educational slab cleave presets for DFT Suite Prepare slab."""
+    return {"presets": qe_slab.list_slab_presets()}
+
+
+@router.post("/{name}/prepare-slab", response_model=SlabPrepareResult)
+def prepare_slab(
+    name: str,
+    request: SlabPrepareRequest,
+    session: Session = Depends(current_session),
+) -> SlabPrepareResult:
+    """Cleave bulk CIF / Tab-1 structure into a vacuum slab; store for QE."""
+    structure = _require_structure(session, name)
+    try:
+        result = qe_slab.prepare_slab(
+            structure,
+            preset=request.preset,
+            h=request.h,
+            k=request.k,
+            l=request.l,
+            num_layers=request.num_layers,
+            vacuum=request.vacuum,
+            bond_threshold=request.bond_threshold,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    store_as = request.store_as.strip() or f"{name}_slab"
+    label = _safe_crystal_label(store_as, f"{name}_slab")
+    slab = result["structure"]
+    session.workspace.push_crystal_structure(
+        label, slab.lattice.matrix, structure=slab
+    )
+    return SlabPrepareResult(
+        stored_as=label,
+        formula=result["formula"],
+        n_sites=result["n_sites"],
+        hkl=result["hkl"],
+        num_layers=result["num_layers"],
+        vacuum=result["vacuum"],
+        preset=result["preset"],
+        suggest_slab_qe=True,
+        lattice_c=float(slab.lattice.c),
+    )
 
 
 @router.get("/solvers", response_model=SolverStatus)

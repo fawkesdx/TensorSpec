@@ -122,14 +122,6 @@ class FatBandResult(BaseModel):
     n_kpoints: int
 
 
-class StructureOption(BaseModel):
-    name: str
-    formula: str
-    n_sites: int
-    shell_keys: list[str]
-    default_hoppings: list[float]
-
-
 class QERequest(BaseModel):
     """Validated QE / Wannier90 parameters. No executable paths here."""
 
@@ -143,6 +135,43 @@ class QERequest(BaseModel):
     mlwf_mode: bool = False
     use_mpi: bool = True
     mpi_ranks: int = Field(default=4, ge=1, le=256)
+    # Vacuum slab / Tab-3 stack: kz→1 and assume_isolated='2D'
+    slab_mode: bool = False
+
+
+class SlabPrepareRequest(BaseModel):
+    """Cleave a bulk crystal into a vacuum slab for QE (DFT Suite)."""
+
+    preset: str = Field(default="thin_001", max_length=32)
+    h: int = Field(default=0, ge=-10, le=10)
+    k: int = Field(default=0, ge=-10, le=10)
+    l: int = Field(default=1, ge=-10, le=10)
+    num_layers: int = Field(default=1, ge=1, le=10)
+    vacuum: float = Field(default=15.0, ge=0, le=100)
+    store_as: str = Field(default="", max_length=64)
+    bond_threshold: float = Field(default=3.2, ge=0.5, le=10.0)
+
+
+class SlabPrepareResult(BaseModel):
+    stored_as: str
+    formula: str
+    n_sites: int
+    hkl: list[int]
+    num_layers: int
+    vacuum: float
+    preset: str
+    suggest_slab_qe: bool = True
+    lattice_c: float
+
+
+class StructureOption(BaseModel):
+    name: str
+    formula: str
+    n_sites: int
+    shell_keys: list[str]
+    default_hoppings: list[float]
+    suggest_slab_qe: bool = False
+    lattice_c: float | None = None
 
 
 class QEGenerateResponse(BaseModel):
