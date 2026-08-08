@@ -536,7 +536,6 @@ class BZRequest(BaseModel):
     h: int = Field(default=0, ge=-10, le=10)
     k: int = Field(default=0, ge=-10, le=10)
     l: int = Field(default=1, ge=-10, le=10)
-    overlay_crystal: bool = True
 
 
 class BZGeometry(BaseModel):
