@@ -34,9 +34,13 @@ Today QE Generate always writes bulk-style inputs (`kz` from UI, no `assume_isol
 | medium_110 | 1 1 0 | 3 | 15 |
 | custom | user hkl | user | user |
 
-## Out of scope
+## Not in this release (planned later)
 
-- Dipole corrections / asymmetric polar slabs
-- Termination labeling for surface bands
-- Semi-infinite Green’s function
-- Skipping Wannier in Generate (still writes full set)
+These are **not available yet**. They stay on the roadmap for a **future iteration** of TensorSpec — use this list as a reminder of what the slab/QE path still lacks:
+
+- **Dipole corrections / asymmetric polar slabs** — not in Generate today; later for polar surfaces.
+- **Termination labeling for surface bands** — cannot mark which face/termination owns a band yet; roadmap item still open.
+- **Semi-infinite Green’s function** setups — not implemented; separate future DFT surface tool.
+- **SCF-only Generate** (skip Wannier) — Generate still always writes the full SCF→NSCF→Wannier set; optional slim pipeline later.
+
+See also `roadmap.md` under DFT → Full DFT Capability for the same open checkboxes.
