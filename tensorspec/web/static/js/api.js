@@ -377,6 +377,11 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
+        dftIsoenergy: (name, payload) =>
+            request(`/api/dft/${encodeURIComponent(name)}/isoenergy`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
         dftFatBands: (name, fatTarget = "none") =>
             request(`/api/dft/${encodeURIComponent(name)}/bands/fat`, {
                 method: "POST",
