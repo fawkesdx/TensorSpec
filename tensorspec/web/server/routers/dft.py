@@ -122,6 +122,7 @@ def _params_from_request(request: QERequest, max_mpi_ranks: int) -> PipelinePara
         use_mpi=request.use_mpi,
         mpi_ranks=min(request.mpi_ranks, max_mpi_ranks),
         slab_mode=bool(request.slab_mode),
+        functional=request.functional,
     )
 
 

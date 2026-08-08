@@ -143,6 +143,8 @@ class QERequest(BaseModel):
     mpi_ranks: int = Field(default=4, ge=1, le=256)
     # Vacuum slab / Tab-3 stack: kz→1 and assume_isolated='2D'
     slab_mode: bool = False
+    # XC functional → QE input_dft (no pseudo filtering)
+    functional: Literal["PBE", "LDA", "PBEsol"] = "PBE"
 
 
 class SlabPrepareRequest(BaseModel):

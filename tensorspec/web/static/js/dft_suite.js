@@ -43,6 +43,7 @@ const dom = {
     w90Status: el("tb-w90-status"),
 
     qeCutoff: el("qe-cutoff"),
+    qeXc: el("qe-xc"),
     qeSoc: el("qe-soc"),
     qeNbnd: el("qe-nbnd"),
     qeWanMode: el("qe-wanmode"),
@@ -418,6 +419,7 @@ function readQeParameters() {
         use_mpi: dom.qeMpi.checked,
         mpi_ranks: Number(dom.qeRanks.value) || 4,
         slab_mode: slab,
+        functional: dom.qeXc?.value || "PBE",
     };
 }
 

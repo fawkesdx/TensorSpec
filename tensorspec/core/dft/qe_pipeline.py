@@ -62,6 +62,8 @@ class PipelineParams:
     mpi_ranks: int = 4
     # 2D / vacuum-slab QE: force kz=1 and assume_isolated='2D' in inputs
     slab_mode: bool = False
+    # XC functional → input_dft in scf/nscf (no pseudo filtering)
+    functional: str = "PBE"
 
     @property
     def rho(self) -> float:
@@ -122,6 +124,7 @@ def generate_inputs(
         use_soc=params.use_soc,
         relative_outdir=relative_outdir,
         slab_mode=params.slab_mode,
+        functional=params.functional,
     )
     generator.write_nscf_input(
         str(run_dir),
@@ -132,6 +135,7 @@ def generate_inputs(
         use_soc=params.use_soc,
         relative_outdir=relative_outdir,
         slab_mode=params.slab_mode,
+        functional=params.functional,
     )
     generator.write_wannier90_input(
         str(run_dir),
