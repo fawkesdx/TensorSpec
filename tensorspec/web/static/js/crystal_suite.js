@@ -497,7 +497,6 @@ async function renderBZ() {
             h: Number(dom.bzH.value) || 0,
             k: Number(dom.bzK.value) || 0,
             l: Number(dom.bzL.value) || 1,
-            overlay_crystal: Boolean(dom.bzOverlay.checked),
         });
 
         const view = ensureViewer();
