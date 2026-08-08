@@ -45,6 +45,11 @@ const dom = {
     cut: el("cr-cut"),
     cutColor: el("cr-cut-color"),
     depth: el("cr-depth"),
+    expAtoms: el("cr-exp-atoms"),
+    expCell: el("cr-exp-cell"),
+    expBz: el("cr-exp-bz"),
+    export3ds: el("cr-export-3ds"),
+    exportBlender: el("cr-export-blender"),
 
     cdwEnable: el("cdw-enable"),
     cdwTarget: el("cdw-target"),
@@ -586,6 +591,52 @@ function downloadActiveCif() {
     link.click();
 }
 
+function sceneExportPayload() {
+    const geo = geometryRequest();
+    return {
+        nx: geo.nx,
+        ny: geo.ny,
+        nz: geo.nz,
+        bond_threshold: geo.bond_threshold,
+        basis: geo.basis,
+        show_bonds: geo.show_bonds,
+        include_atoms: Boolean(dom.expAtoms?.checked),
+        include_cell: Boolean(dom.expCell?.checked),
+        include_bz: Boolean(dom.expBz?.checked),
+        bz_scale: Number(dom.bzScale?.value) || 1,
+        bz_style: dom.bzStyle?.value || "solid",
+        bz_h: Number(dom.bzH?.value) || 0,
+        bz_k: Number(dom.bzK?.value) || 0,
+        bz_l: Number(dom.bzL?.value) || 1,
+    };
+}
+
+async function exportScene(fmt) {
+    if (!activeCrystal) {
+        setStatus("Load or stack a structure first.", true);
+        return;
+    }
+    const payload = sceneExportPayload();
+    if (!payload.include_atoms && !payload.include_cell && !payload.include_bz) {
+        setStatus("Select at least one of Atoms/Bonds, Unit Cell, or Brillouin Zone.", true);
+        return;
+    }
+    setStatus(`Exporting ${fmt} scene for ${activeCrystal}\u2026`);
+    try {
+        const blob = await TensorSpecAPI.crystalExportScene(activeCrystal, fmt, payload);
+        const ext = fmt === "3dsmax" ? "ms" : "py";
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${activeCrystal}_scene.${ext}`;
+        link.click();
+        URL.revokeObjectURL(url);
+        setStatus(`Exported ${activeCrystal}_scene.${ext}`);
+    } catch (err) {
+        setStatus(err.message, true);
+    }
+}
+
 async function pushActiveCrystal(preferredName) {
     if (!activeCrystal) {
         setStatus("Nothing to push — load or render a stack first.", true);
@@ -680,6 +731,8 @@ if (dom.stGap) dom.stGap.addEventListener("click", predictStackGap);
 if (dom.stCif) dom.stCif.addEventListener("click", downloadActiveCif);
 if (dom.stPush) dom.stPush.addEventListener("click", () => pushActiveCrystal());
 if (dom.crExportCif) dom.crExportCif.addEventListener("click", downloadActiveCif);
+if (dom.export3ds) dom.export3ds.addEventListener("click", () => exportScene("3dsmax"));
+if (dom.exportBlender) dom.exportBlender.addEventListener("click", () => exportScene("blender"));
 if (dom.crPush) {
     dom.crPush.addEventListener("click", () => {
         const name = window.prompt("Workspace name for this structure:", activeCrystal || "structure");

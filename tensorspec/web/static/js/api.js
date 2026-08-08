@@ -106,6 +106,28 @@ const TensorSpecAPI = (() => {
                 body: JSON.stringify({ store_as: storeAs }),
             }),
         crystalCifUrl: (name) => `/api/crystal/${encodeURIComponent(name)}/cif`,
+        crystalExportScene: async (name, fmt, payload) => {
+            const response = await fetch(
+                `/api/crystal/${encodeURIComponent(name)}/export/${fmt}`,
+                {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                }
+            );
+            if (!response.ok) {
+                let detail = `${response.status} ${response.statusText}`;
+                try {
+                    const body = await response.json();
+                    if (body.detail) detail = body.detail;
+                } catch (err) {
+                    /* ignore */
+                }
+                throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+            }
+            return response.blob();
+        },
         crystalGapPredict: (name, fidelity = "PBE") =>
             request(`/api/crystal/${encodeURIComponent(name)}/gap-predict`, {
                 method: "POST",
