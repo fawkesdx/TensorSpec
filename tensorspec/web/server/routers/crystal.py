@@ -11,6 +11,7 @@ import re
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pymatgen.core import Structure
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 from tensorspec.core.crystallography import CrystalEngine
 from tensorspec.web.server.schemas import (
@@ -53,6 +54,46 @@ BUILTIN_TEMPLATES = [
 ]
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def _detect_structure_fmt(filename: str) -> str:
+    lower = (filename or "").lower()
+    if lower.endswith(".cif"):
+        return "cif"
+    if lower.endswith(".vasp") or lower.endswith(".poscar") or lower.endswith("poscar"):
+        return "poscar"
+    return "cif"
+
+
+def _site_element_and_label(site) -> tuple[str, str]:
+    """Return (element_symbol, display_label) for one pymatgen site."""
+    try:
+        element = site.specie.symbol
+    except Exception:
+        # Disordered: take the majority species
+        if getattr(site, "species", None) is not None:
+            element = sorted(site.species.items(), key=lambda kv: -kv[1])[0][0].symbol
+        else:
+            raise
+    label = getattr(site, "label", None) or element
+    return element, str(label)
+
+
+def _apply_basis(structure: Structure, basis: str) -> Structure:
+    if basis == "conventional":
+        try:
+            return SpacegroupAnalyzer(structure).get_conventional_standard_structure()
+        except Exception:
+            return structure.copy()
+    if basis == "primitive":
+        try:
+            return SpacegroupAnalyzer(structure).get_primitive_standard_structure()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Could not convert to primitive basis: {exc}",
+            ) from exc
+    raise HTTPException(status_code=422, detail=f"Unknown basis: {basis}")
 
 
 def _safe_label(name: str, fallback: str) -> str:
@@ -113,14 +154,28 @@ def _geometry_from_structure(
         )
 
     coords = structure.cart_coords
-    atoms = [
-        Atom(
-            element=site.specie.symbol,
-            position=[float(v) for v in coords[idx]],
-            radius=float(site.specie.atomic_radius or DEFAULT_RADIUS),
+    atoms = []
+    for idx, site in enumerate(structure):
+        try:
+            element, label = _site_element_and_label(site)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Could not resolve species for site {idx}: {exc}",
+            ) from exc
+        radius = DEFAULT_RADIUS
+        try:
+            radius = float(site.specie.atomic_radius or DEFAULT_RADIUS)
+        except Exception:
+            radius = DEFAULT_RADIUS
+        atoms.append(
+            Atom(
+                element=element,
+                label=label,
+                position=[float(v) for v in coords[idx]],
+                radius=radius,
+            )
         )
-        for idx, site in enumerate(structure)
-    ]
 
     bonds: list[Bond] = []
     if show_bonds:
@@ -136,7 +191,7 @@ def _geometry_from_structure(
         bonds=bonds,
         cell=[[float(v) for v in row] for row in structure.lattice.matrix],
         center=[float(v) for v in center],
-        elements=sorted({site.specie.symbol for site in structure}),
+        elements=sorted({a.element for a in atoms}),
         n_atoms=len(atoms),
         show_cell=show_cell,
     )
@@ -149,19 +204,21 @@ async def load_cif(
     session: Session = Depends(current_session),
 ) -> CrystalSummary:
     """Parse an uploaded CIF and store it in the caller's workspace."""
-    if not file.filename or not file.filename.lower().endswith((".cif", ".vasp", ".poscar")):
-        raise HTTPException(status_code=400, detail="Expected a .cif file.")
+    fname = file.filename or ""
+    if not fname.lower().endswith((".cif", ".vasp", ".poscar")) and not fname.upper().endswith("POSCAR"):
+        raise HTTPException(status_code=400, detail="Expected a .cif, .vasp, or POSCAR file.")
 
     payload = await file.read()
     if len(payload) > MAX_CIF_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds the 8 MB limit.")
 
+    fmt = _detect_structure_fmt(fname)
     try:
-        structure = Structure.from_str(payload.decode("utf-8", errors="replace"), fmt="cif")
+        structure = Structure.from_str(payload.decode("utf-8", errors="replace"), fmt=fmt)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Could not parse the CIF: {exc}")
 
-    label = _safe_label(name or file.filename.rsplit(".", 1)[0], "structure")
+    label = _safe_label(name or fname.rsplit(".", 1)[0], "structure")
     return _store(session, label, structure)
 
 
@@ -324,6 +381,7 @@ def get_geometry(
 ) -> CrystalGeometry:
     """Expand to a supercell, optionally apply CDW, and return atoms/bonds/cell."""
     structure = _require_structure(session, name)
+    structure = _apply_basis(structure, request.basis)
 
     projected = len(structure) * request.cell_count
     if projected > MAX_RENDER_ATOMS:
