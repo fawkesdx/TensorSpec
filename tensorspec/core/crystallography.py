@@ -3,7 +3,7 @@ import os
 import json
 import warnings
 import numpy as np
-from scipy.spatial import ConvexHull
+from scipy.spatial import ConvexHull, KDTree
 from pymatgen.core import Structure, Lattice
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.core.surface import SlabGenerator
@@ -50,6 +50,41 @@ class CrystalEngine:
             return {"spacegroup": spg_symbol, "volume_ratio": ratio}
         except Exception:
             return {"spacegroup": "N/A", "volume_ratio": 1}
+
+    @staticmethod
+    def compute_bonds(structure: Structure, thresh_multiplier: float = 1.15,
+                      search_radius: float = 4.0, max_atoms: int = 500000) -> dict:
+        """
+        Determines which atom pairs are bonded using a KDTree neighbour search
+        gated by summed atomic radii. Pure geometry: returns index pairs and
+        separations so any renderer (PyVista, three.js, exporters) can draw them.
+
+        Returns arrays i, j, distances, and vectors (j minus i), all aligned.
+        Empty arrays mean no bonds, including when the cell exceeds max_atoms.
+        """
+        empty = {"i": np.array([], dtype=int), "j": np.array([], dtype=int),
+                 "distances": np.array([]), "vectors": np.empty((0, 3))}
+
+        if len(structure) > max_atoms:
+            return empty
+
+        coords = structure.cart_coords
+        radii = np.array([s.specie.atomic_radius if s.specie.atomic_radius else 1.2 for s in structure])
+
+        pairs = KDTree(coords).query_pairs(r=search_radius)
+        if not pairs:
+            return empty
+
+        pairs_arr = np.array(list(pairs))
+        i_idx, j_idx = pairs_arr[:, 0], pairs_arr[:, 1]
+        vecs = coords[j_idx] - coords[i_idx]
+        dists = np.linalg.norm(vecs, axis=1)
+
+        rad_sums = (radii[i_idx] + radii[j_idx]) * thresh_multiplier
+        mask = (dists > 0.5) & (dists <= rad_sums)
+
+        return {"i": i_idx[mask], "j": j_idx[mask],
+                "distances": dists[mask], "vectors": vecs[mask]}
 
     @staticmethod
     def apply_cdw_distortion(supercell: Structure, target_el: str, q_vec: tuple, amp_vec: tuple, phase_deg: float) -> Structure:
@@ -175,36 +210,113 @@ class CrystalEngine:
         return mono_struct, gap_angstrom
 
     @staticmethod
-    def extract_monolayer_miller(bulk_struct: Structure, hkl: tuple, num_layers: int = 1) -> Structure:
-        """Cleaves a bulk structure along explicit Miller indices [h k l]."""
+    def extract_monolayer_miller(
+        bulk_struct: Structure,
+        hkl: tuple,
+        num_layers: int = 1,
+        vacuum: float = 15.0,
+        bond_threshold: float = 3.2,
+    ) -> Structure:
+        """Cleaves along Miller indices [h k l], keeping complete covalent layers.
+
+        Builds an oversized slab, clusters atoms by a distance graph (BFS), drops
+        surface-dust fragments, and keeps ``num_layers`` intact sandwiches with
+        the requested vacuum along c. Matches the desktop Tab 3 behaviour.
+        """
+        if hkl == (0, 0, 0):
+            raise ValueError("Miller index [0 0 0] is not a valid cleavage plane.")
+        if num_layers < 1:
+            raise ValueError("num_layers must be at least 1.")
+        vacuum = float(max(0.0, vacuum))
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            bulk_struct.translate_sites(list(range(len(bulk_struct))), [0.01, 0.01, 0.01], to_unit_cell=True)
-            approx_thick = max(1.5, num_layers * 3.0)
-            slabgen = SlabGenerator(bulk_struct, miller_index=hkl, min_slab_size=approx_thick, min_vacuum_size=25.0, center_slab=True)
+            bulk = bulk_struct.copy()
+            bulk.translate_sites(list(range(len(bulk))), [0.01, 0.01, 0.01], to_unit_cell=True)
+            # Oversized slab so complete molecules survive the cut.
+            safe_thickness = max(30.0, num_layers * 15.0)
+            slabgen = SlabGenerator(
+                bulk,
+                miller_index=hkl,
+                min_slab_size=safe_thickness,
+                min_vacuum_size=max(vacuum, 1.0),
+                center_slab=True,
+            )
             slabs = slabgen.get_slabs()
             if not slabs:
-                raise ValueError(f"Could not generate slabs for plane {hkl}")
-            raw_slab = slabs[0]
-            
-            new_matrix = raw_slab.lattice.matrix.copy()
-            new_matrix[2] = [0, 0, 25.0]
-            new_lat = Lattice(new_matrix)
-            
-            cart_coords = raw_slab.cart_coords
-            z_vals = [c[2] for c in cart_coords]
-            z_center = (max(z_vals) + min(z_vals)) / 2.0
-            final_coords = [[c[0], c[1], c[2] - z_center + 12.5] for c in cart_coords]
-            return Structure(new_lat, raw_slab.species, final_coords, coords_are_cartesian=True)
+                raise ValueError(f"Could not generate slabs for plane {hkl}.")
+
+        raw_slab = slabs[0]
+        dist_mat = raw_slab.distance_matrix
+        num_sites = len(raw_slab)
+        visited: set[int] = set()
+        all_clusters: list[list[int]] = []
+
+        for i in range(num_sites):
+            if i in visited:
+                continue
+            queue = [i]
+            current: list[int] = []
+            while queue:
+                curr = queue.pop(0)
+                if curr in visited:
+                    continue
+                visited.add(curr)
+                current.append(curr)
+                neighbors = np.where(
+                    (dist_mat[curr] > 0.1) & (dist_mat[curr] < bond_threshold)
+                )[0]
+                queue.extend(int(n) for n in neighbors if n not in visited)
+            all_clusters.append(current)
+
+        if not all_clusters:
+            raise ValueError("No bonded clusters found in the cleaved slab.")
+
+        max_size = max(len(c) for c in all_clusters)
+        valid_layers = [c for c in all_clusters if len(c) > max_size * 0.75]
+        valid_layers.sort(
+            key=lambda indices: float(np.mean([raw_slab[idx].coords[2] for idx in indices]))
+        )
+        if not valid_layers:
+            raise ValueError("No complete layers survived the surface-dust filter.")
+
+        target = valid_layers[: min(num_layers, len(valid_layers))]
+        sites_to_keep = [raw_slab[idx] for indices in target for idx in indices]
+        if not sites_to_keep:
+            raise ValueError("Exfoliation produced an empty structure.")
+
+        coords = [s.coords for s in sites_to_keep]
+        z_vals = [c[2] for c in coords]
+        slab_thickness = max(z_vals) - min(z_vals)
+        total_c = slab_thickness + vacuum
+        if total_c <= 0:
+            total_c = vacuum if vacuum > 0 else 25.0
+
+        new_matrix = raw_slab.lattice.matrix.copy()
+        new_matrix[2] = [0.0, 0.0, total_c]
+        new_lat = Lattice(new_matrix)
+        z_center = (max(z_vals) + min(z_vals)) / 2.0
+        final_coords = [[c[0], c[1], c[2] - z_center + (total_c / 2.0)] for c in coords]
+        return Structure(
+            new_lat,
+            [s.specie for s in sites_to_keep],
+            final_coords,
+            coords_are_cartesian=True,
+        )
 
     @staticmethod
-    def build_heterostructure_stack(layers_data: list[dict]) -> Structure:
+    def build_heterostructure_stack(layers_data: list[dict], *, vacuum: float = 20.0, pad_xy: float = 3.0) -> Structure:
         """
         Rotates, shifts, and combines multiple 2D structures into a unified stacked supercell.
-        Each dictionary in layers_data must contain: {'struct': Structure, 'sc_x': int, 'sc_y': int, 'z_shift': float, 'twist': float}
+
+        Each dictionary in ``layers_data`` must contain:
+        ``{'struct': Structure, 'sc_x': int, 'sc_y': int, 'z_shift': float, 'twist': float}``.
+
+        The result uses a tight orthorhombic cell with vacuum (DFT-ready), not a
+        500 Å dummy cube.
         """
         all_species, all_coords, layer_tags = [], [], []
-        
+
         for idx, l in enumerate(layers_data):
             supercell = l['struct'] * (l['sc_x'], l['sc_y'], 1)
             theta = np.radians(l['twist'])
@@ -213,27 +325,63 @@ class CrystalEngine:
                 [np.sin(theta),  np.cos(theta), 0],
                 [            0,              0, 1]
             ])
-            
+
             coords = supercell.cart_coords.copy()
             center_xy = np.mean(coords[:, :2], axis=0)
             coords[:, :2] -= center_xy
-            
+
             rotated_coords = np.dot(coords, rot_matrix.T)
-            shifted_coords = rotated_coords + np.array([0, 0, l['z_shift'] - 12.5])
+            shifted_coords = rotated_coords + np.array([0, 0, l['z_shift']])
             layer_tag = f"_L{idx + 1}"
-            
+
             for i, site in enumerate(supercell):
                 all_species.append(site.specie.symbol)
                 all_coords.append(shifted_coords[i])
                 layer_tags.append(f"{site.specie.symbol}{layer_tag}")
-                
-        dummy_lattice = Lattice.cubic(500.0)
+
+        return CrystalEngine.structure_from_cartesian(
+            all_species,
+            all_coords,
+            site_properties={"layer_tag": layer_tags},
+            vacuum=vacuum,
+            pad_xy=pad_xy,
+        )
+
+    @staticmethod
+    def structure_from_cartesian(
+        species,
+        coords,
+        *,
+        site_properties=None,
+        vacuum: float = 20.0,
+        pad_xy: float = 3.0,
+    ) -> Structure:
+        """Build an orthorhombic cell around Cartesian coordinates with vacuum."""
+        coords = np.asarray(coords, dtype=float)
+        if coords.size == 0:
+            raise ValueError("No atomic coordinates to pack into a cell.")
+        mins = coords.min(axis=0)
+        shift = np.array([
+            pad_xy - mins[0],
+            pad_xy - mins[1],
+            max(vacuum * 0.5, 1.0) - mins[2],
+        ])
+        shifted = coords + shift
+        maxs = shifted.max(axis=0)
+        a = float(maxs[0] + pad_xy)
+        b = float(maxs[1] + pad_xy)
+        c = float(maxs[2] + max(vacuum * 0.5, 1.0))
+        # Guard against degenerate in-plane extent (single atom column)
+        a = max(a, 5.0)
+        b = max(b, 5.0)
+        c = max(c, 10.0)
+        lattice = Lattice.from_parameters(a, b, c, 90.0, 90.0, 90.0)
         return Structure(
-            dummy_lattice, 
-            all_species, 
-            all_coords, 
+            lattice,
+            species,
+            shifted,
             coords_are_cartesian=True,
-            site_properties={"layer_tag": layer_tags}
+            site_properties=site_properties or {},
         )
 
     @staticmethod

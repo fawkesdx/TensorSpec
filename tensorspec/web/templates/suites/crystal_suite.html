@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TensorSpec - Crystal Suite</title>
+    <link rel="stylesheet" href="../../static/css/base.css">
+    <link rel="stylesheet" href="../../static/css/layout.css">
+    <link rel="stylesheet" href="../../static/css/suite.css">
+
+    <!-- three.js addons import the bare specifier "three"; this maps it to the
+         vendored copy. Import maps must be declared before any module script. -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "/static/vendor/three/three.module.min.js",
+            "three/addons/": "/static/vendor/three/"
+        }
+    }
+    </script>
+</head>
+
+<body>
+    <div class="suite">
+
+        <header class="suite-header">
+            <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
+            <h1 class="suite-header__title">Crystal Suite</h1>
+            <div class="suite-header__spacer"></div>
+            <span class="badge" id="cr-session-badge">Connecting&hellip;</span>
+        </header>
+
+        <div class="suite-body suite-body--split">
+
+            <!-- Left: tabbed control column -->
+            <section class="panel">
+                <div class="tabs">
+                    <input class="tab-radio" type="radio" name="crystal-tabs" id="t1" checked>
+                    <input class="tab-radio" type="radio" name="crystal-tabs" id="t2">
+                    <input class="tab-radio" type="radio" name="crystal-tabs" id="t3">
+                    <input class="tab-radio" type="radio" name="crystal-tabs" id="t4">
+
+                    <nav class="tab-bar">
+                        <label for="t1">1. View &amp; Edit</label>
+                        <label for="t2">2. CDW Modulator</label>
+                        <label for="t3">3. Stack &amp; Twist</label>
+                        <label for="t4">4. Brillouin Zone</label>
+                    </nav>
+
+                    <div class="tab-body">
+
+                        <!-- Tab 1 -->
+                        <section class="tab-panel">
+                            <input type="file" id="cr-file" accept=".cif,.vasp,.poscar,.POSCAR" hidden>
+                            <button type="button" class="btn btn--block" id="cr-load">Load Structure File</button>
+                            <p class="status-line" id="cr-status">No file loaded</p>
+                            <p class="hint"><em id="cr-spacegroup">Space Group: N/A</em></p>
+
+                            <div class="form-row form-row--stacked">
+                                <label for="cr-backend">Graphics Backend:</label>
+                                <select class="field" id="cr-backend" disabled title="HTML viewer: not yet">
+                                    <option>three.js (GPU)</option>
+                                </select>
+                                <p class="hint">Graphics backends Matplotlib/PyVista: HTML viewer: not yet.</p>
+                            </div>
+
+                            <fieldset class="fieldset">
+                                <legend>Geometry &amp; Scaling</legend>
+                                <div class="radio-group">
+                                    <label><input type="radio" name="cr-basis" id="cr-basis-conv" value="conventional" checked> Conventional Basis</label>
+                                    <label><input type="radio" name="cr-basis" id="cr-basis-prim" value="primitive"> Primitive Basis</label>
+                                </div>
+                                <div class="form-row">
+                                    <label>Supercell (X,Y,Z):</label>
+                                    <div class="inline">
+                                        <input class="field field--num" id="cr-nx" type="number" min="1" max="20" step="1" value="1">
+                                        <input class="field field--num" id="cr-ny" type="number" min="1" max="20" step="1" value="1">
+                                        <input class="field field--num" id="cr-nz" type="number" min="1" max="20" step="1" value="1">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label for="cr-radius">Atom Radius Scale:</label>
+                                    <input class="field" id="cr-radius" type="number" min="0.1" max="3.0" step="0.1" value="0.5">
+                                </div>
+                                <div class="form-row">
+                                    <label for="cr-bondthick">Bond Thick:</label>
+                                    <input class="field" id="cr-bondthick" type="number" min="0.01" max="1.0" step="0.02" value="0.10">
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="fieldset">
+                                <legend>Styles &amp; Rendering</legend>
+                                <div class="form-row">
+                                    <label for="cr-conn">Connections:</label>
+                                    <select class="field" id="cr-conn">
+                                        <option value="bonds">Bonds (Sticks)</option>
+                                        <option value="none">None</option>
+                                        <option value="polyhedra" disabled>Polyhedra (Planes) — HTML viewer: not yet</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label for="cr-thresh">Bond Thresh:</label>
+                                    <input class="field" id="cr-thresh" type="number" min="0.5" max="3.0" step="0.05" value="1.15">
+                                </div>
+                                <label class="check"><input type="checkbox" id="cr-pbr" disabled> PBR Shiny (HTML viewer: not yet)</label>
+                                <label class="check"><input type="checkbox" id="cr-axes" checked> Show Axes</label>
+                                <label class="check"><input type="checkbox" id="cr-show-cell" checked> Show Conv. Box</label>
+                                <label class="check"><input type="checkbox" id="cr-show-prim" disabled> Show Prim. Box (use Primitive Basis)</label>
+                                <label class="check"><input type="checkbox" id="cr-eraser" disabled> Enable Interactive Eraser Brush (HTML viewer: not yet)</label>
+                            </fieldset>
+
+                            <fieldset class="fieldset">
+                                <legend>Dynamic Element Colors</legend>
+                                <p class="hint">Populated per element once a structure is loaded.</p>
+                                <div id="cr-swatches"></div>
+                            </fieldset>
+
+                            <fieldset class="fieldset">
+                                <legend>Camera &amp; Projection</legend>
+                                <select class="field" id="cr-projection" style="margin-bottom:8px">
+                                    <option value="perspective">Perspective Projection</option>
+                                    <option value="orthographic">Orthogonal Projection</option>
+                                </select>
+                                <div class="form-row">
+                                    <label>Quick View:</label>
+                                    <div class="inline">
+                                        <button type="button" class="btn" id="cr-view-a">+a</button>
+                                        <button type="button" class="btn" id="cr-view-b">+b</button>
+                                        <button type="button" class="btn" id="cr-view-c">+c</button>
+                                        <button type="button" class="btn" id="cr-view-111">111</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label for="cr-az">Azimuth:</label>
+                                    <input class="field" id="cr-az" type="number" min="-360" max="360" step="5" value="0">
+                                </div>
+                                <div class="form-row">
+                                    <label for="cr-el">Elevation:</label>
+                                    <input class="field" id="cr-el" type="number" min="-90" max="90" step="5" value="0">
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="fieldset">
+                                <legend>Crystallography Tools</legend>
+                                <div class="form-row">
+                                    <label>View [h k l]:</label>
+                                    <div class="inline">
+                                        <input class="field field--num" id="cr-h" type="number" min="-10" max="10" value="0">
+                                        <input class="field field--num" id="cr-k" type="number" min="-10" max="10" value="0">
+                                        <input class="field field--num" id="cr-l" type="number" min="-10" max="10" value="1">
+                                        <button type="button" class="btn" id="cr-align">Align</button>
+                                    </div>
+                                </div>
+                                <label class="check"><input type="checkbox" id="cr-cut"> Show Cut Plane</label>
+                                <div class="inline" style="margin-bottom:8px">
+                                    <select class="field" id="cr-cut-color">
+                                        <option value="#00ffff">cyan</option>
+                                        <option value="#ff00ff">magenta</option>
+                                        <option value="#ffff00">yellow</option>
+                                        <option value="#ffffff">white</option>
+                                        <option value="#808080">gray</option>
+                                    </select>
+                                    <select class="field" id="cr-cut-lock" disabled title="This pass: lock to [h k l] only">
+                                        <option selected>Lock to [h k l]</option>
+                                        <option disabled>Lock to Camera — not yet</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label for="cr-depth">Depth:</label>
+                                    <input id="cr-depth" type="range" min="-100" max="100" value="0">
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="fieldset">
+                                <legend>Export Elements</legend>
+                                <label class="check"><input type="checkbox" id="cr-exp-atoms" checked> Atoms/Bonds</label>
+                                <label class="check"><input type="checkbox" id="cr-exp-cell" checked> Unit Cell</label>
+                                <label class="check"><input type="checkbox" id="cr-exp-bz"> Brillouin Zone</label>
+                                <div class="btn-row">
+                                    <button type="button" class="btn" id="cr-export-3ds">Export 3ds Max</button>
+                                    <button type="button" class="btn" id="cr-export-blender">Export Blender</button>
+                                </div>
+                            </fieldset>
+
+                            <button type="button" class="btn btn--primary" id="cr-render">&#127912; Render Structure</button>
+                            <button type="button" class="btn btn--block" id="cr-hires">&#128444; Save High-Res Image</button>
+                            <button type="button" class="btn btn--block" id="cr-export-cif">&#128190; Export Structure to CIF</button>
+                        </section>
+
+                        <!-- Tab 2 -->
+                        <section class="tab-panel">
+                            <label class="check"><input type="checkbox" id="cdw-enable"> Enable CDW Modulation</label>
+
+                            <div class="form-row form-row--stacked">
+                                <label for="cdw-target">Target Element:</label>
+                                <select class="field" id="cdw-target">
+                                    <option>All Elements</option>
+                                </select>
+                            </div>
+
+                            <fieldset class="fieldset">
+                                <legend>Wavevector q (rlu)</legend>
+                                <div class="form-row">
+                                    <label for="q-a">q_a:</label>
+                                    <input class="field" id="q-a" type="number" min="-5" max="5" step="0.05" value="0.00">
+                                </div>
+                                <div class="form-row">
+                                    <label for="q-b">q_b:</label>
+                                    <input class="field" id="q-b" type="number" min="-5" max="5" step="0.05" value="0.00">
+                                </div>
+                                <div class="form-row">
+                                    <label for="q-c">q_c:</label>
+                                    <input class="field" id="q-c" type="number" min="-5" max="5" step="0.05" value="0.00">
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="fieldset">
+                                <legend>Amplitude A (&#197;)</legend>
+                                <div class="form-row">
+                                    <label for="a-x">&#916;x:</label>
+                                    <input class="field" id="a-x" type="number" min="-2" max="2" step="0.02" value="0.00">
+                                </div>
+                                <div class="form-row">
+                                    <label for="a-y">&#916;y:</label>
+                                    <input class="field" id="a-y" type="number" min="-2" max="2" step="0.02" value="0.00">
+                                </div>
+                                <div class="form-row">
+                                    <label for="a-z">&#916;z:</label>
+                                    <input class="field" id="a-z" type="number" min="-2" max="2" step="0.02" value="0.00">
+                                </div>
+                            </fieldset>
+
+                            <div class="form-row">
+                                <label for="cdw-phase">Phase Shift &#966; (degrees):</label>
+                                <input class="field" id="cdw-phase" type="number" min="0" max="360" step="15" value="0">
+                            </div>
+                            <p class="hint">Changes re-render live. Phase is sent in degrees (fixed relative to the Qt double-conversion bug).</p>
+                        </section>
+
+                        <!-- Tab 3 -->
+                        <section class="tab-panel">
+                            <fieldset class="fieldset">
+                                <legend>2D Material Templates</legend>
+                                <select class="field" id="st-template" style="margin-bottom:8px">
+                                    <option>Graphene (Monolayer)</option>
+                                    <option>Graphene (AB Bilayer)</option>
+                                    <option>Graphene (AA Bilayer)</option>
+                                    <option>TaIrTe4 (1T')</option>
+                                    <option>MoS2</option>
+                                    <option>WSe2</option>
+                                    <option>h-BN</option>
+                                </select>
+                                <button type="button" class="btn btn--block" id="st-add-template">&#10133; Add Template Sheet</button>
+                            </fieldset>
+
+                            <fieldset class="fieldset">
+                                <legend>Bulk Exfoliator</legend>
+                                <div class="form-row form-row--stacked">
+                                    <label for="ex-source">Source crystal (workspace):</label>
+                                    <div class="inline">
+                                        <select class="field" id="ex-source" style="flex:1">
+                                            <option value="">Load a CIF in Tab 1 first</option>
+                                        </select>
+                                        <button type="button" class="btn" id="ex-refresh" title="Refresh crystal list">&#128260;</button>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <label for="ex-mode">Mode:</label>
+                                    <select class="field" id="ex-mode">
+                                        <option value="vdw">Auto-Detect van der Waals Gap</option>
+                                        <option value="miller">Manual [h k l] Cleavage</option>
+                                    </select>
+                                </div>
+                                <div id="ex-miller-opts" hidden>
+                                    <div class="form-row">
+                                        <label for="ex-layers">Layers:</label>
+                                        <input class="field field--num" id="ex-layers" type="number" min="1" max="10" value="1">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ex-vacuum">Vacuum (&#197;):</label>
+                                        <input class="field" id="ex-vacuum" type="number" min="0" max="100" step="1" value="15">
+                                    </div>
+                                    <div class="form-row">
+                                        <label>Plane [h k l]:</label>
+                                        <div class="inline">
+                                            <input class="field field--num" id="ex-h" type="number" min="-10" max="10" value="0">
+                                            <input class="field field--num" id="ex-k" type="number" min="-10" max="10" value="0">
+                                            <input class="field field--num" id="ex-l" type="number" min="-10" max="10" value="1">
+                                        </div>
+                                    </div>
+                                </div>
+                                <button type="button" class="btn btn--block" id="ex-run">&#9986; Extract Monolayer from Bulk</button>
+                                <p class="hint">Result is added to the stack below and previewed in the viewport.</p>
+                            </fieldset>
+
+                            <h3 class="section-heading">Stacked Layers</h3>
+                            <div id="st-layers"></div>
+                            <p class="hint">Add templates or exfoliated sheets, set SC / z / &#952;, then render. Moir&#233; needs exactly two layers.</p>
+
+                            <button type="button" class="btn btn--block" id="st-render">&#129521; Render Heterostructure Stack</button>
+                            <button type="button" class="btn btn--block" id="st-moire">&#127744; Calculate Moir&#233; Superlattice</button>
+
+                            <fieldset class="fieldset" style="margin-top:12px">
+                                <legend>Save · Push · MLIP Relax</legend>
+                                <div class="form-row">
+                                    <label for="st-store">Workspace name:</label>
+                                    <input class="field" id="st-store" type="text" value="heterostructure" maxlength="64">
+                                </div>
+                                <div class="form-row">
+                                    <label for="st-mlip">ML potential:</label>
+                                    <select class="field" id="st-mlip">
+                                        <option value="chgnet">CHGNet (fast universal)</option>
+                                        <option value="m3gnet">M3GNet (MP universal)</option>
+                                    </select>
+                                </div>
+                                <div class="form-row">
+                                    <label for="st-fmax">fmax (eV/&#197;):</label>
+                                    <input class="field field--num" id="st-fmax" type="number" min="0.01" max="1" step="0.01" value="0.1">
+                                </div>
+                                <div class="form-row">
+                                    <label for="st-steps">Max steps:</label>
+                                    <input class="field field--num" id="st-steps" type="number" min="10" max="2000" step="10" value="200">
+                                </div>
+                                <label class="check"><input type="checkbox" id="st-relax-cell"> Also relax cell (usually off for 2D + vacuum)</label>
+                                <button type="button" class="btn btn--block" id="st-relax">&#9881; Relax stack (MLIP)</button>
+                                <div class="form-row">
+                                    <label for="st-gap-fid">Gap fidelity:</label>
+                                    <select class="field" id="st-gap-fid">
+                                        <option value="PBE">PBE</option>
+                                        <option value="HSE">HSE</option>
+                                        <option value="SCAN">SCAN</option>
+                                        <option value="GLLB-SC">GLLB-SC</option>
+                                    </select>
+                                </div>
+                                <button type="button" class="btn btn--block" id="st-gap">Predict band gap (MEGNet)</button>
+                                <button type="button" class="btn btn--block" id="st-cif">&#128190; Download CIF</button>
+                                <button type="button" class="btn btn--block" id="st-push">&#128229; Push / rename in workspace</button>
+                                <p class="hint">Stack already saves to the workspace for DFT Suite. MEGNet gives a scalar gap (not full bands). For twisted stacks, DFT Suite Auto path is the <em>folded</em> supercell BZ — use “Primitive hex reference” or “Unfold hex (spectral weight)” there for graphene-like Γ–K–M. MLIP/MEGNet need <code>pip install matgl ase torch</code>.</p>
+                            </fieldset>
+                            <p class="status-line" id="st-status">Status: Waiting for stack...</p>
+                        </section>
+
+                        <!-- Tab 4 -->
+                        <section class="tab-panel">
+                            <h3 class="section-heading">Reciprocal Space (Wigner-Seitz Cell)</h3>
+                            <label class="check"><input type="checkbox" id="bz-overlay" checked> Overlay Real-Space Crystal Structure</label>
+                            <div class="form-row">
+                                <label for="bz-scale">BZ Visual Scale:</label>
+                                <input class="field" id="bz-scale" type="number" min="0.1" max="10" step="0.1" value="1.0">
+                            </div>
+                            <div class="form-row">
+                                <label for="bz-style">Render Style:</label>
+                                <select class="field" id="bz-style">
+                                    <option value="solid">Solid Faces</option>
+                                    <option value="skeleton">Skeleton (Cylinder Frame)</option>
+                                    <option value="both">Both Solid &amp; Skeleton</option>
+                                </select>
+                            </div>
+
+                            <fieldset class="fieldset">
+                                <legend>Projected Surface BZ</legend>
+                                <label class="check"><input type="checkbox" id="bz-surface"> Enable Surface Projection</label>
+                                <div class="form-row">
+                                    <label>Plane [h k l]:</label>
+                                    <div class="inline">
+                                        <input class="field field--num" id="bz-h" type="number" min="-10" max="10" value="0">
+                                        <input class="field field--num" id="bz-k" type="number" min="-10" max="10" value="0">
+                                        <input class="field field--num" id="bz-l" type="number" min="-10" max="10" value="1">
+                                    </div>
+                                </div>
+                            </fieldset>
+
+                            <button type="button" class="btn btn--primary" id="bz-render">&#128721; Render Brillouin Zone</button>
+                            <button type="button" class="btn btn--block" id="bz-clear">Clear BZ Overlay</button>
+                        </section>
+
+                    </div>
+                </div>
+
+                <div class="inspector__footer">
+                    <button type="button" class="btn btn--primary" id="cr-push">&#128229; Push Structure to Workspace</button>
+                </div>
+            </section>
+
+            <!-- Right: 3D viewport -->
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">3D Viewport</h2>
+                    <span class="badge" id="cr-legend">three.js (WebGL)</span>
+                </div>
+                <div class="panel__body" style="padding:12px">
+                    <div class="viewport" id="cr-viewport">
+                        <div class="canvas" id="cr-placeholder">
+                            <div class="canvas__glyph" aria-hidden="true">&#9672;</div>
+                            <p class="canvas__title">3D Render Canvas</p>
+                            <p class="canvas__meta">Load a CIF file to render atoms, bonds, and the unit cell.
+                                Drag to rotate, scroll to zoom, right-drag to pan.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+        <footer class="statusbar">
+            <div class="statusbar__group">
+                <span id="cr-stat-atoms">0 atoms</span>
+                <span id="cr-stat-bonds">0 bonds</span>
+            </div>
+            <div class="statusbar__group">
+                <span>Crystal Suite</span>
+            </div>
+        </footer>
+
+    </div>
+
+    <script src="../../static/js/api.js"></script>
+    <script type="module" src="../../static/js/crystal_suite.js"></script>
+</body>
+
+</html>

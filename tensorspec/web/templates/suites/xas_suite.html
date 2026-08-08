@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TensorSpec - XAS Suite</title>
+    <link rel="stylesheet" href="../../static/css/base.css">
+    <link rel="stylesheet" href="../../static/css/layout.css">
+    <link rel="stylesheet" href="../../static/css/suite.css">
+</head>
+
+<body>
+    <div class="suite">
+
+        <header class="suite-header">
+            <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
+            <h1 class="suite-header__title">XAS Suite</h1>
+            <div class="suite-header__spacer"></div>
+            <span class="badge">Planned &mdash; no engine yet</span>
+        </header>
+
+        <div class="suite-body suite-body--split">
+
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">Spectrum Processing</h2>
+                </div>
+                <div class="panel__body" style="padding:12px">
+
+                    <p class="hint">This suite has no Python engine yet. The controls below reflect the XAS/XMCD scope
+                        recorded in <code>sandy_rule.md</code> for <code>core/xas_engine.py</code>: background
+                        subtraction and normalization over an (H field, Energy) coordinate space.</p>
+
+                    <fieldset class="fieldset">
+                        <legend>1. Load</legend>
+                        <button type="button" class="btn btn--block" disabled>&#128194; Load XAS Spectra...</button>
+                        <h3 class="section-heading">Loaded Spectra</h3>
+                        <ul class="window-registry__list">
+                            <li class="empty-state">No spectra loaded</li>
+                        </ul>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>2. Normalization</legend>
+                        <div class="form-row">
+                            <label for="xas-norm">Method:</label>
+                            <select class="field" id="xas-norm">
+                                <option>Pre-edge / post-edge</option>
+                                <option>Edge jump to unity</option>
+                                <option>Area normalized</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>Pre-edge (eV):</label>
+                            <div class="inline">
+                                <label>Min:</label>
+                                <input class="field field--num" type="number" step="0.1" value="0.0">
+                                <label>Max:</label>
+                                <input class="field field--num" type="number" step="0.1" value="0.0">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label>Post-edge (eV):</label>
+                            <div class="inline">
+                                <label>Min:</label>
+                                <input class="field field--num" type="number" step="0.1" value="0.0">
+                                <label>Max:</label>
+                                <input class="field field--num" type="number" step="0.1" value="0.0">
+                            </div>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>3. Background</legend>
+                        <div class="form-row">
+                            <label for="xas-bg">Background Type:</label>
+                            <select class="field" id="xas-bg">
+                                <option>Linear</option>
+                                <option>Polynomial</option>
+                                <option>Step (arctan)</option>
+                                <option>Shirley</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn btn--block" disabled>&#9660; Subtract Background</button>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>4. XMCD</legend>
+                        <div class="form-row">
+                            <label for="xas-field">Field (H):</label>
+                            <select class="field" id="xas-field">
+                                <option>All fields</option>
+                            </select>
+                        </div>
+                        <label class="check"><input type="checkbox"> Compute difference spectrum (CP &minus; CM)</label>
+                        <button type="button" class="btn btn--block" disabled>&#931; Run Sum Rule Analysis</button>
+                    </fieldset>
+
+                    <button type="button" class="btn btn--primary" disabled>&#128229; Push Spectra to Workspace</button>
+
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">Spectral Plot</h2>
+                </div>
+                <div class="panel__body" style="padding:12px; display:flex; flex-direction:column; gap:12px">
+                    <div class="canvas" style="flex:1 1 auto">
+                        <div class="canvas__glyph" aria-hidden="true">&#9651;</div>
+                        <p class="canvas__title">1D Spectral Canvas</p>
+                        <p class="canvas__meta">Absorption spectra with stack overlays, normalization guides, and the
+                            XMCD difference curve.</p>
+                    </div>
+                    <div>
+                        <h3 class="section-heading">Planned capabilities (roadmap)</h3>
+                        <ul class="planned">
+                            <li>1D spectral plotting with stack overlays</li>
+                            <li>Field and energy normalization</li>
+                            <li>XAS/XMCD background subtraction</li>
+                            <li>(H field, Energy) coordinate handling</li>
+                        </ul>
+                        <p class="hint">The XAS Suite is an unexpanded line in <code>roadmap.md</code>. If you want a
+                            detailed checklist there, tell me which items to add.</p>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+        <footer class="statusbar">
+            <div class="statusbar__group">
+                <span>Static shell &mdash; Phase 2</span>
+                <span>Engine not implemented</span>
+            </div>
+            <div class="statusbar__group">
+                <span>XAS Suite</span>
+            </div>
+        </footer>
+
+    </div>
+</body>
+
+</html>

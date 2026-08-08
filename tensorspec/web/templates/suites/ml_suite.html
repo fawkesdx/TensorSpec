@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TensorSpec - Machine Learning Suite</title>
+    <link rel="stylesheet" href="../../static/css/base.css">
+    <link rel="stylesheet" href="../../static/css/layout.css">
+    <link rel="stylesheet" href="../../static/css/suite.css">
+</head>
+
+<body>
+    <div class="suite">
+
+        <header class="suite-header">
+            <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
+            <h1 class="suite-header__title">Machine Learning Suite</h1>
+            <div class="suite-header__spacer"></div>
+            <span class="badge">Planned &mdash; no engine yet</span>
+        </header>
+
+        <div class="suite-body suite-body--split">
+
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">Decomposition &amp; Clustering</h2>
+                </div>
+                <div class="panel__body" style="padding:12px">
+
+                    <p class="hint">This suite has no Python engine yet. The controls below reflect the scope recorded
+                        in <code>sandy_rule.md</code> for <code>core/ml_engine.py</code>: domain clustering, PCA/NMF
+                        dimensionality reduction, and image analysis.</p>
+
+                    <fieldset class="fieldset">
+                        <legend>1. Input Tensor</legend>
+                        <div class="inline" style="margin-bottom:8px">
+                            <select class="field">
+                                <option>No tensors available</option>
+                            </select>
+                            <button type="button" class="btn" disabled>&#128260; Refresh</button>
+                        </div>
+                        <div class="form-row">
+                            <label for="ml-node">Source Node:</label>
+                            <select class="field" id="ml-node">
+                                <option>/raw</option>
+                                <option>/processed</option>
+                            </select>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>2. Preprocessing</legend>
+                        <label class="check"><input type="checkbox" checked> Normalize each spectrum</label>
+                        <label class="check"><input type="checkbox"> Mean-center</label>
+                        <div class="form-row">
+                            <label for="ml-mask">Region Mask:</label>
+                            <select class="field" id="ml-mask">
+                                <option>Full dataset</option>
+                                <option>Crosshair selection</option>
+                            </select>
+                        </div>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>3. Dimensionality Reduction</legend>
+                        <div class="form-row">
+                            <label for="ml-decomp">Method:</label>
+                            <select class="field" id="ml-decomp">
+                                <option>PCA</option>
+                                <option>NMF</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label for="ml-ncomp">Components:</label>
+                            <input class="field" id="ml-ncomp" type="number" min="1" max="50" value="4">
+                        </div>
+                        <button type="button" class="btn btn--block" disabled>&#129518; Run Decomposition</button>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>4. Clustering</legend>
+                        <div class="form-row">
+                            <label for="ml-cluster">Algorithm:</label>
+                            <select class="field" id="ml-cluster">
+                                <option>k-means</option>
+                                <option>Gaussian mixture</option>
+                                <option>DBSCAN</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label for="ml-k">Clusters (k):</label>
+                            <input class="field" id="ml-k" type="number" min="2" max="30" value="3">
+                        </div>
+                        <button type="button" class="btn btn--block" disabled>&#127760; Cluster Domains</button>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>5. Deep Learning</legend>
+                        <div class="form-row">
+                            <label for="ml-model">Model:</label>
+                            <select class="field" id="ml-model">
+                                <option>None</option>
+                                <option>Image analysis (CNN)</option>
+                                <option>Transfer learning</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn btn--block" disabled>&#128190; Load Trained Weights</button>
+                        <button type="button" class="btn btn--block" disabled>&#9654; Run Inference</button>
+                    </fieldset>
+
+                    <button type="button" class="btn btn--primary" disabled>&#128229; Push Components to Workspace</button>
+
+                </div>
+            </section>
+
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">Component Maps</h2>
+                </div>
+                <div class="panel__body" style="padding:12px; display:flex; flex-direction:column; gap:12px">
+                    <div class="canvas" style="flex:1 1 auto">
+                        <div class="canvas__glyph" aria-hidden="true">&#9704;</div>
+                        <p class="canvas__title">Decomposition Canvas</p>
+                        <p class="canvas__meta">Component loadings, spatial score maps, cluster label maps, and
+                            explained-variance plots.</p>
+                    </div>
+                    <div>
+                        <h3 class="section-heading">Planned capabilities (roadmap)</h3>
+                        <ul class="planned">
+                            <li>Clustering for domain classification from spatial scans</li>
+                            <li>Dimensionality reduction (PCA/NMF) for hyperspectral datasets</li>
+                            <li>Deep learning-based image analysis</li>
+                            <li>Transfer learning-based models</li>
+                        </ul>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+        <footer class="statusbar">
+            <div class="statusbar__group">
+                <span>Static shell &mdash; Phase 2</span>
+                <span>Engine not implemented</span>
+            </div>
+            <div class="statusbar__group">
+                <span>Machine Learning Suite</span>
+            </div>
+        </footer>
+
+    </div>
+</body>
+
+</html>

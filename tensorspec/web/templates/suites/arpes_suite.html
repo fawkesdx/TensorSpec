@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TensorSpec - ARPES Suite</title>
+    <link rel="stylesheet" href="../../static/css/base.css">
+    <link rel="stylesheet" href="../../static/css/layout.css">
+    <link rel="stylesheet" href="../../static/css/suite.css">
+</head>
+
+<body>
+    <div class="suite">
+
+        <header class="suite-header">
+            <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
+            <h1 class="suite-header__title">ARPES Suite</h1>
+            <div class="suite-header__spacer"></div>
+            <span class="badge">Process: k∥ + hv→kz</span>
+        </header>
+
+        <div class="tabs">
+            <input class="tab-radio" type="radio" name="arpes-tabs" id="t1" checked>
+            <input class="tab-radio" type="radio" name="arpes-tabs" id="t2">
+            <input class="tab-radio" type="radio" name="arpes-tabs" id="t3">
+            <input class="tab-radio" type="radio" name="arpes-tabs" id="t4">
+            <input class="tab-radio" type="radio" name="arpes-tabs" id="t5">
+
+            <nav class="tab-bar">
+                <label for="t1">Matrix Element Simulator</label>
+                <label for="t2">Data Viewer</label>
+                <label for="t3">Process</label>
+                <label for="t4">Analysis</label>
+                <label for="t5">Volume</label>
+            </nav>
+
+            <div class="tab-body">
+
+                <!-- Tab 1: Matrix Element Simulator -->
+                <section class="tab-panel" style="padding:0">
+                    <div class="suite-body suite-body--triple" style="min-height:78vh">
+
+                        <!-- Controls -->
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Simulation Parameters</h2>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+
+                                <fieldset class="fieldset">
+                                    <legend>0. Crystal Structure (Workspace)</legend>
+                                    <div class="inline">
+                                        <select class="field" id="ar-crystal">
+                                            <option value="">No crystals available</option>
+                                        </select>
+                                        <button type="button" class="btn" id="ar-crystal-refresh">&#128260; Refresh</button>
+                                    </div>
+                                    <p class="hint">Sims rebuild a 2D TB mesh from the crystal. Load a CIF in Crystal Suite first (e.g. graphene).</p>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>1. Simulation Engine Selector</legend>
+                                    <div class="form-row">
+                                        <label for="ar-model">Physics Model:</label>
+                                        <select class="field" id="ar-model">
+                                            <option value="A">Option A: Phenomenological Three-Step Model</option>
+                                            <option value="B1">Option B1: One-Step Model (Chinook TB)</option>
+                                        </select>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>2. Final State &amp; Thermodynamics</legend>
+                                    <div class="form-row">
+                                        <label for="ar-hv">Photon (hv):</label>
+                                        <input class="field" id="ar-hv" type="number" min="5" max="2000" step="1" value="90.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-phi">Work Func (&#934;):</label>
+                                        <input class="field" id="ar-phi" type="number" min="0" max="10" step="1" value="4.5">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-v0">Inner Pot (V0):</label>
+                                        <input class="field" id="ar-v0" type="number" min="0" max="30" step="1" value="15.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-temp">Temperature:</label>
+                                        <input class="field" id="ar-temp" type="number" min="0.1" max="1000" step="1" value="10.0">
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>3. Beam &amp; Manipulator Geometry</legend>
+                                    <div class="form-row">
+                                        <label for="ar-theta">Manipulator &#920; (Lab Z):</label>
+                                        <input class="field" id="ar-theta" type="number" min="-180" max="180" step="1" value="0.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-azi">Manipulator Azimuth:</label>
+                                        <input class="field" id="ar-azi" type="number" min="-180" max="180" step="1" value="0.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-tilt">Manipulator Tilt:</label>
+                                        <input class="field" id="ar-tilt" type="number" min="-90" max="90" step="1" value="0.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label>Cleavage Plane [h k l]:</label>
+                                        <div class="inline">
+                                            <input class="field field--num" id="ar-h" type="number" min="-10" max="10" value="0">
+                                            <input class="field field--num" id="ar-k" type="number" min="-10" max="10" value="0">
+                                            <input class="field field--num" id="ar-l" type="number" min="-10" max="10" value="1">
+                                        </div>
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-inc">Beam Incidence (Lab):</label>
+                                        <input class="field" id="ar-inc" type="number" min="0" max="90" step="1" value="55.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-pol">Polarization:</label>
+                                        <select class="field" id="ar-pol">
+                                            <option>Linear Horizontal (p-pol)</option>
+                                            <option>Linear Vertical (s-pol)</option>
+                                            <option>Linear Arbitrary</option>
+                                            <option>Circular Right (CR)</option>
+                                            <option>Circular Left (CL)</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-polang">Pol. Angle (Arbitrary):</label>
+                                        <input class="field" id="ar-polang" type="number" min="0" max="360" step="1" value="45.0">
+                                    </div>
+                                    <p class="hint">Pol. Angle is shown only for the Linear Arbitrary polarization.</p>
+                                    <div class="form-row">
+                                        <label for="ar-int">Intensity Mode:</label>
+                                        <select class="field" id="ar-int">
+                                            <option>Full Matrix Elements</option>
+                                            <option>Polarization Dipole Only</option>
+                                            <option>Bare Spectral Function (ME Off)</option>
+                                        </select>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>4. Analyzer Domain &amp; Resolution</legend>
+                                    <div class="form-row">
+                                        <label for="ar-slitsize">Analyzer Slit Size (mm):</label>
+                                        <input class="field" id="ar-slitsize" type="number" min="0.1" max="5" step="0.1" value="0.5" title="Analyzer entrance slit opening">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-pe">Pass Energy (eV):</label>
+                                        <input class="field" id="ar-pe" type="number" min="1" max="500" step="1" value="20">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-slitang">Analyzer Slit Angle:</label>
+                                        <input class="field" id="ar-slitang" type="number" min="-180" max="180" step="1" value="0.0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-defl">Deflector Angle (°):</label>
+                                        <input class="field" id="ar-defl" type="number" min="-15" max="15" step="1" value="0.0" title="Shifts ky window; kx stays along-slit">
+                                    </div>
+                                    <p class="hint">Slit+PE → analyzer ΔE (Scienta-like R₀≈200 mm estimate, not a calibrated table). Total ΔE = quadrature of ana/beam/extra — not analyzer alone. Deflector shifts ky; kx is along-slit.</p>
+
+                                    <h3 class="section-heading">Domain</h3>
+                                    <div class="form-row form-row--stacked">
+                                        <label>kx (Slit):</label>
+                                        <div class="inline">
+                                            <label>Min:</label>
+                                            <input class="field field--num" id="ar-kx-min" type="number" min="-10" max="10" step="0.1" value="-2.0">
+                                            <label>Max:</label>
+                                            <input class="field field--num" id="ar-kx-max" type="number" min="-10" max="10" step="0.1" value="2.0">
+                                            <label>Pts:</label>
+                                            <input class="field field--num" id="ar-kx-pts" type="number" min="10" max="80" step="2" value="24">
+                                        </div>
+                                    </div>
+                                    <div class="form-row form-row--stacked">
+                                        <label>ky (Deflect):</label>
+                                        <div class="inline">
+                                            <label>Min:</label>
+                                            <input class="field field--num" id="ar-ky-min" type="number" min="-10" max="10" step="0.1" value="-2.0">
+                                            <label>Max:</label>
+                                            <input class="field field--num" id="ar-ky-max" type="number" min="-10" max="10" step="0.1" value="2.0">
+                                            <label>Pts:</label>
+                                            <input class="field field--num" id="ar-ky-pts" type="number" min="10" max="80" step="2" value="24">
+                                        </div>
+                                    </div>
+                                    <div class="form-row form-row--stacked">
+                                        <label>E:</label>
+                                        <div class="inline">
+                                            <label>Min:</label>
+                                            <input class="field field--num" id="ar-e-min" type="number" min="-10" max="10" step="0.1" value="-2.0">
+                                            <label>Max:</label>
+                                            <input class="field field--num" id="ar-e-max" type="number" min="-10" max="10" step="0.1" value="0.5">
+                                            <label>Pts:</label>
+                                            <input class="field field--num" id="ar-e-pts" type="number" min="10" max="80" step="2" value="32">
+                                        </div>
+                                    </div>
+
+                                    <h3 class="section-heading">Resolution</h3>
+                                    <div class="form-row">
+                                        <label for="ar-se">Peak Linewidth (SE):</label>
+                                        <input class="field" id="ar-se" type="number" min="0.001" max="1" step="0.01" value="0.010">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-de-beam">Beamline ΔE (eV):</label>
+                                        <input class="field" id="ar-de-beam" type="number" min="0" max="1" step="0.001" value="0.01">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-de-extra">Extra ΔE (eV):</label>
+                                        <input class="field" id="ar-de-extra" type="number" min="0" max="1" step="0.001" value="0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-de">Energy Resolution (dE):</label>
+                                        <input class="field" id="ar-de" type="number" min="0.001" max="1" step="0.001" value="0.020" readonly>
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ar-de-manual">Manual dE override:</label>
+                                        <input class="field" id="ar-de-manual" type="checkbox">
+                                    </div>
+                                    <p class="hint" id="ar-res-status">ana — / beam — / extra — / total — eV</p>
+                                    <div class="form-row">
+                                        <label for="ar-dk">Momentum Resolution (dk):</label>
+                                        <input class="field" id="ar-dk" type="number" min="0.001" max="1" step="0.01" value="0.020">
+                                    </div>
+                                </fieldset>
+
+                                <button type="button" class="btn btn--primary" id="ar-run">&#128640; Run ARPES Simulation</button>
+                                <button type="button" class="btn btn--block" id="ar-cancel" disabled>Cancel Job</button>
+                                <button type="button" class="btn btn--block" id="ar-push" disabled>&#128202; Push to Workspace</button>
+                                <p class="hint">Shared-server caps keep grids modest. Logs stream below while the job runs.</p>
+                                <pre class="log-area" id="ar-log">Waiting to run…</pre>
+                            </div>
+                        </section>
+
+                        <!-- Geometry schematic -->
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Experimental Geometry Schematic</h2>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="canvas">
+                                    <div class="canvas__glyph" aria-hidden="true">&#9683;</div>
+                                    <p class="canvas__title">3D Schematic Canvas</p>
+                                    <p class="canvas__meta">Lab X (Side), Lab Y (Forward), Lab Z (Vertical) with sample
+                                        axes, incident light and E-field, detector plane, analyzer slit, and deflector
+                                        cut.</p>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Intensity plot -->
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Simulated ARPES Intensity</h2>
+                            </div>
+                            <div class="panel__body" style="padding:12px; display:flex; flex-direction:column; gap:12px">
+                                <div class="viewport" id="ar-intensity" style="flex:1 1 auto; min-height:280px"></div>
+                                <div>
+                                    <div class="form-row">
+                                        <label for="ar-be">Binding Energy (eV):</label>
+                                        <input class="field" id="ar-be" type="number" step="0.01" value="0.000" disabled>
+                                    </div>
+                                    <input type="range" id="ar-be-slider" min="0" max="100" value="50" disabled style="margin-bottom:8px; width:100%">
+                                    <p class="hint" id="ar-sim-status">No simulation loaded.</p>
+                                </div>
+                            </div>
+                        </section>
+
+                    </div>
+                </section>
+
+                <!-- Tab 2: Data Viewer -->
+                <section class="tab-panel" style="padding:0">
+                    <div class="suite-body suite-body--split" style="min-height:78vh">
+
+                        <!-- Fetcher sidebar -->
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">ARPES Workspace Memory</h2>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <button type="button" class="btn btn--primary" id="av-demo">&#10133; Seed Demo Cube</button>
+                                <label class="btn btn--block" for="av-load-file" style="display:block;text-align:center;cursor:pointer;margin-top:8px">
+                                    Load MAESTRO .h5
+                                </label>
+                                <input type="file" id="av-load-file" accept=".h5,.hdf5" hidden>
+                                <label class="hint" for="av-load-log" style="display:block;margin-top:6px">
+                                    Optional measurement log
+                                    <input type="file" id="av-load-log" accept=".csv,text/csv" style="display:block;margin-top:4px;width:100%">
+                                </label>
+                                <button type="button" class="btn btn--block" id="av-add-panel" style="margin-top:8px">&#10133; Spawn Panel (Below)</button>
+                                <button type="button" class="btn btn--block btn--primary" id="av-kind-layout" style="margin-top:8px">Open Kind Layout</button>
+                                <h3 class="section-heading">Datasets</h3>
+                                <ul class="window-registry__list" id="av-datasets">
+                                    <li class="empty-state">Loading&hellip;</li>
+                                </ul>
+                                <button type="button" class="btn btn--block" id="av-refresh" style="margin-top:12px">&#128260; Refresh List</button>
+                                <p class="hint">Select a dataset, then Open Kind Layout for linked cut / Fermi / hv panels (Sync on). Right-click titles to spawn more.</p>
+                            </div>
+                        </section>
+
+                        <!-- Multi-panel host -->
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Dynamic Cross-Correlated Dashboard</h2>
+                                <span class="badge" id="av-badge">No dataset</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="av-panel-host" id="av-panel-host"></div>
+                            </div>
+                        </section>
+
+                    </div>
+                </section>
+
+                <!-- Tab 3: Process (angle → k∥) -->
+                <section class="tab-panel" style="padding:0">
+                    <div class="suite-body suite-body--triple" style="min-height:78vh">
+
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Process</h2>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <fieldset class="fieldset">
+                                    <legend>Module</legend>
+                                    <select class="field" id="ap-mode">
+                                        <option value="inplane">In-plane → k∥</option>
+                                        <option value="kz">Photon → kz</option>
+                                    </select>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>Dataset</legend>
+                                    <div class="inline">
+                                        <select class="field" id="ap-dataset">
+                                            <option value="">No spectroscopy data</option>
+                                        </select>
+                                        <button type="button" class="btn" id="ap-refresh">&#128260;</button>
+                                    </div>
+                                    <p class="hint" id="ap-meta">Load data in Data Viewer first.</p>
+                                </fieldset>
+
+                                <div id="ap-inplane-controls">
+                                <fieldset class="fieldset">
+                                    <legend>Γ center (click/drag on raw)</legend>
+                                    <div class="form-row">
+                                        <label for="ap-center">Center:</label>
+                                        <input class="field" id="ap-center" type="number" step="any" value="0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-beta-center">β center:</label>
+                                        <input class="field" id="ap-beta-center" type="number" step="any" value="0">
+                                    </div>
+                                    <button type="button" class="btn btn--block" id="ap-suggest">Suggest center (brightness)</button>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>In-plane conversion</legend>
+                                    <div class="form-row">
+                                        <label for="ap-hv">Photon (eV):</label>
+                                        <input class="field" id="ap-hv" type="number" min="5" max="2000" step="0.1" value="80">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-phi">Work Φ (eV):</label>
+                                        <input class="field" id="ap-phi" type="number" min="0" max="10" step="0.1" value="4.5">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-dpu">deg / unit:</label>
+                                        <input class="field" id="ap-dpu" type="number" min="0.0001" max="10" step="any" value="1">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-beta-dpu">β deg / unit:</label>
+                                        <input class="field" id="ap-beta-dpu" type="number" min="0.0001" max="10" step="any" value="1">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-emode">Energy mode:</label>
+                                        <select class="field" id="ap-emode">
+                                            <option value="auto">auto</option>
+                                            <option value="binding_negative">binding (E≤0 at EF)</option>
+                                            <option value="binding_positive">binding (E≥0 below EF)</option>
+                                            <option value="kinetic">kinetic</option>
+                                        </select>
+                                    </div>
+                                </fieldset>
+                                </div>
+
+                                <div id="ap-kz-controls" hidden>
+                                <fieldset class="fieldset">
+                                    <legend>Inner potential (Vo)</legend>
+                                    <div class="form-row">
+                                        <label for="ap-vo">Vo (eV):</label>
+                                        <input class="field" id="ap-vo" type="number" min="0" max="50" step="0.1" value="15">
+                                    </div>
+                                    <input type="range" id="ap-vo-slider" min="0" max="40" step="0.1" value="15" style="width:100%">
+                                    <div class="form-row">
+                                        <label for="ap-kz-phi">Work Φ (eV):</label>
+                                        <input class="field" id="ap-kz-phi" type="number" min="0" max="10" step="0.1" value="4.5">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-kz-theta">θ (deg):</label>
+                                        <input class="field" id="ap-kz-theta" type="number" min="-90" max="90" step="0.1" value="0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-kz-eb">E_B ref (eV):</label>
+                                        <input class="field" id="ap-kz-eb" type="number" step="0.1" value="0">
+                                    </div>
+                                    <label class="hint" style="display:flex;gap:8px;align-items:center">
+                                        <input type="checkbox" id="ap-kz-q"> Soft X-ray photon-momentum correction
+                                    </label>
+                                </fieldset>
+                                </div>
+
+                                <fieldset class="fieldset">
+                                    <legend>BZ overlay</legend>
+                                    <div class="inline">
+                                        <select class="field" id="ap-crystal">
+                                            <option value="">No crystal</option>
+                                        </select>
+                                        <button type="button" class="btn" id="ap-crystal-refresh">&#128260;</button>
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-h">h</label>
+                                        <input class="field" id="ap-h" type="number" step="1" value="0">
+                                        <label for="ap-k">k</label>
+                                        <input class="field" id="ap-k" type="number" step="1" value="0">
+                                        <label for="ap-l">l</label>
+                                        <input class="field" id="ap-l" type="number" step="1" value="1">
+                                    </div>
+                                    <label class="hint" id="ap-bz-inplane-row" style="display:flex;gap:8px;align-items:center">
+                                        <input type="checkbox" id="ap-bz-toggle"> Overlay projected surface BZ
+                                    </label>
+                                    <label class="hint" id="ap-bz-perp-row" hidden style="display:flex;gap:8px;align-items:center">
+                                        <input type="checkbox" id="ap-perp-bz-toggle"> Overlay perpendicular BZ (kz guides)
+                                    </label>
+                                </fieldset>
+
+                                <div class="form-row">
+                                    <label for="ap-store">Store as:</label>
+                                    <input class="field" id="ap-store" type="text" placeholder="name_k" value="">
+                                </div>
+                                <button type="button" class="btn btn--primary btn--block" id="ap-apply">Apply → workspace</button>
+                                <p class="hint" id="ap-status">Click the raw map to set Γ. Preview updates on the right.</p>
+                            </div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title" id="ap-raw-title">Raw</h2>
+                                <span class="badge" id="ap-raw-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px;display:flex;flex-direction:column;gap:8px">
+                                <div class="viewport" id="ap-raw" style="flex:1 1 auto;min-height:320px"></div>
+                                <input type="range" id="ap-fixed-slider" min="0" max="0" value="0" disabled style="width:100%">
+                                <p class="hint" id="ap-fixed-label">No extra axis</p>
+                            </div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title" id="ap-k-title">Converted preview</h2>
+                                <span class="badge" id="ap-k-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="ap-k" style="min-height:360px;height:100%"></div>
+                            </div>
+                        </section>
+
+                    </div>
+                </section>
+
+                <!-- ===== Tab 4: Analysis (peakfit) ===== -->
+                <section class="tab-panel" data-tab="t4">
+                    <div class="controls" style="margin-bottom:12px">
+                        <div class="control">
+                            <label for="an-name">Dataset</label>
+                            <select id="an-name"></select>
+                        </div>
+                        <div class="control">
+                            <label for="an-mode">Mode</label>
+                            <select id="an-mode">
+                                <option value="mdc" selected>MDC (vs momentum)</option>
+                                <option value="edc">EDC (vs energy)</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <label for="an-shape">Lineshape</label>
+                            <select id="an-shape">
+                                <option value="lorentzian" selected>Lorentzian</option>
+                                <option value="voigt">Voigt (instr. Gauss)</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <label for="an-npeaks">N peaks</label>
+                            <input id="an-npeaks" type="number" min="1" max="8" step="1" value="1" style="width:4rem">
+                        </div>
+                        <div class="control">
+                            <label><input type="checkbox" id="an-fd"> Fermi–Dirac (EDC)</label>
+                        </div>
+                        <div class="control">
+                            <label for="an-T">T (K)</label>
+                            <input id="an-T" type="number" step="0.1" value="10" style="width:5rem">
+                        </div>
+                        <div class="control">
+                            <label for="an-fwhm">Analyzer FWHM (eV)</label>
+                            <input id="an-fwhm" type="number" step="0.001" value="0" style="width:5rem">
+                        </div>
+                        <div class="control">
+                            <label for="an-index">Curve index</label>
+                            <input id="an-index" type="range" min="0" max="0" value="0" style="width:10rem">
+                            <span class="hint" id="an-index-label">0</span>
+                        </div>
+                        <div class="control">
+                            <button class="btn btn--ghost" id="an-defaults" type="button">Load defaults</button>
+                            <button class="btn btn--ghost" id="an-suggest" type="button">Suggest seeds</button>
+                            <button class="btn" id="an-fit-curve" type="button">Fit curve</button>
+                            <button class="btn" id="an-fit-stack" type="button">Fit stack → /analysis</button>
+                        </div>
+                    </div>
+                    <p class="hint" id="an-status">Select a 2D cut (or map slice) for EDC/MDC peak fitting.</p>
+
+                    <div class="grid grid--2" style="gap:12px;margin-bottom:12px">
+                        <section class="panel">
+                            <div class="panel__header"><h2 class="panel__title">Seeds</h2></div>
+                            <div class="panel__body" style="padding:12px;overflow:auto;max-height:220px">
+                                <table class="table" id="an-seeds-table" style="width:100%;font-size:0.85rem">
+                                    <thead><tr><th>#</th><th>Center</th><th>Amplitude</th><th>Width</th></tr></thead>
+                                    <tbody id="an-seeds-body"></tbody>
+                                </table>
+                            </div>
+                        </section>
+                        <section class="panel">
+                            <div class="panel__header"><h2 class="panel__title">Fit result (this curve)</h2></div>
+                            <div class="panel__body" style="padding:12px;overflow:auto;max-height:220px">
+                                <pre id="an-result" style="margin:0;font-size:0.8rem;white-space:pre-wrap">—</pre>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="grid grid--2" style="gap:12px">
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Data + fit</h2>
+                                <span class="badge" id="an-curve-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-curve" style="min-height:280px"></div>
+                            </div>
+                        </section>
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Stack: center / integrated</h2>
+                                <span class="badge" id="an-stack-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-stack" style="min-height:280px"></div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="controls" style="margin:16px 0 12px">
+                        <div class="control">
+                            <label for="an-qp-peak">Peak #</label>
+                            <input id="an-qp-peak" type="number" min="0" max="7" step="1" value="0" style="width:4rem">
+                        </div>
+                        <div class="control">
+                            <label for="an-ef">E<sub>F</sub></label>
+                            <input id="an-ef" type="number" step="0.001" value="0" style="width:5rem">
+                        </div>
+                        <div class="control">
+                            <label for="an-se-model">Self-energy</label>
+                            <select id="an-se-model">
+                                <option value="fl" selected>FL (Γ₀ + α ω²)</option>
+                                <option value="mfl">MFL (Γ₀ + α |ω|)</option>
+                                <option value="">Skip</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <button class="btn" id="an-qp" type="button">QP results → /analysis</button>
+                        </div>
+                    </div>
+                    <p class="hint" id="an-qp-status">After Fit stack: build δE–E, k<sub>F</sub>, m*, v<sub>F</sub>, and FL/MFL from the peak table.</p>
+
+                    <div class="grid grid--2" style="gap:12px;margin-bottom:12px">
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">δE (Γ) vs E · intensity</h2>
+                                <span class="badge" id="an-de-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-de" style="min-height:260px"></div>
+                            </div>
+                        </section>
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Dispersion E(k)</h2>
+                                <span class="badge" id="an-ek-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-ek" style="min-height:260px"></div>
+                            </div>
+                        </section>
+                    </div>
+                    <section class="panel">
+                        <div class="panel__header"><h2 class="panel__title">QP summary</h2></div>
+                        <div class="panel__body" style="padding:12px">
+                            <pre id="an-qp-result" style="margin:0;font-size:0.8rem;white-space:pre-wrap">—</pre>
+                        </div>
+                    </section>
+
+                    <div class="controls" style="margin:16px 0 12px">
+                        <div class="control">
+                            <label for="an-gap-type">Gap model</label>
+                            <select id="an-gap-type">
+                                <option value="sc" selected>SC (Dynes)</option>
+                                <option value="cdw">CDW (Dynes)</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <button class="btn btn--ghost" id="an-gap-curve" type="button">Fit gap EDC</button>
+                            <button class="btn" id="an-gap-stack" type="button">Fit gap stack → /analysis</button>
+                        </div>
+                    </div>
+                    <p class="hint" id="an-gap-status">Dynes DOS × FD (± resolution) on EDCs. Stack writes /analysis/gap_fit.</p>
+                    <div class="grid grid--2" style="gap:12px;margin-bottom:12px">
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Gap EDC fit</h2>
+                                <span class="badge" id="an-gap-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-gap-curve-plot" style="min-height:240px"></div>
+                            </div>
+                        </section>
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Δ(k) stack</h2>
+                                <span class="badge" id="an-gap-stack-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-gap-stack-plot" style="min-height:240px"></div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="controls" style="margin:16px 0 12px">
+                        <div class="control">
+                            <label for="an-bands">DFT bands</label>
+                            <select id="an-bands"><option value="">—</option></select>
+                        </div>
+                        <div class="control">
+                            <label for="an-sim">Sim dataset</label>
+                            <select id="an-sim"><option value="">—</option></select>
+                        </div>
+                        <div class="control">
+                            <label for="an-kcomp">k component</label>
+                            <select id="an-kcomp">
+                                <option value="kx" selected>kx</option>
+                                <option value="ky">ky</option>
+                                <option value="inplane">|k∥|</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <label for="an-sim-alpha">Sim α</label>
+                            <input id="an-sim-alpha" type="range" min="0" max="100" value="45" style="width:8rem">
+                        </div>
+                        <div class="control">
+                            <button class="btn" id="an-overlay" type="button">Overlay on cut</button>
+                        </div>
+                    </div>
+                    <p class="hint" id="an-overlay-status">Overlay DFT path bands (polylines) and/or a pushed sim cube onto the experimental cut.</p>
+                    <section class="panel">
+                        <div class="panel__header">
+                            <h2 class="panel__title">Cut + DFT / sim overlay</h2>
+                            <span class="badge" id="an-overlay-badge">—</span>
+                        </div>
+                        <div class="panel__body" style="padding:12px">
+                            <div class="viewport" id="an-overlay-cut" style="min-height:360px"></div>
+                        </div>
+                    </section>
+                </section>
+
+                <!-- ===== Tab 5: Volume (BZ prism cutout) ===== -->
+                <section class="tab-panel" data-tab="t5">
+                    <div class="controls" style="margin-bottom:12px">
+                        <div class="control">
+                            <label for="vol-name">Dataset (≥3D)</label>
+                            <select id="vol-name"></select>
+                        </div>
+                        <div class="control">
+                            <label for="vol-crystal">Crystal (BZ shape)</label>
+                            <select id="vol-crystal"><option value="">— data box —</option></select>
+                        </div>
+                        <div class="control">
+                            <label for="vol-shape">Prism</label>
+                            <select id="vol-shape">
+                                <option value="auto" selected>Auto (crystal / box)</option>
+                                <option value="rectangle">Rectangle</option>
+                                <option value="hexagon">Hexagon</option>
+                                <option value="crystal">Crystal surface BZ</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <label for="vol-indent">Indent sectors</label>
+                            <input id="vol-indent" type="range" min="0" max="3" step="1" value="1" style="width:8rem">
+                            <span class="hint" id="vol-indent-label">1</span>
+                        </div>
+                        <div class="control">
+                            <label for="vol-depth">Indent depth</label>
+                            <input id="vol-depth" type="range" min="0" max="100" value="55" style="width:8rem">
+                        </div>
+                        <div class="control">
+                            <label for="vol-ef">E slice</label>
+                            <input id="vol-ef" type="number" step="0.01" value="0" style="width:5rem">
+                        </div>
+                        <div class="control">
+                            <label><input type="checkbox" id="vol-fermi" checked> Show E-plane</label>
+                        </div>
+                        <div class="control">
+                            <button class="btn" id="vol-load" type="button">Build volume</button>
+                        </div>
+                    </div>
+                    <p class="hint" id="vol-status">Needs a 3D cube (e.g. Fermi map with energy, or simulated E×kx×ky). Indent cuts into the BZ prism to reveal interior dispersions; the E-plane shows the Fermi surface cut.</p>
+                    <section class="panel">
+                        <div class="panel__header">
+                            <h2 class="panel__title">BZ prism cutout</h2>
+                            <span class="badge" id="vol-badge">—</span>
+                        </div>
+                        <div class="panel__body" style="padding:12px">
+                            <div class="viewport" id="vol-view" style="min-height:480px;height:60vh"></div>
+                        </div>
+                    </section>
+                </section>
+
+            </div>
+        </div>
+
+        <footer class="statusbar">
+            <div class="statusbar__group">
+                <span id="av-stat-shape">No tensor loaded</span>
+                <span id="av-stat-window">&mdash;</span>
+            </div>
+            <div class="statusbar__group">
+                <span>ARPES Suite</span>
+            </div>
+        </footer>
+
+    </div>
+
+    <script src="../../static/js/api.js"></script>
+    <script type="module" src="../../static/js/arpes_suite.js"></script>
+</body>
+
+</html>

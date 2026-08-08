@@ -8,22 +8,29 @@ from tensorspec.core.data_models import TensorData
 from tensorspec.core.data_tree import DataTreeBuilder
 
 class WorkspaceManager:
-    def __init__(self):
+    def __init__(self, project_dir=None):
         # The primary dictionary holding all datasets (CIFs, DataTrees, etc.)
         self._data = {}
         
-        # Set up a default root directory for the project to prevent saving errors
-        self.project_dir = Path.cwd() / "TensorSpec_Workspace"
+        # Set up a root directory for the project to prevent saving errors.
+        # Served sessions pass their own directory so users never share files.
+        self.project_dir = Path(project_dir) if project_dir else Path.cwd() / "TensorSpec_Workspace"
         self.project_dir.mkdir(parents=True, exist_ok=True)
 
-    def push_crystal_structure(self, name, basis_vectors):
+    def list_items(self):
+        """Returns {name: type} for every object currently held in memory."""
+        return {name: item.get('type', 'Unknown') for name, item in self._data.items()}
+
+    def push_crystal_structure(self, name, basis_vectors, structure=None):
         """
-        Stores a parsed crystal structure's local basis vectors.
-        This will later be called by the Crystal Suite after loading a CIF.
+        Stores a parsed crystal structure's local basis vectors, and optionally
+        the full pymatgen Structure so the atoms survive alongside the lattice.
+        Callers that only have the basis may omit `structure`.
         """
         self._data[name] = {
             'type': 'crystal_structure',
-            'basis': basis_vectors
+            'basis': basis_vectors,
+            'structure': structure
         }
 
     def pull_crystal_structure(self, name):
@@ -33,6 +40,16 @@ class WorkspaceManager:
         item = self._data.get(name)
         if item and item.get('type') == 'crystal_structure':
             return item['basis']
+        return None
+
+    def pull_structure_object(self, name):
+        """
+        Retrieves the full pymatgen Structure for a stored crystal, or None if
+        it was pushed with only its basis vectors.
+        """
+        item = self._data.get(name)
+        if item and item.get('type') == 'crystal_structure':
+            return item.get('structure')
         return None
     
     def list_crystal_structures(self):
@@ -49,7 +66,7 @@ class WorkspaceManager:
             crystals.append(key)
         return crystals
     
-    def push_band_structure(self, name, k_dist, eigenvalues, eigenvectors, k_vecs, node_idx, labels, orbital_positions=None):
+    def push_band_structure(self, name, k_dist, eigenvalues, eigenvectors, k_vecs, node_idx, labels, orbital_positions=None, orbital_labels=None):
         """
         Stores a calculated band structure, its wavefunctions, and basis coordinates.
         """
@@ -61,7 +78,8 @@ class WorkspaceManager:
             'k_vecs': k_vecs,               # Actual 3D k-vectors for matrix elements
             'node_idx': node_idx,           # High symmetry point indices
             'labels': labels,               # High symmetry labels
-            'orbital_positions': orbital_positions or [] # NEW: Atomic basis coords for ARPES ME
+            'orbital_positions': orbital_positions or [],  # Atomic basis coords for ARPES ME
+            'orbital_labels': list(orbital_labels) if orbital_labels is not None else [],
         }
 
     def pull_band_structure(self, name):
@@ -128,7 +146,40 @@ class WorkspaceManager:
         }
         print(f"DataTree '{name}' successfully pushed to Global Workspace.")
 
-    def pull_tensor_data(self, name: str, node: str = "/raw") -> TensorData:
+    def write_processed_data(self, name: str, tensor_data: TensorData) -> bool:
+        """Write a processed cube into ``/processed`` of an existing spectroscopy tree."""
+        item = self._data.get(name)
+        if not item or item.get('type') != 'spectroscopy_tree':
+            return False
+        item['tree'] = DataTreeBuilder.write_processed(item['tree'], tensor_data)
+        return True
+
+    def write_analysis_data(self, name: str, node_name: str, dataset) -> bool:
+        """Write an analysis Dataset under ``/analysis/<node_name>``."""
+        item = self._data.get(name)
+        if not item or item.get('type') != 'spectroscopy_tree':
+            return False
+        item['tree'] = DataTreeBuilder.write_analysis(item['tree'], node_name, dataset)
+        return True
+
+    def pull_analysis_data(self, name: str, node_name: str = "mdc_peakfit"):
+        """Return an analysis Dataset, or None."""
+        item = self._data.get(name)
+        if not item or item.get('type') != 'spectroscopy_tree':
+            return None
+        tree = item['tree']
+        leaf = node_name.strip("/")
+        try:
+            analysis = tree["analysis"]
+            if leaf in analysis.children:
+                node = analysis[leaf]
+            else:
+                return None
+        except Exception:
+            return None
+        return node.to_dataset() if hasattr(node, "to_dataset") else node.ds
+
+    def pull_tensor_data(self, name: str, node: str = "raw") -> TensorData:
         """
         Extracts a specific node from a stored DataTree and packages it back 
         into a TensorData object for the DataViewerPanel to consume.
@@ -138,6 +189,8 @@ class WorkspaceManager:
             return None
             
         tree = item['tree']
+        # DataTree matches bare child names, so accept "raw", "/raw", or "/raw/".
+        node = node.strip("/")
         if node not in tree:
             print(f"Error: Node '{node}' does not exist in dataset '{name}'.")
             return None

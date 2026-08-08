@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TensorSpec - DFT &amp; Tight Binding Suite</title>
+    <link rel="stylesheet" href="../../static/css/base.css">
+    <link rel="stylesheet" href="../../static/css/layout.css">
+    <link rel="stylesheet" href="../../static/css/suite.css">
+</head>
+
+<body>
+    <div class="suite">
+
+        <header class="suite-header">
+            <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
+            <h1 class="suite-header__title">DFT &amp; Tight Binding Suite</h1>
+            <div class="suite-header__spacer"></div>
+            <span class="badge" id="dft-badge">Tight binding live</span>
+        </header>
+
+        <div class="suite-body suite-body--split">
+
+            <!-- Left: control column -->
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">Calculation Setup</h2>
+                </div>
+                <div class="panel__body" style="padding:12px">
+
+                    <fieldset class="fieldset">
+                        <legend>Crystal Structure (Workspace)</legend>
+                        <div class="inline" style="margin-bottom:8px">
+                            <select class="field" id="dft-structures">
+                                <option value="">Loading&hellip;</option>
+                            </select>
+                            <button type="button" class="btn" id="dft-refresh">&#128260; Refresh</button>
+                        </div>
+                        <p class="status-line" id="dft-status">Load a CIF in the Crystal Suite first.</p>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>Prepare slab (bulk &#8594; vacuum)</legend>
+                        <p class="hint">Tab&nbsp;1 / CIF bulk: cleave with preset or custom hkl. Tab&nbsp;3 stacks: skip this — just enable Slab QE below.</p>
+                        <div class="form-row">
+                            <label for="qe-slab-preset">Preset:</label>
+                            <select class="field" id="qe-slab-preset">
+                                <option value="thin_001">thin 001</option>
+                                <option value="medium_001">medium 001</option>
+                                <option value="thick_001">thick 001</option>
+                                <option value="thin_111">thin 111</option>
+                                <option value="medium_111">medium 111</option>
+                                <option value="thick_111">thick 111</option>
+                                <option value="thin_110">thin 110</option>
+                                <option value="medium_110">medium 110</option>
+                                <option value="custom">Custom (hkl below)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>hkl / layers / vacuum:</label>
+                            <div class="inline">
+                                <input class="field field--num" id="qe-slab-h" type="number" min="-10" max="10" value="0" title="h">
+                                <input class="field field--num" id="qe-slab-k" type="number" min="-10" max="10" value="0" title="k">
+                                <input class="field field--num" id="qe-slab-l" type="number" min="-10" max="10" value="1" title="l">
+                                <input class="field field--num" id="qe-slab-layers" type="number" min="1" max="10" value="1" title="layers">
+                                <input class="field field--num" id="qe-slab-vac" type="number" min="0" max="100" step="1" value="15" title="vacuum &#197;">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label for="qe-slab-store">Store as:</label>
+                            <input class="field field--mono" id="qe-slab-store" type="text" value="" placeholder="{name}_slab" maxlength="64">
+                        </div>
+                        <button type="button" class="btn btn--block" id="qe-slab-prepare" disabled>Prepare slab</button>
+                        <p class="status-line" id="qe-slab-status">Select a bulk crystal, then Prepare.</p>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>Quantum Espresso &amp; Wannier90 Pipeline</legend>
+
+                        <div class="form-row">
+                            <label>Slab QE:</label>
+                            <label class="check" style="margin:0"><input type="checkbox" id="qe-slab-mode"> 2D / vacuum slab (<code>kz=1</code>, <code>assume_isolated='2D'</code>)</label>
+                        </div>
+                        <p class="hint">Auto-suggested for Tab&nbsp;3 stacks and prepared slabs (large <em>c</em>). Leave off for true 3D bulk.</p>
+                        <p class="hint">Not in this release (later): dipole / polar corrections, surface-termination labels, semi-infinite Green’s setups, SCF-only Generate without Wannier — see roadmap DFT section.</p>
+                        <div class="form-row">
+                            <label for="qe-cutoff">Wavefunction Cutoff (Ry):</label>
+                            <input class="field" id="qe-cutoff" type="number" min="20" max="200" step="1" value="60">
+                        </div>
+                        <div class="form-row">
+                            <label for="qe-xc">XC functional:</label>
+                            <select class="field" id="qe-xc">
+                                <option value="PBE" selected>PBE</option>
+                                <option value="LDA">LDA</option>
+                                <option value="PBEsol">PBEsol</option>
+                            </select>
+                        </div>
+                        <p class="hint">Sets <code>input_dft</code> in scf/nscf. Does not filter pseudos — keep PBE-compatible UPFs unless you swap the pseudo set yourself.</p>
+                        <div class="form-row">
+                            <label>Relativistic (SOC):</label>
+                            <label class="check" style="margin:0"><input type="checkbox" id="qe-soc"> Inject Spin-Orbit Coupling Math</label>
+                        </div>
+                        <div class="form-row">
+                            <label for="qe-nbnd">Number of Bands (nbnd):</label>
+                            <input class="field" id="qe-nbnd" type="number" min="1" max="500" step="1" value="12">
+                        </div>
+                        <div class="form-row">
+                            <label for="qe-wanmode">Wannier Mode:</label>
+                            <select class="field" id="qe-wanmode">
+                                <option value="atomic">Atomic Projections (Chinook ARPES)</option>
+                                <option value="mlwf">Maximally Localized (WannierTools)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label>k-Mesh Grid:</label>
+                            <div class="inline">
+                                <input class="field field--num" id="qe-kx" type="number" min="1" max="20" value="6">
+                                <input class="field field--num" id="qe-ky" type="number" min="1" max="20" value="6">
+                                <input class="field field--num" id="qe-kz" type="number" min="1" max="20" value="6">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label for="qe-runname">Run Name:</label>
+                            <input class="field field--mono" id="qe-runname" type="text" value="run_01">
+                        </div>
+                        <div class="form-row">
+                            <label>Parallel Execution:</label>
+                            <div class="inline">
+                                <label class="check" style="margin:0"><input type="checkbox" id="qe-mpi" checked> Use MPI</label>
+                                <input class="field field--num" id="qe-ranks" type="number" min="1" max="8" value="4">
+                                <label>Ranks</label>
+                            </div>
+                        </div>
+
+                        <button type="button" class="btn btn--block" id="qe-generate">&#128196; Generate Input Files</button>
+                        <button type="button" class="btn btn--block" id="qe-bundle">&#11015; Download Bundle for HPC</button>
+                        <div class="form-row">
+                            <label for="qe-backend">Queue backend:</label>
+                            <select class="field" id="qe-backend">
+                                <option value="local">Local</option>
+                                <option value="einstein_ssh">Einstein (SSH)</option>
+                            </select>
+                        </div>
+                        <p class="hint">Einstein (SSH): Mac must reach host <code>einstein</code>; runs <code>scripts/remote_qe.sh</code> (minimal pull). Cancel may leave remote scratch.</p>
+                        <button type="button" class="btn btn--block" id="qe-queue">&#128640; Queue Run on Server</button>
+                        <button type="button" class="btn btn--block" id="qe-cancel" disabled>&#10005; Cancel Job</button>
+
+                        <p class="status-line" id="qe-status">Solver status loading&hellip;</p>
+                        <pre class="log-area" id="qe-log" hidden></pre>
+
+                        <p class="hint">Solver paths and the rank limit come from server configuration
+                            (<code>TENSORSPEC_PW</code>, <code>TENSORSPEC_MAX_MPI_RANKS</code>, &hellip;).
+                            The browser never chooses which executable to run. Use
+                            <em>Download Bundle</em> to take inputs to your own HPC allocation.</p>
+                    </fieldset>
+
+                    <fieldset class="fieldset">
+                        <legend>Tight Binding Parameters</legend>
+
+                        <div class="form-row">
+                            <label for="tb-kgrid">k-Space Grid:</label>
+                            <select class="field" id="tb-kgrid">
+                                <option value="path">1D High-Symmetry Path</option>
+                                <option value="isoenergy">2D Isoenergy (kx, ky)</option>
+                            </select>
+                        </div>
+                        <div class="form-row">
+                            <label for="tb-isoe">2D Isoenergy Cut (eV):</label>
+                            <input class="field" id="tb-isoe" type="number" min="-20" max="20" step="0.1" value="0.0" disabled>
+                        </div>
+                        <p class="hint" id="tb-iso-hint">
+                            1D path uses high-symmetry segments below. Isoenergy mode: TB Gaussian density
+                            I=Σ<sub>n</sub>exp(−(E<sub>n</sub>−E)²/(2σ²)) on a kx–ky mesh (defaults −2…2 Å⁻¹,
+                            resolution 24, smear 0.05 eV) — not a QE Fermi surface.
+                        </p>
+                        <div class="form-row">
+                            <label for="tb-path">1D Path Template:</label>
+                            <select class="field" id="tb-path">
+                                <option>Auto-Detect BZ Path (PyMatgen)</option>
+                                <option>Primitive hex reference (folded into supercell)</option>
+                                <option>Unfold hex (spectral weight)</option>
+                                <option>Arbitrary Custom Path</option>
+                                <option>Hexagonal (Template)</option>
+                                <option>Rectangular / Orthorhombic (Template)</option>
+                                <option>Square / Tetragonal (Template)</option>
+                            </select>
+                        </div>
+                        <p class="hint" id="dft-path-note">
+                            Auto path = Brillouin zone of the loaded cell (folded for twisted/stacked supercells).
+                            Primitive hex reference walks graphene-like Γ–K–M in Å⁻¹, then folds each k into the supercell BZ.
+                            Unfold hex adds Popescu–Zunger spectral weights (ARPES-like brightness on the monolayer path).
+                        </p>
+                        <div class="form-row">
+                            <label for="dft-gap-fid">MEGNet gap fidelity:</label>
+                            <select class="field" id="dft-gap-fid">
+                                <option value="PBE">PBE</option>
+                                <option value="HSE">HSE</option>
+                                <option value="SCAN">SCAN</option>
+                                <option value="GLLB-SC">GLLB-SC</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn btn--block" id="dft-gap-predict" disabled>Predict band gap (MEGNet)</button>
+                        <p class="hint" id="dft-gap-status">Scalar gap only — not full E(k). Needs <code>matgl</code>.</p>
+                        <div class="form-row">
+                            <label>Relativistic:</label>
+                            <div class="inline">
+                                <label class="check" style="margin:0"><input type="checkbox" id="tb-soc"> Enable Spin-Orbit Coupling</label>
+                                <input class="field field--num" id="tb-soc-val" type="number" min="0" max="5" step="0.1" value="0.5"
+                                    title="SOC Strength (&#955;)" disabled>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label for="tb-fat">Fat Band Target:</label>
+                            <select class="field" id="tb-fat" disabled>
+                                <option value="none">None (Standard Lines)</option>
+                            </select>
+                        </div>
+                        <p class="hint">After Calculate: pick shell / element / orbital. Re-projects cached eigenvectors — no re-solve.</p>
+
+                        <fieldset class="fieldset">
+                            <legend>Ab Initio Import (Wannier90)</legend>
+                            <input type="file" id="tb-w90-file" accept=".dat,.hr.dat,*" hidden>
+                            <button type="button" class="btn btn--block" id="tb-w90-load">&#128194; Load wannier90_hr.dat</button>
+                            <label class="check"><input type="checkbox" id="tb-w90-use" disabled> Use uploaded W90 Hamiltonian for Calculate</label>
+                            <label class="check"><input type="checkbox" id="tb-w90-overlay" disabled> Overlay Native W90 Bands (Red Dashed)</label>
+                            <p class="hint">With SK primary: second W90 solve on same path. With Use-W90 primary: reuse those eigenvalues (no extra diagonalisation).</p>
+                            <p class="status-line" id="tb-w90-status">Status: Using Manual Slater-Koster parameters.</p>
+                        </fieldset>
+
+                        <div class="form-row">
+                            <label for="tb-ham">Hamiltonian Mode:</label>
+                            <select class="field" id="tb-ham">
+                                <option>Simple Scalar (Isotropic)</option>
+                                <option>Slater-Koster (Rigorous)</option>
+                            </select>
+                        </div>
+                        <p class="hint">The two rows below appear only when the path template is Arbitrary Custom Path.</p>
+                        <div class="form-row">
+                            <label for="tb-coords">Coords (frac):</label>
+                            <input class="field field--mono" id="tb-coords" type="text" value="0,0,0; 0.5,0,0; 0.5,0.5,0; 0,0,0">
+                        </div>
+                        <div class="form-row">
+                            <label for="tb-labels">Labels:</label>
+                            <input class="field field--mono" id="tb-labels" type="text" value="G; X; M; G">
+                        </div>
+                        <div class="form-row">
+                            <label for="tb-pts">Points per Segment:</label>
+                            <input class="field" id="tb-pts" type="number" min="10" max="500" step="50" value="100">
+                        </div>
+                        <div class="form-row">
+                            <label for="tb-onsite">On-site E (eV):</label>
+                            <input class="field" id="tb-onsite" type="number" min="-10" max="10" step="0.1" value="0.0">
+                        </div>
+                        <div class="form-row">
+                            <label>Orbital Shifts:</label>
+                            <div class="inline">
+                                <label for="tb-shift-s">s:</label>
+                                <input class="field field--num" id="tb-shift-s" type="number" min="-50" max="50" step="0.5" value="-10.0"
+                                    title="s-orbital on-site energy (eV)">
+                                <label for="tb-shift-p">p:</label>
+                                <input class="field field--num" id="tb-shift-p" type="number" min="-50" max="50" step="0.5" value="-2.0"
+                                    title="p-orbital on-site energy (eV)">
+                                <label for="tb-shift-d">d:</label>
+                                <input class="field field--num" id="tb-shift-d" type="number" min="-50" max="50" step="0.5" value="0.0"
+                                    title="d-orbital on-site energy (eV)">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <label>Y-Axis Zoom (eV):</label>
+                            <div class="inline">
+                                <label for="tb-emin">Min:</label>
+                                <input class="field field--num" id="tb-emin" type="number" min="-50" max="50" step="0.5" value="-6.0">
+                                <label for="tb-emax">Max:</label>
+                                <input class="field field--num" id="tb-emax" type="number" min="-50" max="50" step="0.5" value="6.0">
+                            </div>
+                        </div>
+
+                        <h3 class="section-heading">Hopping Shells</h3>
+                        <div id="tb-shells">
+                            <p class="hint">Shell names and defaults come from the selected material.</p>
+                        </div>
+                    </fieldset>
+
+                    <button type="button" class="btn btn--primary" id="dft-calculate" disabled>&#9881; Calculate Band Structure</button>
+                    <p class="hint">Bands are pushed to your session workspace automatically once solved.</p>
+
+                </div>
+            </section>
+
+            <!-- Right: band structure plot -->
+            <section class="panel">
+                <div class="panel__header">
+                    <h2 class="panel__title">Band Structure</h2>
+                    <span class="badge">Matplotlib</span>
+                </div>
+                <div class="panel__body" style="padding:12px">
+                    <div class="viewport" id="dft-viewport" style="height:78vh;min-height:400px">
+                        <div class="canvas" id="dft-placeholder">
+                            <div class="canvas__glyph" aria-hidden="true">&#9636;</div>
+                            <p class="canvas__title">Band Structure Plot</p>
+                            <p class="canvas__meta">Select a crystal and press Calculate Band Structure.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </div>
+
+        <footer class="statusbar">
+            <div class="statusbar__group">
+                <span id="dft-stat-bands">No calculation yet</span>
+                <span id="dft-stat-time">&mdash;</span>
+            </div>
+            <div class="statusbar__group">
+                <span>DFT Suite</span>
+            </div>
+        </footer>
+
+    </div>
+
+    <script src="../../static/js/api.js"></script>
+    <script type="module" src="../../static/js/dft_suite.js"></script>
+</body>
+
+</html>

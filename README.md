@@ -2,9 +2,11 @@
 ## Prerequisites
 * **Python 3.11 or 3.12** (Python 3.9 and 3.10 are not supported due to modern dependency requirements).
 * A virtual environment is highly recommended.
+* **A modern browser** (Chrome, Firefox, or Safari) for the user interface.
+* No Qt or other desktop toolkit is required.
 
 **A General-Purpose Framework for N-Dimensional Spectroscopic Analysis**
-`TensorSpec` is a Python-based library designed to handle, visualize, and analyze multidimensional spectroscopic data. 
+`TensorSpec` is a Python-based framework with a browser-based (HTML/CSS/JS) interface, designed to handle, visualize, and analyze multidimensional spectroscopic data. 
 Originally developed for ARPES (Angle-Resolved Photoemission Spectroscopy), it generalizes the concept of "coordinates vs. intensity" to support a wide range of experimental techniques, including XAS, XMCD, PEEM, and other multi-dimensional scanning microscopy.
 
 The goal of this project is to provide a unified data structure for high-dimensional data and seamlessly integrate classical analysis with modern Machine Learning workflows.
@@ -28,10 +30,14 @@ Move beyond technique-specific file formats and flat structs. `TensorSpec` utili
 * **Interactive Plotting:**
 * **1D & 2D Modes:** Automatically detects data dimensionality to toggle between line plots (XAS/XPS) and image maps (ARPES).
 
-### 3. Analysis & Fitting (In Development)
-* **momentum space conversion:** converting angular data into momentum space for ARPES.
-* **Curve Fitting:** Robust routines for fitting XPS peaks (Voigt, Gaussian, Lorentzian) and background subtraction for momentum distribution curve (MDC) and energy distribution curve (EDC).
-* **Image Processing:** Standard filtering, background removal, and normalization for spectral maps.
+### 3. Analysis & Fitting
+* **Momentum conversion (ARPES Suite Process tab):** angle → k∥ (Γ center + surface BZ overlay); photon energy → kz (inner potential Vo + perpendicular BZ). Writes `/processed`.
+* **EDC/MDC peakfit (Analysis tab):** Lorentzian or Voigt (analyzer FWHM); optional Fermi–Dirac on EDCs; N peaks with seeds; stack fit stored as `/analysis/mdc_peakfit` or `/analysis/edc_peakfit` (`peakfit_v1`).
+* **QP result curves:** from peak tables — δE(Γ) vs E, integrated intensity vs E, E(k), k_F, parabolic m*/m_e, v_F; Fermi-liquid / marginal-FL linewidth fits. Stored as `/analysis/qp_results` (`qp_results_v1`).
+* **Gap tools:** Dynes SC/CDW density of states × Fermi–Dirac (± analyzer resolution) on EDCs; stack → Δ(k) under `/analysis/gap_fit` (`gap_fit_v1`).
+* **Cut overlays:** DFT path bands as polylines and/or resampled simulated ARPES intensity on experimental cuts (Analysis tab).
+* **Volume / BZ prism:** 3D cutout viewer — rectangular or hexagonal prism from crystal surface BZ (or data box); indent sectors to expose interior walls; horizontal energy plane for Fermi-surface cuts (`POST /api/arpes/{name}/volume`).
+* **Still planned:** richer XPS-style backgrounds; image filtering utilities; additional beamline loaders.
 
 ### 4. Machine Learning Integration (In Development)
 A dedicated module for attaching ML routines to experimental data:
@@ -39,3 +45,24 @@ A dedicated module for attaching ML routines to experimental data:
 * Dimensionality reduction (PCA/NMF) for hyperspectral datasets.
 * Deep learning-based image analysis.
 * Transfer learning-based model.
+* Peak / QP tables under `/analysis` carry `usable_for_ml` / `usable_for_tb_feedback` attrs for later TB feedback.
+
+### 5. Browser-Based Interface
+The user interface is a browser application served by FastAPI (per-session workspace). There is no Qt / PySide desktop GUI.
+* **Workspace Browser:** Central explorer for active data variables, metadata inspector, and suite launcher ribbon.
+* **Suite Panels:** Crystal, DFT, and ARPES suites are live end-to-end (HTML → API → `core/`). PEEM / XAS / Transport / ML shells exist; engines still pending.
+* **Crystal Tab 3:** stack/twist/exfoliate; optional **MLIP relax** (CHGNet / M3GNet via `matgl`); **MEGNet band-gap** (scalar Eg); **CIF download**; **push/rename** into the session workspace for DFT.
+* **DFT bands / stacks:** Auto k-path is the **loaded cell’s BZ** (folded for twisted/large supercells). Optional **primitive hex reference** walks graphene-like Γ–K–M then folds into the supercell. **Unfold hex** adds TB Popescu–Zunger spectral weights. **Fat bands** re-project cached eigenvectors by shell / element / orbital (no re-solve).
+* **QE slabs:** DFT Suite **Prepare slab** (presets + custom hkl/layers/vacuum) for Tab 1 / bulk CIF; Tab 3 stacks skip re-cut and use **Slab QE** (`kz=1`, `assume_isolated='2D'`).
+* **Static-First front end:** plain HTML/CSS/vanilla JS (no bundler). Physics stays in Python.
+
+## Running the App
+From the repo root (with the project venv active):
+
+```bash
+uvicorn tensorspec.web.server.app:app --reload --host 127.0.0.1 --port 8000
+```
+
+Then open `http://127.0.0.1:8000/` in a modern browser. Each browser session owns its own workspace.
+
+See `roadmap.md` for the live checklist of shipped vs planned features (including the **ARPES Suite — available in HTML now** block).

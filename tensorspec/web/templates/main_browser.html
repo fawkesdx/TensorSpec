@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TensorSpec Workspace Browser</title>
+    <link rel="stylesheet" href="../static/css/base.css">
+    <link rel="stylesheet" href="../static/css/layout.css">
+</head>
+
+<body>
+    <div class="app">
+
+        <!-- Menu bar -->
+        <header class="menubar">
+            <div class="menubar__brand">Tensor<span>Spec</span></div>
+            <nav class="menubar__menu">
+                <button type="button" class="btn btn--ghost" disabled>File</button>
+                <button type="button" class="btn btn--ghost" disabled>View</button>
+                <button type="button" class="btn btn--ghost" disabled>Help</button>
+            </nav>
+        </header>
+
+        <!-- Suite launcher ribbon -->
+        <nav class="ribbon" aria-label="Suite launcher">
+            <span class="ribbon__label">Suites</span>
+
+            <a class="suite-btn" href="suites/crystal_suite.html">
+                <span class="suite-btn__glyph" aria-hidden="true">&#9672;</span>
+                <span class="suite-btn__name">Crystal<br>Viewer</span>
+            </a>
+            <a class="suite-btn" href="suites/dft_suite.html">
+                <span class="suite-btn__glyph" aria-hidden="true">&#9636;</span>
+                <span class="suite-btn__name">DFT<br>Suite</span>
+            </a>
+            <a class="suite-btn" href="suites/arpes_suite.html">
+                <span class="suite-btn__glyph" aria-hidden="true">&#9683;</span>
+                <span class="suite-btn__name">ARPES<br>Suite</span>
+            </a>
+            <a class="suite-btn" href="suites/peem_suite.html">
+                <span class="suite-btn__glyph" aria-hidden="true">&#9635;</span>
+                <span class="suite-btn__name">PEEM<br>Suite</span>
+            </a>
+            <a class="suite-btn" href="suites/xas_suite.html">
+                <span class="suite-btn__glyph" aria-hidden="true">&#9651;</span>
+                <span class="suite-btn__name">XAS<br>Suite</span>
+            </a>
+            <a class="suite-btn" href="suites/transport_suite.html">
+                <span class="suite-btn__glyph" aria-hidden="true">&#9640;</span>
+                <span class="suite-btn__name">Transport<br>Suite</span>
+            </a>
+            <a class="suite-btn" href="suites/ml_suite.html">
+                <span class="suite-btn__glyph" aria-hidden="true">&#9704;</span>
+                <span class="suite-btn__name">Machine<br>Learning</span>
+            </a>
+        </nav>
+
+        <!-- Workspace -->
+        <main class="workspace">
+
+            <!-- Left: data tree + window registry -->
+            <div class="sidebar">
+
+                <section class="panel">
+                    <div class="panel__header">
+                        <h2 class="panel__title">Active Workspace Variables</h2>
+                        <div class="inline">
+                            <button type="button" class="btn" data-action="seed-demo">&#10133; Demo Data</button>
+                            <button type="button" class="btn" data-action="refresh">&#8635; Refresh</button>
+                        </div>
+                    </div>
+                    <div class="panel__body">
+                        <table class="tree">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Variable Name</th>
+                                    <th scope="col">Type</th>
+                                    <th scope="col">Dimensions / Shape</th>
+                                </tr>
+                            </thead>
+                            <tbody data-tree-body></tbody>
+                        </table>
+                        <p class="empty-state" data-tree-empty>Workspace is empty</p>
+                    </div>
+                </section>
+
+                <section class="panel window-registry">
+                    <div class="panel__header">
+                        <h2 class="panel__title">Active Floating Windows</h2>
+                        <span class="badge">0 open</span>
+                    </div>
+                    <div class="panel__body">
+                        <ul class="window-registry__list">
+                            <li class="empty-state">No viewer windows open</li>
+                        </ul>
+                    </div>
+                </section>
+
+            </div>
+
+            <!-- Right: metadata inspector -->
+            <section class="panel inspector">
+                <div class="panel__header">
+                    <h2 class="panel__title">Variable Metadata Inspector</h2>
+                    <span class="badge" data-inspector-badge>nothing selected</span>
+                </div>
+                <div class="panel__body">
+                    <pre class="metadata metadata__placeholder" data-inspector>Connecting to the TensorSpec service...</pre>
+                </div>
+                <div class="inspector__footer">
+                    <button type="button" class="btn btn--primary" data-action="launch-viewer" disabled>
+                        &#128202; Launch Data Viewer for Selected Item
+                    </button>
+                    <p class="inspector__note">The viewer itself arrives with the ARPES slice.</p>
+                </div>
+            </section>
+
+        </main>
+
+        <!-- Status bar -->
+        <footer class="statusbar">
+            <div class="statusbar__group">
+                <span data-connection-status>Connecting...</span>
+            </div>
+            <div class="statusbar__group">
+                <span data-variable-count>0 variables loaded</span>
+            </div>
+        </footer>
+
+    </div>
+
+    <script src="../static/js/api.js"></script>
+    <script src="../static/js/workspace_tree.js"></script>
+</body>
+
+</html>
