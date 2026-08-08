@@ -22,6 +22,20 @@ const dom = {
     nz: el("cr-nz"),
     threshold: el("cr-thresh"),
     radius: el("cr-radius"),
+    bondThick: el("cr-bondthick"),
+    swatches: el("cr-swatches"),
+    conn: el("cr-conn"),
+    axes: el("cr-axes"),
+    showCell: el("cr-show-cell"),
+    projection: el("cr-projection"),
+    viewA: el("cr-view-a"),
+    viewB: el("cr-view-b"),
+    viewC: el("cr-view-c"),
+    view111: el("cr-view-111"),
+    az: el("cr-az"),
+    elv: el("cr-el"),
+    basisConv: el("cr-basis-conv"),
+    basisPrim: el("cr-basis-prim"),
     statAtoms: el("cr-stat-atoms"),
     statBonds: el("cr-stat-bonds"),
 
@@ -32,7 +46,7 @@ const dom = {
     qc: el("q-c"),
     ax: el("a-x"),
     ay: el("a-y"),
-    az: el("a-z"),
+    cdwAz: el("a-z"),
     cdwPhase: el("cdw-phase"),
 
     stTemplate: el("st-template"),
@@ -111,13 +125,56 @@ function fillTargets(elements) {
     }
 }
 
+function rebuildSwatches(elements) {
+    if (!dom.swatches) return;
+    dom.swatches.innerHTML = "";
+    elements.forEach((symbol) => {
+        const row = document.createElement("div");
+        row.className = "swatch-row";
+        const label = document.createElement("span");
+        label.textContent = `${symbol}:`;
+        const input = document.createElement("input");
+        input.type = "color";
+        input.value = elementColor(symbol);
+        input.addEventListener("input", () => {
+            const view = ensureViewer();
+            view.setElementColor(symbol, input.value);
+            updateLegend(elements);
+        });
+        row.append(label, input);
+        dom.swatches.appendChild(row);
+    });
+    const bondRow = document.createElement("div");
+    bondRow.className = "swatch-row";
+    const bondLabel = document.createElement("span");
+    bondLabel.textContent = "Bonds:";
+    const bondInput = document.createElement("input");
+    bondInput.type = "color";
+    bondInput.value = "#d3d3d3";
+    bondInput.addEventListener("input", () => ensureViewer().setBondColor(bondInput.value));
+    bondRow.append(bondLabel, bondInput);
+    dom.swatches.appendChild(bondRow);
+}
+
+function updateLegend(elements) {
+    dom.legend.textContent = elements.join(", ");
+    if (elements[0]) dom.legend.style.color = elementColor(elements[0]);
+}
+
+function applyViewerChrome(view) {
+    view.atomScale = Number(dom.radius.value) || 0.5;
+    view.setBondRadius(Number(dom.bondThick?.value) || 0.1);
+    view.setShowAxes(Boolean(dom.axes?.checked));
+}
+
 function geometryRequest() {
     return {
         nx: Number(dom.nx.value) || 1,
         ny: Number(dom.ny.value) || 1,
         nz: Number(dom.nz.value) || 1,
         bond_threshold: Number(dom.threshold.value) || 1.15,
-        show_bonds: true,
+        basis: dom.basisPrim?.checked ? "primitive" : "conventional",
+        show_bonds: dom.conn?.value !== "none",
         cdw_enabled: Boolean(dom.cdwEnable.checked),
         cdw_target: dom.cdwTarget.value || "All Elements",
         cdw_qx: Number(dom.qa.value) || 0,
@@ -125,7 +182,7 @@ function geometryRequest() {
         cdw_qz: Number(dom.qc.value) || 0,
         cdw_ax: Number(dom.ax.value) || 0,
         cdw_ay: Number(dom.ay.value) || 0,
-        cdw_az: Number(dom.az.value) || 0,
+        cdw_az: Number(dom.cdwAz.value) || 0,
         cdw_phase: Number(dom.cdwPhase.value) || 0,
     };
 }
@@ -137,17 +194,25 @@ async function refreshGeometry({ frame = true } = {}) {
     try {
         const geometry = await TensorSpecAPI.crystalGeometry(activeCrystal, geometryRequest());
         const view = ensureViewer();
-        view.atomScale = Number(dom.radius.value) || 0.5;
-        view.render(geometry, { frame });
+        applyViewerChrome(view);
+        view.render(geometry, {
+            frame,
+            showBonds: dom.conn?.value !== "none",
+            showCell: Boolean(dom.showCell?.checked),
+        });
+        rebuildSwatches(geometry.elements);
+        updateLegend(geometry.elements);
 
         dom.statAtoms.textContent = `${geometry.n_atoms} atoms`;
         dom.statBonds.textContent = `${geometry.bonds.length} bonds`;
-        dom.legend.textContent = geometry.elements.join(", ");
-        if (geometry.elements[0]) dom.legend.style.color = elementColor(geometry.elements[0]);
         fillTargets(geometry.elements);
         setStatus(`${activeCrystal} rendered`);
     } catch (err) {
         setStatus(err.message, true);
+        if (dom.basisPrim?.checked) {
+            dom.basisConv.checked = true;
+            dom.basisPrim.checked = false;
+        }
     }
 }
 
@@ -257,12 +322,17 @@ async function renderStack() {
         activeCrystal = geometry.name;
         const view = ensureViewer();
         view.clearBrillouinZone();
-        view.atomScale = Number(dom.radius.value) || 0.5;
-        view.render(geometry, { frame: true });
+        applyViewerChrome(view);
+        view.render(geometry, {
+            frame: true,
+            showBonds: dom.conn?.value !== "none",
+            showCell: Boolean(dom.showCell?.checked),
+        });
         fillTargets(geometry.elements);
         dom.statAtoms.textContent = `${geometry.n_atoms} atoms`;
         dom.statBonds.textContent = `${geometry.bonds.length} bonds`;
-        dom.legend.textContent = geometry.elements.join(", ");
+        rebuildSwatches(geometry.elements);
+        updateLegend(geometry.elements);
         setStackStatus(`Rendered ${geometry.name} (${geometry.n_atoms} atoms)`);
         setStatus(`${geometry.name} active`);
     } catch (err) {
@@ -411,17 +481,32 @@ async function renderBZ() {
 dom.load.addEventListener("click", () => dom.file.click());
 dom.file.addEventListener("change", onFileChosen);
 
-[dom.nx, dom.ny, dom.nz, dom.threshold].forEach((input) =>
-    input.addEventListener("change", () => refreshGeometry({ frame: true }))
+[dom.nx, dom.ny, dom.nz, dom.threshold].forEach((node) =>
+    node?.addEventListener("change", () => refreshGeometry({ frame: false }))
 );
-
-dom.radius.addEventListener("change", () => {
-    if (viewer) viewer.setAtomScale(Number(dom.radius.value) || 0.5);
+dom.basisConv?.addEventListener("change", () => refreshGeometry({ frame: true }));
+dom.basisPrim?.addEventListener("change", () => refreshGeometry({ frame: true }));
+dom.conn?.addEventListener("change", () => refreshGeometry({ frame: false }));
+dom.bondThick?.addEventListener("change", () => {
+    ensureViewer().setBondRadius(Number(dom.bondThick.value) || 0.1);
 });
+dom.radius?.addEventListener("change", () => {
+    ensureViewer().setAtomScale(Number(dom.radius.value) || 0.5);
+});
+dom.axes?.addEventListener("change", () => ensureViewer().setShowAxes(dom.axes.checked));
+dom.showCell?.addEventListener("change", () => refreshGeometry({ frame: false }));
+dom.projection?.addEventListener("change", () => ensureViewer().setProjection(dom.projection.value));
+dom.viewA?.addEventListener("click", () => ensureViewer().lookAlong("+a"));
+dom.viewB?.addEventListener("click", () => ensureViewer().lookAlong("+b"));
+dom.viewC?.addEventListener("click", () => ensureViewer().lookAlong("+c"));
+dom.view111?.addEventListener("click", () => ensureViewer().lookAlong("111"));
+const syncAzEl = () => ensureViewer().setAzEl(Number(dom.az.value) || 0, Number(dom.elv.value) || 0);
+dom.az?.addEventListener("change", syncAzEl);
+dom.elv?.addEventListener("change", syncAzEl);
 
 [
     dom.cdwEnable, dom.cdwTarget, dom.qa, dom.qb, dom.qc,
-    dom.ax, dom.ay, dom.az, dom.cdwPhase,
+    dom.ax, dom.ay, dom.cdwAz, dom.cdwPhase,
 ].forEach((input) =>
     input.addEventListener("change", () => refreshGeometry({ frame: false }))
 );
@@ -493,11 +578,17 @@ async function relaxActiveStack() {
         if (dom.stStore) dom.stStore.value = result.stored_as;
         const view = ensureViewer();
         view.clearBrillouinZone();
-        view.atomScale = Number(dom.radius.value) || 0.5;
-        view.render(result.geometry, { frame: true });
+        applyViewerChrome(view);
+        view.render(result.geometry, {
+            frame: true,
+            showBonds: dom.conn?.value !== "none",
+            showCell: Boolean(dom.showCell?.checked),
+        });
         fillTargets(result.geometry.elements);
         dom.statAtoms.textContent = `${result.geometry.n_atoms} atoms`;
         dom.statBonds.textContent = `${result.geometry.bonds.length} bonds`;
+        rebuildSwatches(result.geometry.elements);
+        updateLegend(result.geometry.elements);
         const e = result.final_energy_eV != null ? ` · E=${result.final_energy_eV.toFixed(3)} eV` : "";
         setStackStatus(
             `Relaxed → ${result.stored_as} (${result.model}${e}). Ready for DFT Suite / CIF.`
