@@ -44,6 +44,7 @@ const dom = {
     qeKx: el("qe-kx"),
     qeKy: el("qe-ky"),
     qeKz: el("qe-kz"),
+    qeSlabMode: el("qe-slab-mode"),
     qeRunName: el("qe-runname"),
     qeMpi: el("qe-mpi"),
     qeRanks: el("qe-ranks"),
@@ -53,6 +54,16 @@ const dom = {
     qeCancel: el("qe-cancel"),
     qeStatus: el("qe-status"),
     qeLog: el("qe-log"),
+
+    qeSlabPreset: el("qe-slab-preset"),
+    qeSlabH: el("qe-slab-h"),
+    qeSlabK: el("qe-slab-k"),
+    qeSlabL: el("qe-slab-l"),
+    qeSlabLayers: el("qe-slab-layers"),
+    qeSlabVac: el("qe-slab-vac"),
+    qeSlabStore: el("qe-slab-store"),
+    qeSlabPrepare: el("qe-slab-prepare"),
+    qeSlabStatus: el("qe-slab-status"),
 
     statBands: el("dft-stat-bands"),
     statTime: el("dft-stat-time"),
@@ -229,6 +240,7 @@ async function refreshStructures() {
             dom.structures.innerHTML = '<option value="">No structures available</option>';
             dom.calculate.disabled = true;
             if (dom.gapPredict) dom.gapPredict.disabled = true;
+            if (dom.qeSlabPrepare) dom.qeSlabPrepare.disabled = true;
             setStatus("Load a CIF in the Crystal Suite first.");
             renderShells();
             return;
@@ -243,11 +255,79 @@ async function refreshStructures() {
 
         dom.calculate.disabled = false;
         if (dom.gapPredict) dom.gapPredict.disabled = false;
+        if (dom.qeSlabPrepare) dom.qeSlabPrepare.disabled = false;
         renderShells();
+        syncSlabSuggestion();
         setStatus(`${structures.length} structure(s) available`);
         refreshBzNote();
     } catch (err) {
         setStatus(err.message, true);
+    }
+}
+
+function syncSlabSuggestion() {
+    const structure = selected();
+    if (!structure) return;
+    if (dom.qeSlabMode) {
+        dom.qeSlabMode.checked = !!structure.suggest_slab_qe;
+    }
+    if (dom.qeKz && structure.suggest_slab_qe) {
+        dom.qeKz.value = 1;
+    }
+    if (dom.qeSlabStatus) {
+        if (structure.suggest_slab_qe) {
+            dom.qeSlabStatus.textContent =
+                `Looks like slab/stack (c≈${(structure.lattice_c || 0).toFixed(1)} Å) — Slab QE suggested. Tab 3 stacks: Generate as-is. Bulk: Prepare slab first if needed.`;
+        } else {
+            dom.qeSlabStatus.textContent =
+                "Bulk-like cell. Use Prepare slab (preset or custom hkl), or leave Slab QE off for 3D bulk.";
+        }
+    }
+    if (dom.qeSlabStore && !dom.qeSlabStore.value) {
+        dom.qeSlabStore.placeholder = `${structure.name}_slab`;
+    }
+}
+
+function setSlabStatus(message, isError = false) {
+    if (!dom.qeSlabStatus) return;
+    dom.qeSlabStatus.textContent = message;
+    dom.qeSlabStatus.style.color = isError ? "#ff6b6b" : "";
+}
+
+async function prepareSlab() {
+    const structure = selected();
+    if (!structure) return;
+    if (dom.qeSlabPrepare) dom.qeSlabPrepare.disabled = true;
+    setSlabStatus(`Cleaving ${structure.name}\u2026`);
+    try {
+        const preset = dom.qeSlabPreset?.value || "thin_001";
+        const storeAs = (dom.qeSlabStore?.value || "").trim() || `${structure.name}_slab`;
+        const result = await TensorSpecAPI.dftPrepareSlab(structure.name, {
+            preset,
+            h: Number(dom.qeSlabH?.value) || 0,
+            k: Number(dom.qeSlabK?.value) || 0,
+            l: Number(dom.qeSlabL?.value) || 1,
+            num_layers: Number(dom.qeSlabLayers?.value) || 1,
+            vacuum: Number(dom.qeSlabVac?.value) || 15,
+            store_as: storeAs,
+        });
+        setSlabStatus(
+            `Stored ${result.stored_as} (${result.formula}, ${result.n_sites} sites) · hkl=${result.hkl.join("")} · ${result.num_layers}L · vac ${result.vacuum} Å`
+        );
+        await refreshStructures();
+        if (dom.structures) {
+            dom.structures.value = result.stored_as;
+            renderShells();
+            syncSlabSuggestion();
+        }
+        if (dom.qeSlabMode) dom.qeSlabMode.checked = true;
+        if (dom.qeKz) dom.qeKz.value = 1;
+        setStatus(`Slab ready: ${result.stored_as}`);
+    } catch (err) {
+        setSlabStatus(err.message, true);
+        setStatus(err.message, true);
+    } finally {
+        if (dom.qeSlabPrepare) dom.qeSlabPrepare.disabled = false;
     }
 }
 
@@ -318,17 +398,19 @@ function readParameters() {
 }
 
 function readQeParameters() {
+    const slab = !!dom.qeSlabMode?.checked;
     return {
         run_name: dom.qeRunName.value.trim() || "run_01",
         ecutwfc: Number(dom.qeCutoff.value) || 60,
         nbnd: Number(dom.qeNbnd.value) || 12,
         kx: Number(dom.qeKx.value) || 6,
         ky: Number(dom.qeKy.value) || 6,
-        kz: Number(dom.qeKz.value) || 6,
+        kz: slab ? 1 : (Number(dom.qeKz.value) || 6),
         use_soc: dom.qeSoc.checked,
         mlwf_mode: dom.qeWanMode.value === "mlwf",
         use_mpi: dom.qeMpi.checked,
         mpi_ranks: Number(dom.qeRanks.value) || 4,
+        slab_mode: slab,
     };
 }
 
@@ -500,10 +582,17 @@ dom.refresh.addEventListener("click", refreshStructures);
 dom.structures.addEventListener("change", () => {
     renderShells();
     refreshBzNote();
+    syncSlabSuggestion();
 });
 dom.calculate.addEventListener("click", calculate);
 if (dom.gapPredict) dom.gapPredict.addEventListener("click", predictGap);
 if (dom.fat) dom.fat.addEventListener("change", applyFatTarget);
+if (dom.qeSlabPrepare) dom.qeSlabPrepare.addEventListener("click", prepareSlab);
+if (dom.qeSlabMode) {
+    dom.qeSlabMode.addEventListener("change", () => {
+        if (dom.qeSlabMode.checked && dom.qeKz) dom.qeKz.value = 1;
+    });
+}
 dom.qeGenerate.addEventListener("click", generateInputs);
 dom.qeBundle.addEventListener("click", downloadBundle);
 dom.qeQueue.addEventListener("click", queueRun);

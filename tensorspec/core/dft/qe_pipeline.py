@@ -60,6 +60,8 @@ class PipelineParams:
     mlwf_mode: bool = False
     use_mpi: bool = True
     mpi_ranks: int = 4
+    # 2D / vacuum-slab QE: force kz=1 and assume_isolated='2D' in inputs
+    slab_mode: bool = False
 
     @property
     def rho(self) -> float:
@@ -67,7 +69,8 @@ class PipelineParams:
 
     @property
     def kmesh(self) -> tuple[int, int, int]:
-        return (self.kx, self.ky, self.kz)
+        kz = 1 if self.slab_mode else self.kz
+        return (self.kx, self.ky, int(kz))
 
 
 def sanitize_run_name(name: str) -> str:
@@ -118,6 +121,7 @@ def generate_inputs(
         kmesh=params.kmesh,
         use_soc=params.use_soc,
         relative_outdir=relative_outdir,
+        slab_mode=params.slab_mode,
     )
     generator.write_nscf_input(
         str(run_dir),
@@ -127,6 +131,7 @@ def generate_inputs(
         nbnd=params.nbnd,
         use_soc=params.use_soc,
         relative_outdir=relative_outdir,
+        slab_mode=params.slab_mode,
     )
     generator.write_wannier90_input(
         str(run_dir),
