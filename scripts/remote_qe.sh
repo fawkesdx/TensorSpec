@@ -221,7 +221,8 @@ fi
 command -v pw.x
 command -v mpirun || true
 mkdir -p '$SCRATCH_ROOT'
-FREE_G=\$(df -BG '$SCRATCH_ROOT' | awk 'NR==2 {g=\$4; sub(/G/,\"\",g); print g}')
+# Prefer tr over awk sub(): nested ssh/heredoc quoting breaks \"\" in awk.
+FREE_G=\$(df -BG '$SCRATCH_ROOT' | awk 'NR==2 {print \$4}' | tr -d 'G')
 echo "free_gb=\$FREE_G"
 if [ -z "\$FREE_G" ] || [ "\$FREE_G" -lt 1 ]; then
   echo "insufficient free disk on scratch fs (need >= 1G)" >&2
