@@ -587,6 +587,77 @@
                             <pre id="an-qp-result" style="margin:0;font-size:0.8rem;white-space:pre-wrap">—</pre>
                         </div>
                     </section>
+
+                    <div class="controls" style="margin:16px 0 12px">
+                        <div class="control">
+                            <label for="an-gap-type">Gap model</label>
+                            <select id="an-gap-type">
+                                <option value="sc" selected>SC (Dynes)</option>
+                                <option value="cdw">CDW (Dynes)</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <button class="btn btn--ghost" id="an-gap-curve" type="button">Fit gap EDC</button>
+                            <button class="btn" id="an-gap-stack" type="button">Fit gap stack → /analysis</button>
+                        </div>
+                    </div>
+                    <p class="hint" id="an-gap-status">Dynes DOS × FD (± resolution) on EDCs. Stack writes /analysis/gap_fit.</p>
+                    <div class="grid grid--2" style="gap:12px;margin-bottom:12px">
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Gap EDC fit</h2>
+                                <span class="badge" id="an-gap-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-gap-curve-plot" style="min-height:240px"></div>
+                            </div>
+                        </section>
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Δ(k) stack</h2>
+                                <span class="badge" id="an-gap-stack-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-gap-stack-plot" style="min-height:240px"></div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="controls" style="margin:16px 0 12px">
+                        <div class="control">
+                            <label for="an-bands">DFT bands</label>
+                            <select id="an-bands"><option value="">—</option></select>
+                        </div>
+                        <div class="control">
+                            <label for="an-sim">Sim dataset</label>
+                            <select id="an-sim"><option value="">—</option></select>
+                        </div>
+                        <div class="control">
+                            <label for="an-kcomp">k component</label>
+                            <select id="an-kcomp">
+                                <option value="kx" selected>kx</option>
+                                <option value="ky">ky</option>
+                                <option value="inplane">|k∥|</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <label for="an-sim-alpha">Sim α</label>
+                            <input id="an-sim-alpha" type="range" min="0" max="100" value="45" style="width:8rem">
+                        </div>
+                        <div class="control">
+                            <button class="btn" id="an-overlay" type="button">Overlay on cut</button>
+                        </div>
+                    </div>
+                    <p class="hint" id="an-overlay-status">Overlay DFT path bands (polylines) and/or a pushed sim cube onto the experimental cut.</p>
+                    <section class="panel">
+                        <div class="panel__header">
+                            <h2 class="panel__title">Cut + DFT / sim overlay</h2>
+                            <span class="badge" id="an-overlay-badge">—</span>
+                        </div>
+                        <div class="panel__body" style="padding:12px">
+                            <div class="viewport" id="an-overlay-cut" style="min-height:360px"></div>
+                        </div>
+                    </section>
                 </section>
 
             </div>

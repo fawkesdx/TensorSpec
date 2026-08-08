@@ -34,7 +34,9 @@ Move beyond technique-specific file formats and flat structs. `TensorSpec` utili
 * **Momentum conversion (ARPES Suite Process tab):** angle → k∥ (Γ center + surface BZ overlay); photon energy → kz (inner potential Vo + perpendicular BZ). Writes `/processed`.
 * **EDC/MDC peakfit (Analysis tab):** Lorentzian or Voigt (analyzer FWHM); optional Fermi–Dirac on EDCs; N peaks with seeds; stack fit stored as `/analysis/mdc_peakfit` or `/analysis/edc_peakfit` (`peakfit_v1`).
 * **QP result curves:** from peak tables — δE(Γ) vs E, integrated intensity vs E, E(k), k_F, parabolic m*/m_e, v_F; Fermi-liquid / marginal-FL linewidth fits. Stored as `/analysis/qp_results` (`qp_results_v1`).
-* **Still planned:** gap tools; DFT / simulated ARPES overlays on cuts; XPS-style backgrounds beyond linear; image filtering utilities.
+* **Gap tools:** Dynes SC/CDW density of states × Fermi–Dirac (± analyzer resolution) on EDCs; stack → Δ(k) under `/analysis/gap_fit` (`gap_fit_v1`).
+* **Cut overlays:** DFT path bands as polylines and/or resampled simulated ARPES intensity on experimental cuts (Analysis tab).
+* **Still planned:** richer XPS-style backgrounds; image filtering utilities; additional beamline loaders.
 
 ### 4. Machine Learning Integration (In Development)
 A dedicated module for attaching ML routines to experimental data:

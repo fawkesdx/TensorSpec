@@ -22,7 +22,7 @@ from tensorspec.core.dft import band_service
 from tensorspec.core.dft_engine import DFTEngineRouter
 from tensorspec.core.io.arpes_loader import ARPESLoader
 from tensorspec.core import arpes_process
-from tensorspec.core import arpes_peakfit, arpes_results
+from tensorspec.core import arpes_peakfit, arpes_results, arpes_gap, arpes_overlay
 from tensorspec.plotting.backends.arpes_figure import export_slice_figure
 from tensorspec.web.server.jobs import Job, JobStatus, get_job_queue
 from tensorspec.web.server.schemas import (
@@ -40,6 +40,9 @@ from tensorspec.web.server.schemas import (
     PeakFitCurveRequest,
     PeakFitStackRequest,
     QPResultsRequest,
+    GapFitCurveRequest,
+    GapFitStackRequest,
+    CutOverlayRequest,
     PerpBZRequest,
     ProfileRequest,
     ProfileResponse,
@@ -600,6 +603,207 @@ def analysis_qp_results(
     return {"node": "qp_results", "stored": stored, **results}
 
 
+@router.post("/analysis/{name}/gap-curve")
+def analysis_gap_curve(
+    name: str,
+    request: GapFitCurveRequest,
+    session: Session = Depends(current_session),
+):
+    tensor = _require_tensor(session, name)
+    plane, x_axis, y_axis = _analysis_plane(tensor, request)
+    line = arpes_peakfit.extract_plane_line(
+        plane, x_axis, y_axis, mode="edc", index=request.index, half_width=request.half_width
+    )
+    seeds = None
+    if not request.suggest:
+        seeds = {}
+        if request.amplitude is not None:
+            seeds["amplitude"] = request.amplitude
+        if request.delta is not None:
+            seeds["delta"] = request.delta
+        if request.gamma is not None:
+            seeds["gamma"] = request.gamma
+        if not seeds:
+            seeds = None
+    try:
+        fit = arpes_gap.fit_gap_curve(
+            line["axis"],
+            line["values"],
+            gap_type=request.gap_type,
+            temperature=request.temperature,
+            mu=request.mu,
+            analyzer_fwhm=request.analyzer_fwhm,
+            seeds=seeds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    fit["scan_value"] = line["scan_value"]
+    return fit
+
+
+@router.post("/analysis/{name}/gap-stack")
+def analysis_gap_stack(
+    name: str,
+    request: GapFitStackRequest,
+    session: Session = Depends(current_session),
+):
+    tensor = _require_tensor(session, name)
+    plane, x_axis, y_axis = _analysis_plane(tensor, request)
+    n_scan = plane.shape[1]
+    start = 0 if request.scan_start is None else int(request.scan_start)
+    stop = n_scan if request.scan_stop is None else int(request.scan_stop)
+    start = int(np.clip(start, 0, n_scan - 1))
+    stop = int(np.clip(stop, start + 1, n_scan))
+    indices = list(range(start, stop, request.scan_step))
+    seeds = {}
+    if request.amplitude is not None:
+        seeds["amplitude"] = request.amplitude
+    if request.delta is not None:
+        seeds["delta"] = request.delta
+    if request.gamma is not None:
+        seeds["gamma"] = request.gamma
+    if not seeds:
+        seeds = None
+    try:
+        stack = arpes_gap.fit_gap_stack(
+            plane,
+            x_axis,
+            y_axis,
+            gap_type=request.gap_type,
+            temperature=request.temperature,
+            mu=request.mu,
+            analyzer_fwhm=request.analyzer_fwhm,
+            half_width=request.half_width,
+            scan_indices=indices,
+            propagate_seeds=request.propagate_seeds,
+            seeds=seeds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    stored = False
+    if request.store:
+        ds = arpes_gap.gap_stack_to_xarray(stack)
+        stored = session.workspace.write_analysis_data(name, "gap_fit", ds)
+    return {
+        "node": "gap_fit",
+        "stored": stored,
+        "gap_type": stack["gap_type"],
+        "scan_coord_name": stack["scan_coord_name"],
+        "scan": stack["scan"].tolist(),
+        "delta": stack["delta"].tolist(),
+        "gamma": stack["gamma"].tolist(),
+        "amplitude": stack["amplitude"].tolist(),
+        "chi2": stack["chi2"].tolist(),
+        "success": stack["success"].astype(bool).tolist(),
+        "ml_schema_version": stack["ml_schema_version"],
+    }
+
+
+@router.post("/analysis/{name}/overlay")
+def analysis_cut_overlay(
+    name: str,
+    request: CutOverlayRequest,
+    session: Session = Depends(current_session),
+):
+    """Return DFT band polylines and/or a sim intensity plane framed like /slice."""
+    tensor = _require_tensor(session, name)
+    _validate_axes(tensor, request.x_idx, request.y_idx)
+    result = ops.extract_slice(tensor, request.x_idx, request.y_idx, request.fixed)
+    plane, x_axis, y_axis, steps = ops.downsample_plane(
+        result["values"], result["x_axis"], result["y_axis"], request.max_points
+    )
+    extent = [float(v) for v in result["extent"]]
+    # Prefer momentum on X and energy on Y for band registration
+    x_is_energy = "energy" in (tensor.labels[request.x_idx] or "").lower()
+    y_is_energy = "energy" in (tensor.labels[request.y_idx] or "").lower()
+
+    polylines = []
+    if request.bands_name:
+        bands = session.workspace.pull_band_structure(request.bands_name)
+        if bands is None:
+            raise HTTPException(status_code=404, detail=f"No band structure '{request.bands_name}'.")
+        k_min, k_max = (extent[0], extent[1]) if not x_is_energy else (extent[2], extent[3])
+        e_min, e_max = (extent[2], extent[3]) if y_is_energy else (extent[0], extent[1])
+        raw = arpes_overlay.bands_to_polylines(
+            bands["k_vecs"],
+            bands["eigenvalues"],
+            k_component=request.k_component,
+            e_fermi=request.e_fermi,
+            k_offset=request.k_offset,
+            band_indices=request.band_indices,
+            e_min=e_min,
+            e_max=e_max,
+            k_min=k_min,
+            k_max=k_max,
+        )
+        # If energy is on X, swap polyline coordinates
+        if x_is_energy and not y_is_energy:
+            for pl in raw:
+                pl["points"] = [{"x": p["y"], "y": p["x"]} for p in pl["points"]]
+        polylines = raw
+
+    sim_plane = None
+    sim_meta = None
+    if request.sim_name:
+        sim = _require_tensor(session, request.sim_name)
+        roles = arpes_overlay.infer_momentum_energy_axes(sim.labels)
+        sx = request.sim_x_idx
+        sy = request.sim_y_idx
+        if sx is None:
+            sx = roles["momentum_axis"] if roles["momentum_axis"] is not None else 1
+        if sy is None:
+            sy = roles["energy_axis"] if roles["energy_axis"] is not None else 0
+        if sx == sy:
+            sx, sy = 0, 1 if sim.ndim > 1 else 0
+        # Align sim axes to cut: cut x_axis/y_axis after downsample
+        try:
+            sim_plane = arpes_overlay.resample_sim_plane(
+                sim,
+                cut_x=x_axis,
+                cut_y=y_axis,
+                sim_x_idx=sx,
+                sim_y_idx=sy,
+                sim_fixed=request.sim_fixed,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Sim resample failed: {exc}") from exc
+        finite = sim_plane[np.isfinite(sim_plane)]
+        sim_meta = {
+            "sim_name": request.sim_name,
+            "sim_x_idx": int(sx),
+            "sim_y_idx": int(sy),
+            "vmin": float(finite.min()) if finite.size else 0.0,
+            "vmax": float(finite.max()) if finite.size else 1.0,
+        }
+
+    header = {
+        "shape": [int(plane.shape[0]), int(plane.shape[1])],
+        "x_axis": [float(v) for v in x_axis],
+        "y_axis": [float(v) for v in y_axis],
+        "extent": extent,
+        "vmin": float(np.nanmin(plane)) if plane.size else 0.0,
+        "vmax": float(np.nanmax(plane)) if plane.size else 1.0,
+        "stride": [int(steps[0]), int(steps[1])],
+        "x_label": tensor.labels[request.x_idx],
+        "y_label": tensor.labels[request.y_idx],
+        "x_unit": tensor.units[request.x_idx],
+        "y_unit": tensor.units[request.y_idx],
+        "polylines": polylines,
+        "has_sim": sim_plane is not None,
+        "sim": sim_meta,
+    }
+    if sim_plane is None:
+        return Response(content=_pack_plane(header, plane), media_type="application/octet-stream")
+    # Pack experiment plane then sim plane back-to-back; header declares both shapes.
+    header["sim_offset_floats"] = int(plane.size)
+    raw = json.dumps(header).encode("utf-8")
+    padding = (-len(raw)) % 4
+    raw += b" " * padding
+    body = np.ascontiguousarray(plane, dtype="<f4").tobytes()
+    body += np.ascontiguousarray(sim_plane, dtype="<f4").tobytes()
+    return Response(content=struct.pack("<I", len(raw)) + raw + body, media_type="application/octet-stream")
+
+
 @router.get("/analysis/{name}/{node}")
 def analysis_get_node(
     name: str,
@@ -629,6 +833,21 @@ def analysis_get_node(
             "width": ds["width"].values.tolist() if "width" in ds else [],
             "integrated": ds["integrated"].values.tolist() if "integrated" in ds else [],
             "chi2": ds["chi2"].values.tolist() if "chi2" in ds else [],
+        }
+    # Gap stack Δ(k)
+    if "delta" in ds:
+        scan_name = list(ds.dims)[0]
+        return {
+            "node": node,
+            "kind": "gap_fit",
+            "attrs": dict(ds.attrs),
+            "scan_coord_name": scan_name,
+            "scan": ds.coords[scan_name].values.tolist(),
+            "delta": ds["delta"].values.tolist(),
+            "gamma": ds["gamma"].values.tolist() if "gamma" in ds else [],
+            "amplitude": ds["amplitude"].values.tolist() if "amplitude" in ds else [],
+            "chi2": ds["chi2"].values.tolist() if "chi2" in ds else [],
+            "success": ds["success"].values.astype(bool).tolist() if "success" in ds else [],
         }
     # QP result curves
     return {
