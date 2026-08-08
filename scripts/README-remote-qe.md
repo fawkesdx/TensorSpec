@@ -66,13 +66,13 @@ Pulled if present on remote:
 | Code | Case |
 |------|------|
 | 0 | Success |
-| 1 | SSH / connectivity / rsync |
+| 1 | SSH / connectivity / allowlist rsync pull failed (scratch kept, not wiped) |
 | 2 | Local validation (`scf.in` missing, bad path, bad `--np`) |
 | 3 | Remote `pw.x` missing |
 | 4 | SCF (or chain) failed — scratch kept; outs pulled if present |
-| 5 | Remote free disk &lt; ~1 GB before start |
+| 5 | Remote free disk &lt; ~1 GB before start, **or** scratch-root create/resolve failed |
 
-Any nonzero QE step fails the chain hard (exit 4).
+Any nonzero QE step fails the chain hard (exit 4). Scratch is wiped only after a successful allowlist pull (unless `--keep-scratch`).
 
 ## Limits
 
