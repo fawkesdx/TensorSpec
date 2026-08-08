@@ -146,24 +146,24 @@
                                 <div class="form-row">
                                     <label>View [h k l]:</label>
                                     <div class="inline">
-                                        <input class="field field--num" type="number" min="-10" max="10" value="0">
-                                        <input class="field field--num" type="number" min="-10" max="10" value="0">
-                                        <input class="field field--num" type="number" min="-10" max="10" value="0">
-                                        <button type="button" class="btn" disabled>Align</button>
+                                        <input class="field field--num" id="cr-h" type="number" min="-10" max="10" value="0">
+                                        <input class="field field--num" id="cr-k" type="number" min="-10" max="10" value="0">
+                                        <input class="field field--num" id="cr-l" type="number" min="-10" max="10" value="1">
+                                        <button type="button" class="btn" disabled title="HTML viewer: not yet">Align</button>
                                     </div>
                                 </div>
-                                <label class="check"><input type="checkbox"> Show Cut Plane</label>
+                                <label class="check"><input type="checkbox" id="cr-cut"> Show Cut Plane</label>
                                 <div class="inline" style="margin-bottom:8px">
-                                    <select class="field">
-                                        <option>cyan</option>
-                                        <option>magenta</option>
-                                        <option>yellow</option>
-                                        <option>white</option>
-                                        <option>gray</option>
+                                    <select class="field" id="cr-cut-color">
+                                        <option value="#00ffff">cyan</option>
+                                        <option value="#ff00ff">magenta</option>
+                                        <option value="#ffff00">yellow</option>
+                                        <option value="#ffffff">white</option>
+                                        <option value="#808080">gray</option>
                                     </select>
-                                    <select class="field">
-                                        <option>Lock to Camera</option>
-                                        <option>Lock to [h k l]</option>
+                                    <select class="field" id="cr-cut-lock" disabled title="This pass: lock to [h k l] only">
+                                        <option selected>Lock to [h k l]</option>
+                                        <option disabled>Lock to Camera — not yet</option>
                                     </select>
                                 </div>
                                 <div class="form-row">
@@ -183,7 +183,7 @@
                                 </div>
                             </fieldset>
 
-                            <p class="hint">Cut plane, Align, 3ds/Blender, hi-res render: HTML viewer: not yet.</p>
+                            <p class="hint">Align, 3ds/Blender, hi-res render: HTML viewer: not yet.</p>
                             <button type="button" class="btn btn--primary" disabled>&#127912; Render Structure</button>
                             <button type="button" class="btn btn--block" disabled>&#128444; Save High-Res Image</button>
                             <button type="button" class="btn btn--block" id="cr-export-cif">&#128190; Export Structure to CIF</button>
