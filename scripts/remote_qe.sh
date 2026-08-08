@@ -207,6 +207,8 @@ SCRATCH_ROOT="$(echo "$SCRATCH_ROOT" | tr -d '\r' | tail -n1)"
 [[ -n "$SCRATCH_ROOT" ]] || die 5 "empty scratch root from $HOST"
 SCRATCH="${SCRATCH_ROOT}/${JOB_ID}"
 log "scratch=$SCRATCH"
+printf '%s\t%s\n' "$HOST" "$SCRATCH" >"$RUN_DIR/.tensorspec_remote_scratch"
+log "sidecar: $RUN_DIR/.tensorspec_remote_scratch -> $HOST $SCRATCH"
 
 # Remote env + pw.x preflight + disk check
 PREFLIGHT_RC=0
