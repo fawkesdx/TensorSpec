@@ -706,7 +706,7 @@ async function queueRun() {
     } catch (err) {
         setQeStatus(err.message, true);
     } finally {
-        dom.qeQueue.disabled = false;
+        applyQueueEnable(lastSolversInfo);
     }
 }
 
