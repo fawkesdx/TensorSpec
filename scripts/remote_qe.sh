@@ -16,11 +16,11 @@ Options:
   --dry-run        Print plan only; no network, no remote run
 
 Exit codes:
-  1  SSH / connectivity
+  1  SSH / connectivity / rsync pull failed (scratch kept)
   2  Local validation (scf.in missing, bad path)
   3  Remote pw.x missing
   4  SCF (or chain) failed — scratch kept; outs pulled if present
-  5  Remote free disk < ~1 GB before start
+  5  Remote free disk < ~1 GB, or scratch-root create/resolve failed
 EOF
 }
 
@@ -128,18 +128,18 @@ pull_allowlist() {
     log "pull: no allowlist files present on remote"
     return 0
   fi
-  # Build a temp file list for rsync --files-from
   local listfile
   listfile="$(mktemp)"
   # shellcheck disable=SC2001
   echo "$remote_list" | tr ' ' '\n' | sed '/^$/d' >"$listfile"
   log "pull: $(tr '\n' ' ' <"$listfile")"
-  rsync -az --files-from="$listfile" "$HOST:$SCRATCH/" "$RUN_DIR/" || true
-  rm -f "$listfile"
-  # Append remote transcript into local remote_qe.log if remote copy differs
-  if [[ -f "$RUN_DIR/remote_qe.log" ]]; then
-    :
+  if ! rsync -az --files-from="$listfile" "$HOST:$SCRATCH/" "$RUN_DIR/"; then
+    rm -f "$listfile"
+    log "error: rsync allowlist pull failed from $HOST:$SCRATCH"
+    return 1
   fi
+  rm -f "$listfile"
+  return 0
 }
 
 # --- dry-run: zero network ---
@@ -178,9 +178,10 @@ if [[ "$DRY" -eq 1 ]]; then
   if [[ "$KEEP" -eq 1 ]]; then
     log "  8. keep remote scratch (--keep-scratch)"
   else
-    log "  8. on success: ssh rm -rf $ASSUMED_SCRATCH"
+    log "  8. on success + pull OK: ssh rm -rf $ASSUMED_SCRATCH"
   fi
-  log "  on failure: keep scratch; still pull allowlist; exit 4"
+  log "  on QE failure: keep scratch; still pull allowlist; exit 4"
+  log "  on pull failure: keep scratch; exit 1 (never wipe without successful pull)"
   log "=== end dry-run ==="
   exit 0
 fi
@@ -285,19 +286,27 @@ fi
 echo "=== remote pipeline OK \$(date -Is) ==="
 EOF
 
-# Always attempt pull (success or failure)
+# Always attempt pull (success or failure). Never wipe if pull fails.
 log "pulling allowlist (remote status=$REMOTE_STATUS)"
-pull_allowlist || true
+PULL_RC=0
+pull_allowlist || PULL_RC=$?
 
 # Merge: ensure local transcript notes remote status
 {
   echo ""
-  echo "=== local wrapper remote_status=$REMOTE_STATUS $(date -Is) ==="
+  echo "=== local wrapper remote_status=$REMOTE_STATUS pull_rc=$PULL_RC $(date -Is) ==="
 } >>"$LOCAL_LOG"
 
 if [[ "$REMOTE_STATUS" -ne 0 ]]; then
   log "QE chain failed (rc=$REMOTE_STATUS); keeping scratch=$SCRATCH"
+  if [[ "$PULL_RC" -ne 0 ]]; then
+    log "also: allowlist pull failed (rc=$PULL_RC); scratch kept"
+  fi
   exit 4
+fi
+
+if [[ "$PULL_RC" -ne 0 ]]; then
+  die 1 "allowlist pull failed after successful QE (rc=$PULL_RC); keeping scratch=$SCRATCH (not wiped)"
 fi
 
 if [[ "$KEEP" -eq 1 ]]; then
