@@ -41,6 +41,7 @@ const dom = {
     cutH: el("cr-h"),
     cutK: el("cr-k"),
     cutL: el("cr-l"),
+    align: el("cr-align"),
     cut: el("cr-cut"),
     cutColor: el("cr-cut-color"),
     depth: el("cr-depth"),
@@ -536,6 +537,17 @@ dom.viewA?.addEventListener("click", () => ensureViewer().lookAlong("+a"));
 dom.viewB?.addEventListener("click", () => ensureViewer().lookAlong("+b"));
 dom.viewC?.addEventListener("click", () => ensureViewer().lookAlong("+c"));
 dom.view111?.addEventListener("click", () => ensureViewer().lookAlong("111"));
+dom.align?.addEventListener("click", () => {
+    const h = Number(dom.cutH?.value) || 0;
+    const k = Number(dom.cutK?.value) || 0;
+    const l = Number(dom.cutL?.value) || 0;
+    if (h === 0 && k === 0 && l === 0) {
+        setStatus("Align needs non-zero [h k l].", true);
+        return;
+    }
+    ensureViewer().lookAlongMiller(h, k, l);
+    setStatus(`Aligned to [${h} ${k} ${l}]`);
+});
 const syncAzEl = () => ensureViewer().setAzEl(Number(dom.az.value) || 0, Number(dom.elv.value) || 0);
 dom.az?.addEventListener("change", syncAzEl);
 dom.elv?.addEventListener("change", syncAzEl);
