@@ -36,7 +36,8 @@ export class ImageViewer {
         this.crosshair = { x: 0, y: 0 };
         this.window = { dx: 0, dy: 0 };
         this.dragging = false;
-        this.overlays = { polygons: [], vlines: [], hlines: [] };
+        this.overlays = { polygons: [], vlines: [], hlines: [], polylines: [] };
+        this.simOverlay = null; // { values: Float32Array, vmin, vmax, alpha, colormap? }
 
         this.canvas.addEventListener("pointerdown", (e) => this._onPointer(e, true));
         this.canvas.addEventListener("pointermove", (e) => {
@@ -76,8 +77,13 @@ export class ImageViewer {
         this.draw();
     }
 
-    setOverlays({ polygons = [], vlines = [], hlines = [] } = {}) {
-        this.overlays = { polygons, vlines, hlines };
+    setOverlays({ polygons = [], vlines = [], hlines = [], polylines = [] } = {}) {
+        this.overlays = { polygons, vlines, hlines, polylines };
+        this.draw();
+    }
+
+    setSimOverlay(sim) {
+        this.simOverlay = sim;
         this.draw();
     }
 
@@ -182,10 +188,47 @@ export class ImageViewer {
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(this.buffer, rect.left, rect.top, rect.width, rect.height);
 
+        if (this.simOverlay && this.simOverlay.values && this.header) {
+            this._drawSimOverlay(ctx, rect);
+        }
+
         this._drawWindow(ctx, rect);
         this._drawOverlays(ctx, rect);
         this._drawCrosshair(ctx, rect);
         this._drawAxes(ctx, rect);
+    }
+
+    _drawSimOverlay(ctx, rect) {
+        const [rows, cols] = this.header.shape;
+        const sim = this.simOverlay;
+        if (!sim.values || sim.values.length < rows * cols) return;
+        const table = COLORMAPS[sim.colormap || "viridis"] || COLORMAPS.viridis || COLORMAPS.magma;
+        const vmin = sim.vmin ?? 0;
+        const vmax = sim.vmax ?? 1;
+        const span = vmax - vmin || 1;
+        const canvas = document.createElement("canvas");
+        canvas.width = cols;
+        canvas.height = rows;
+        const bctx = canvas.getContext("2d");
+        const image = bctx.createImageData(cols, rows);
+        for (let row = 0; row < rows; row++) {
+            const imageRow = rows - 1 - row;
+            for (let col = 0; col < cols; col++) {
+                const v = sim.values[row * cols + col];
+                const level = (v - vmin) / span;
+                const entry = Math.max(0, Math.min(255, Math.round(level * 255))) * 3;
+                const offset = (imageRow * cols + col) * 4;
+                image.data[offset] = table[entry];
+                image.data[offset + 1] = table[entry + 1];
+                image.data[offset + 2] = table[entry + 2];
+                image.data[offset + 3] = v > vmin + 0.02 * span ? 255 : 0;
+            }
+        }
+        bctx.putImageData(image, 0, 0);
+        ctx.save();
+        ctx.globalAlpha = sim.alpha ?? 0.45;
+        ctx.drawImage(canvas, rect.left, rect.top, rect.width, rect.height);
+        ctx.restore();
     }
 
     _dataToPixel(xData, yData, rect) {
@@ -199,7 +242,7 @@ export class ImageViewer {
     }
 
     _drawOverlays(ctx, rect) {
-        const { polygons, vlines, hlines } = this.overlays || {};
+        const { polygons, vlines, hlines, polylines } = this.overlays || {};
         ctx.save();
         if (polygons && polygons.length) {
             ctx.strokeStyle = "#22d3ee";
@@ -213,6 +256,24 @@ export class ImageViewer {
                     else ctx.lineTo(p.x, p.y);
                 });
                 ctx.stroke();
+            });
+        }
+        if (polylines && polylines.length) {
+            const palette = ["#f472b6", "#22d3ee", "#fbbf24", "#a78bfa", "#34d399", "#fb7185"];
+            polylines.forEach((pl, idx) => {
+                const pts = pl.points || pl;
+                if (!pts || pts.length < 2) return;
+                ctx.strokeStyle = pl.color || palette[idx % palette.length];
+                ctx.lineWidth = pl.width || 1.4;
+                ctx.setLineDash(pl.dash || []);
+                ctx.beginPath();
+                pts.forEach((pt, i) => {
+                    const p = this._dataToPixel(pt.x, pt.y, rect);
+                    if (i === 0) ctx.moveTo(p.x, p.y);
+                    else ctx.lineTo(p.x, p.y);
+                });
+                ctx.stroke();
+                ctx.setLineDash([]);
             });
         }
         ctx.strokeStyle = "#fbbf24";

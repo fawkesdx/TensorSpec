@@ -276,6 +276,50 @@ class QPResultsRequest(BaseModel):
     store: bool = True
 
 
+class GapFitCurveRequest(BaseModel):
+    """Fit a Dynes SC/CDW gap model to one EDC."""
+
+    x_idx: int = Field(ge=0, le=15)
+    y_idx: int = Field(ge=0, le=15)
+    fixed: dict[int, int] = Field(default_factory=dict)
+    index: int = Field(ge=0)
+    half_width: int = Field(default=0, ge=0, le=50)
+    gap_type: str = Field(default="sc")
+    temperature: float = Field(default=10.0, ge=0.01, le=400)
+    mu: float = 0.0
+    analyzer_fwhm: float = Field(default=0.0, ge=0, le=5)
+    suggest: bool = True
+    delta: float | None = Field(default=None, gt=0, le=2)
+    gamma: float | None = Field(default=None, gt=0, le=2)
+    amplitude: float | None = Field(default=None, gt=0)
+
+
+class GapFitStackRequest(GapFitCurveRequest):
+    scan_start: int | None = None
+    scan_stop: int | None = None
+    scan_step: int = Field(default=1, ge=1, le=50)
+    propagate_seeds: bool = True
+    store: bool = True
+
+
+class CutOverlayRequest(BaseModel):
+    """Project DFT bands and/or resample a sim cube onto an experimental cut."""
+
+    x_idx: int = Field(ge=0, le=15)
+    y_idx: int = Field(ge=0, le=15)
+    fixed: dict[int, int] = Field(default_factory=dict)
+    bands_name: str | None = Field(default=None, max_length=128)
+    sim_name: str | None = Field(default=None, max_length=128)
+    e_fermi: float = 0.0
+    k_component: str = Field(default="kx")
+    k_offset: float = 0.0
+    band_indices: list[int] | None = None
+    sim_x_idx: int | None = Field(default=None, ge=0, le=15)
+    sim_y_idx: int | None = Field(default=None, ge=0, le=15)
+    sim_fixed: dict[int, int] = Field(default_factory=dict)
+    max_points: int = Field(default=512, ge=64, le=2048)
+
+
 class SuggestCenterRequest(BaseModel):
     angle_axis: int = Field(ge=0, le=15)
     energy_axis: int | None = Field(default=None, ge=0, le=15)

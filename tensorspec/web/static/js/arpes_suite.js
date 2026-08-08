@@ -1658,6 +1658,9 @@ const analysisState = {
     stackViewer: null,
     deViewer: null,
     ekViewer: null,
+    gapCurveViewer: null,
+    gapStackViewer: null,
+    overlayViewer: null,
     lastStack: null,
     lastQp: null,
 };
@@ -1674,6 +1677,15 @@ function analysisEnsureViewers() {
     }
     if (!analysisState.ekViewer) {
         analysisState.ekViewer = new LineViewer(el("an-ek"), { color: "#60a5fa" });
+    }
+    if (!analysisState.gapCurveViewer) {
+        analysisState.gapCurveViewer = new LineViewer(el("an-gap-curve-plot"), { color: "#94a3b8" });
+    }
+    if (!analysisState.gapStackViewer) {
+        analysisState.gapStackViewer = new LineViewer(el("an-gap-stack-plot"), { color: "#f472b6" });
+    }
+    if (!analysisState.overlayViewer) {
+        analysisState.overlayViewer = new ImageViewer(el("an-overlay-cut"));
     }
 }
 
@@ -2066,11 +2078,167 @@ el("an-qp").addEventListener("click", async () => {
     }
 });
 
+function gapPayload({ forStack = false } = {}) {
+    const defaults = analysisState.defaults;
+    if (!defaults) throw new Error("Load a dataset first.");
+    const { xIdx, yIdx } = analysisViewAxes(defaults);
+    const indexMax = defaults.shape[xIdx] - 1;
+    const index = Math.max(0, Math.min(indexMax, Number(el("an-index").value) || 0));
+    const base = {
+        x_idx: xIdx,
+        y_idx: yIdx,
+        fixed: analysisFixed(defaults, xIdx, yIdx),
+        index,
+        half_width: 0,
+        gap_type: el("an-gap-type").value,
+        temperature: Number(el("an-T").value) || 10,
+        mu: Number(el("an-ef").value) || 0,
+        analyzer_fwhm: Number(el("an-fwhm").value) || 0,
+        suggest: true,
+    };
+    if (!forStack) return base;
+    return { ...base, store: true, propagate_seeds: true, scan_step: 1 };
+}
+
+el("an-gap-curve").addEventListener("click", async () => {
+    try {
+        analysisEnsureViewers();
+        const name = el("an-name").value;
+        const fit = await TensorSpecAPI.analysisGapCurve(name, gapPayload());
+        analysisState.gapCurveViewer.setCurve({
+            axis: fit.x,
+            values: fit.y,
+            label: "EDC",
+            unit: "eV",
+        });
+        analysisState.gapCurveViewer.setOverlays([
+            { values: fit.y_fit, color: "#f472b6", width: 1.8 },
+        ]);
+        el("an-gap-badge").textContent = `Δ=${fit.delta.toFixed(4)}  Γ=${fit.gamma.toFixed(4)}`;
+        el("an-gap-status").textContent = fit.success
+            ? `${fit.gap_type.toUpperCase()} gap fit OK (χ²=${fit.chi2.toExponential(2)}).`
+            : fit.message;
+    } catch (err) {
+        el("an-gap-status").textContent = err.message;
+    }
+});
+
+el("an-gap-stack").addEventListener("click", async () => {
+    el("an-gap-stack").disabled = true;
+    try {
+        analysisEnsureViewers();
+        const name = el("an-name").value;
+        const stack = await TensorSpecAPI.analysisGapStack(name, gapPayload({ forStack: true }));
+        analysisState.gapStackViewer.setCurve({
+            axis: stack.scan,
+            values: stack.delta,
+            label: "Δ(k)",
+            unit: "eV",
+        });
+        analysisState.gapStackViewer.setOverlays([
+            { values: stack.gamma, color: "#94a3b8", width: 1.3, dash: [4, 3] },
+        ]);
+        const ok = (stack.success || []).filter(Boolean).length;
+        el("an-gap-stack-badge").textContent = `${ok}/${stack.scan.length} · ${stack.node}${
+            stack.stored ? " stored" : ""
+        }`;
+        el("an-gap-status").textContent = `Gap stack → /analysis/${stack.node}`;
+    } catch (err) {
+        el("an-gap-status").textContent = err.message;
+    } finally {
+        el("an-gap-stack").disabled = false;
+    }
+});
+
+async function refreshAnalysisOverlaySources() {
+    const listing = await TensorSpecAPI.listItems();
+    const bands = listing.items.filter(
+        (item) => /band/i.test(item.type) || /_bands$/i.test(item.name || "")
+    );
+    const tensors = listing.items.filter((item) => item.type === "Spectroscopy DataTree");
+    const bandSel = el("an-bands");
+    const simSel = el("an-sim");
+    const prevB = bandSel.value;
+    const prevS = simSel.value;
+    bandSel.innerHTML = '<option value="">— none —</option>';
+    bands.forEach((item) => {
+        const opt = document.createElement("option");
+        opt.value = item.name;
+        opt.textContent = item.name;
+        bandSel.appendChild(opt);
+    });
+    if ([...bandSel.options].some((o) => o.value === prevB)) bandSel.value = prevB;
+
+    simSel.innerHTML = '<option value="">— none —</option>';
+    tensors.forEach((item) => {
+        const opt = document.createElement("option");
+        opt.value = item.name;
+        opt.textContent = item.name;
+        simSel.appendChild(opt);
+    });
+    if ([...simSel.options].some((o) => o.value === prevS)) simSel.value = prevS;
+}
+
+el("an-overlay").addEventListener("click", async () => {
+    el("an-overlay").disabled = true;
+    try {
+        analysisEnsureViewers();
+        const name = el("an-name").value;
+        const defaults = analysisState.defaults;
+        if (!defaults) throw new Error("Load a dataset first.");
+        const { xIdx, yIdx } = analysisViewAxes(defaults);
+        const bandsName = el("an-bands").value || null;
+        const simName = el("an-sim").value || null;
+        if (!bandsName && !simName) throw new Error("Pick DFT bands and/or a sim dataset.");
+        const { header, values, simValues } = await TensorSpecAPI.analysisOverlay(name, {
+            x_idx: xIdx,
+            y_idx: yIdx,
+            fixed: analysisFixed(defaults, xIdx, yIdx),
+            bands_name: bandsName,
+            sim_name: simName,
+            e_fermi: Number(el("an-ef").value) || 0,
+            k_component: el("an-kcomp").value,
+            k_offset: 0,
+        });
+        analysisState.overlayViewer.setData(header, values);
+        analysisState.overlayViewer.setOverlays({
+            polylines: header.polylines || [],
+        });
+        if (simValues && header.sim) {
+            analysisState.overlayViewer.setSimOverlay({
+                values: simValues,
+                vmin: header.sim.vmin,
+                vmax: header.sim.vmax,
+                alpha: Number(el("an-sim-alpha").value) / 100,
+                colormap: "viridis",
+            });
+        } else {
+            analysisState.overlayViewer.setSimOverlay(null);
+        }
+        const nBands = (header.polylines || []).length;
+        el("an-overlay-badge").textContent = `${nBands} bands${header.has_sim ? " + sim" : ""}`;
+        el("an-overlay-status").textContent = "Overlay updated.";
+    } catch (err) {
+        el("an-overlay-status").textContent = err.message;
+    } finally {
+        el("an-overlay").disabled = false;
+    }
+});
+
+el("an-sim-alpha").addEventListener("input", () => {
+    if (!analysisState.overlayViewer?.simOverlay) return;
+    analysisState.overlayViewer.setSimOverlay({
+        ...analysisState.overlayViewer.simOverlay,
+        alpha: Number(el("an-sim-alpha").value) / 100,
+    });
+});
+
 el("t4").addEventListener("change", () => {
     if (!el("t4").checked) return;
     analysisEnsureViewers();
     syncAnalysisSeedCount();
     refreshAnalysisDatasets()
+        .then(() => refreshAnalysisOverlaySources())
         .then(() => {
             if (el("an-name").value) return loadAnalysisDataset(el("an-name").value);
             return null;

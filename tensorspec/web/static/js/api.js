@@ -213,6 +213,54 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
+        analysisGapCurve: (name, payload) =>
+            request(`/api/arpes/analysis/${encodeURIComponent(name)}/gap-curve`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        analysisGapStack: (name, payload) =>
+            request(`/api/arpes/analysis/${encodeURIComponent(name)}/gap-stack`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        analysisOverlay: async (name, payload) => {
+            const response = await fetch(
+                `/api/arpes/analysis/${encodeURIComponent(name)}/overlay`,
+                {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                }
+            );
+            if (!response.ok) {
+                let detail = `${response.status} ${response.statusText}`;
+                try {
+                    const body = await response.json();
+                    if (body.detail) detail = body.detail;
+                } catch (err) {
+                    /* binary error */
+                }
+                throw new Error(detail);
+            }
+            const buffer = await response.arrayBuffer();
+            const headerLength = new DataView(buffer).getUint32(0, true);
+            const header = JSON.parse(
+                new TextDecoder().decode(new Uint8Array(buffer, 4, headerLength))
+            );
+            const floatOffset = 4 + headerLength;
+            const n = header.shape[0] * header.shape[1];
+            const values = new Float32Array(buffer, floatOffset, n);
+            let simValues = null;
+            if (header.has_sim && header.sim_offset_floats != null) {
+                simValues = new Float32Array(
+                    buffer,
+                    floatOffset + header.sim_offset_floats * 4,
+                    n
+                );
+            }
+            return { header, values, simValues };
+        },
         analysisGetNode: (name, node) =>
             request(
                 `/api/arpes/analysis/${encodeURIComponent(name)}/${encodeURIComponent(node)}`

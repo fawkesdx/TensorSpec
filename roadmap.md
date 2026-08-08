@@ -111,10 +111,10 @@ Grand App
 			- [x] In-plane angle → k∥ Process tab (user Γ center via click/drag, Suggest assist, Apply → new dataset + `/processed`)
 			- [x] Overlay projected surface BZ from workspace crystal (Crystal Suite Tab 4 machinery)
 			- [x] Photon-energy → kz module (Vo slider + perpendicular BZ)
-		- [x] `/analysis`: Attach mathematical model outputs (ML-ready peak tables + QP summaries).
+		- [x] `/analysis`: Attach mathematical model outputs (ML-ready peak tables + QP summaries + gap fits).
 			- [x] Phase 1 — EDC/MDC peakfit: Lorentzian or Voigt (+ optional FD on EDC); N peaks/seeds; stack fit → `/analysis/mdc_peakfit` or `/edc_peakfit`; ARPES Suite **Analysis** tab (curve + stack plots).
 			- [x] Phase 2 — QP result curves from peak tables: δE(Γ)–E, integrated intensity vs E, dispersion E(k), k_F, parabolic m*/m_e, v_F; FL (Γ₀+αω²) / MFL (Γ₀+α|ω|) fits → `/analysis/qp_results`.
-			- [ ] Phase 3 — Gap tools (SC / CDW gap from EDCs); overlay DFT / simulated ARPES on cuts.
+			- [x] Phase 3 — Gap tools (Dynes SC/CDW on EDCs → `/analysis/gap_fit`); DFT band polylines + simulated ARPES intensity overlay on experimental cuts (Analysis tab).
 		- [x] `/history`: Append sequential audit trail logs of every functional transformation applied to the dataset.
 	- [x] once the data is loaded, there is option to launch a general viewer where it will plot the data according to the kind of data
 		- [x] it will display the data.energy, data.slitangle, data.value of the dispersion
@@ -129,7 +129,7 @@ Grand App
 	- Load: MAESTRO HDF5 (+ optional Measurement Log CSV) via upload / `POST /api/arpes/load`
 	- Data Viewer: kind-aware multi-panel layouts (cut / Fermi map / hv scan), Sync crosshair + fixed-dim sliders, EDC/MDC profiles, CSV/PDF/PNG export
 	- Process: in-plane → k∥ (Γ click/suggest, surface BZ overlay); photon → kz (Vo, ⊥ BZ); writes `/processed`
-	- Analysis: EDC/MDC Lorentzian/Voigt peakfit → `/analysis/*_peakfit`; QP curves (δE–E, k_F, m*, v_F, FL/MFL) → `/analysis/qp_results`
+	- Analysis: EDC/MDC Lorentzian/Voigt peakfit → `/analysis/*_peakfit`; QP curves (δE–E, k_F, m*, v_F, FL/MFL) → `/analysis/qp_results`; Dynes SC/CDW gap → `/analysis/gap_fit`; DFT bands + sim intensity overlay on cuts
 	- Simulator: matrix-element Option A + B1 (job queue + log stream)
 
 - [ ] PEEM Suite
