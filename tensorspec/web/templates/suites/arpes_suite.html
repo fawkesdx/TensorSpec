@@ -145,7 +145,7 @@
                                     <legend>4. Analyzer Domain &amp; Resolution</legend>
                                     <div class="form-row">
                                         <label for="ar-slitsize">Analyzer Slit Size:</label>
-                                        <input class="field" id="ar-slitsize" type="number" min="0.1" max="5" step="0.1" value="0.5">
+                                        <input class="field" id="ar-slitsize" type="number" min="0.1" max="5" step="0.1" value="0.5" disabled title="HTML viewer: not yet">
                                     </div>
                                     <div class="form-row">
                                         <label for="ar-slitang">Analyzer Slit Angle:</label>
@@ -153,8 +153,9 @@
                                     </div>
                                     <div class="form-row">
                                         <label for="ar-defl">Deflector Angle:</label>
-                                        <input class="field" id="ar-defl" type="number" min="-15" max="15" step="1" value="0.0">
+                                        <input class="field" id="ar-defl" type="number" min="-15" max="15" step="1" value="0.0" disabled title="HTML viewer: not yet — use ky domain">
                                     </div>
+                                    <p class="hint">Slit size / deflector offset: not wired. Use slit angle + ky bounds / res_k.</p>
 
                                     <h3 class="section-heading">Domain</h3>
                                     <div class="form-row form-row--stacked">

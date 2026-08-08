@@ -71,6 +71,8 @@ class BandRequest(BaseModel):
     use_soc: bool = False
     soc_strength: float = Field(default=0.5, ge=0, le=5)
     tb_mode: Literal["Simple Scalar (Isotropic)", "Slater-Koster (Rigorous)"] = "Simple Scalar (Isotropic)"
+    # When true, solve from an uploaded wannier90_hr.dat for this crystal (see POST …/wannier).
+    use_wannier: bool = False
 
 
 class BandResult(BaseModel):

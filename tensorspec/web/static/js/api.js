@@ -367,6 +367,12 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify({ fidelity }),
             }),
+        dftUploadWannier: (name, hrFile, scfFile = null) => {
+            const form = new FormData();
+            form.append("file", hrFile);
+            if (scfFile) form.append("scf_out", scfFile);
+            return upload(`/api/dft/${encodeURIComponent(name)}/wannier`, form);
+        },
         dftSolvers: () => request("/api/dft/solvers"),
         qeGenerate: (name, payload) =>
             request(`/api/dft/${encodeURIComponent(name)}/qe/generate`, {
