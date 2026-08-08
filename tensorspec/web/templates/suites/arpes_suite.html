@@ -17,16 +17,18 @@
             <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
             <h1 class="suite-header__title">ARPES Suite</h1>
             <div class="suite-header__spacer"></div>
-            <span class="badge">Slice 3b: snap grid, CSV/PDF/SVG, Option A+B1 simulator</span>
+            <span class="badge">Process: in-plane → k∥ + BZ overlay</span>
         </header>
 
         <div class="tabs">
             <input class="tab-radio" type="radio" name="arpes-tabs" id="t1" checked>
             <input class="tab-radio" type="radio" name="arpes-tabs" id="t2">
+            <input class="tab-radio" type="radio" name="arpes-tabs" id="t3">
 
             <nav class="tab-bar">
                 <label for="t1">Matrix Element Simulator</label>
                 <label for="t2">Data Viewer</label>
+                <label for="t3">Process</label>
             </nav>
 
             <div class="tab-body">
@@ -282,6 +284,128 @@
                             </div>
                             <div class="panel__body" style="padding:12px">
                                 <div class="av-panel-host" id="av-panel-host"></div>
+                            </div>
+                        </section>
+
+                    </div>
+                </section>
+
+                <!-- Tab 3: Process (angle → k∥) -->
+                <section class="tab-panel" style="padding:0">
+                    <div class="suite-body suite-body--triple" style="min-height:78vh">
+
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">In-plane → k∥</h2>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <fieldset class="fieldset">
+                                    <legend>Dataset</legend>
+                                    <div class="inline">
+                                        <select class="field" id="ap-dataset">
+                                            <option value="">No spectroscopy data</option>
+                                        </select>
+                                        <button type="button" class="btn" id="ap-refresh">&#128260;</button>
+                                    </div>
+                                    <p class="hint" id="ap-meta">Load data in Data Viewer first.</p>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>Γ center (click/drag on raw)</legend>
+                                    <div class="form-row">
+                                        <label for="ap-center">Center:</label>
+                                        <input class="field" id="ap-center" type="number" step="any" value="0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-beta-center">β center:</label>
+                                        <input class="field" id="ap-beta-center" type="number" step="any" value="0">
+                                    </div>
+                                    <button type="button" class="btn btn--block" id="ap-suggest">Suggest center (brightness)</button>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>Conversion</legend>
+                                    <div class="form-row">
+                                        <label for="ap-hv">Photon (eV):</label>
+                                        <input class="field" id="ap-hv" type="number" min="5" max="2000" step="0.1" value="80">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-phi">Work Φ (eV):</label>
+                                        <input class="field" id="ap-phi" type="number" min="0" max="10" step="0.1" value="4.5">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-dpu">deg / unit:</label>
+                                        <input class="field" id="ap-dpu" type="number" min="0.0001" max="10" step="any" value="1">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-beta-dpu">β deg / unit:</label>
+                                        <input class="field" id="ap-beta-dpu" type="number" min="0.0001" max="10" step="any" value="1">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-emode">Energy mode:</label>
+                                        <select class="field" id="ap-emode">
+                                            <option value="auto">auto</option>
+                                            <option value="binding_negative">binding (E≤0 at EF)</option>
+                                            <option value="binding_positive">binding (E≥0 below EF)</option>
+                                            <option value="kinetic">kinetic</option>
+                                        </select>
+                                    </div>
+                                </fieldset>
+
+                                <fieldset class="fieldset">
+                                    <legend>BZ overlay</legend>
+                                    <div class="inline">
+                                        <select class="field" id="ap-crystal">
+                                            <option value="">No crystal</option>
+                                        </select>
+                                        <button type="button" class="btn" id="ap-crystal-refresh">&#128260;</button>
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-h">h</label>
+                                        <input class="field" id="ap-h" type="number" step="1" value="0">
+                                        <label for="ap-k">k</label>
+                                        <input class="field" id="ap-k" type="number" step="1" value="0">
+                                        <label for="ap-l">l</label>
+                                        <input class="field" id="ap-l" type="number" step="1" value="1">
+                                    </div>
+                                    <label class="hint" style="display:flex;gap:8px;align-items:center">
+                                        <input type="checkbox" id="ap-bz-toggle"> Overlay projected surface BZ
+                                    </label>
+                                </fieldset>
+
+                                <div class="form-row">
+                                    <label for="ap-store">Store as:</label>
+                                    <input class="field" id="ap-store" type="text" placeholder="name_k" value="">
+                                </div>
+                                <button type="button" class="btn btn--primary btn--block" id="ap-apply">Apply → workspace</button>
+                                <p class="hint" id="ap-status">Click the raw map to set Γ. Preview updates on the right.</p>
+
+                                <fieldset class="fieldset" style="margin-top:16px;opacity:0.7">
+                                    <legend>Photon → kz (next)</legend>
+                                    <p class="hint">Vo slider + perpendicular BZ will land in a follow-up module on this tab.</p>
+                                </fieldset>
+                            </div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Raw (set Γ)</h2>
+                                <span class="badge" id="ap-raw-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px;display:flex;flex-direction:column;gap:8px">
+                                <div class="viewport" id="ap-raw" style="flex:1 1 auto;min-height:320px"></div>
+                                <input type="range" id="ap-fixed-slider" min="0" max="0" value="0" disabled style="width:100%">
+                                <p class="hint" id="ap-fixed-label">No extra axis</p>
+                            </div>
+                        </section>
+
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">k∥ preview</h2>
+                                <span class="badge" id="ap-k-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="ap-k" style="min-height:360px;height:100%"></div>
                             </div>
                         </section>
 

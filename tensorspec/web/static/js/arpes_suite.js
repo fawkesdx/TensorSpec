@@ -929,3 +929,392 @@ el("ar-be-slider").addEventListener("input", () => {
 
 refreshDatasets();
 refreshCrystals().catch(() => {});
+
+/* ---- Process tab: in-plane → k∥ ---- */
+
+const processState = {
+    roles: null,
+    rawAxes: null,
+    rawHeader: null,
+    fixedAxis: null,
+    bzPolygon: null,
+    rawViewer: null,
+    kViewer: null,
+    debounce: null,
+};
+
+function processEnsureViewers() {
+    if (!processState.rawViewer) {
+        processState.rawViewer = new ImageViewer(el("ap-raw"), {
+            onCrosshair: (xi, yi) => {
+                if (!processState.rawHeader || !processState.roles) return;
+                const roles = processState.roles;
+                const xIdx = processState.viewX;
+                const yIdx = processState.viewY;
+                const xAxis = processState.rawHeader.x_axis;
+                const yAxis = processState.rawHeader.y_axis;
+                if (xIdx === roles.angle_axis) {
+                    el("ap-center").value = String(xAxis[xi]);
+                } else if (yIdx === roles.angle_axis) {
+                    el("ap-center").value = String(yAxis[yi]);
+                }
+                if (roles.beta_axis != null) {
+                    if (xIdx === roles.beta_axis) {
+                        el("ap-beta-center").value = String(xAxis[xi]);
+                    } else if (yIdx === roles.beta_axis) {
+                        el("ap-beta-center").value = String(yAxis[yi]);
+                    }
+                }
+                scheduleProcessPreview();
+            },
+        });
+    }
+    if (!processState.kViewer) {
+        processState.kViewer = new ImageViewer(el("ap-k"));
+    }
+}
+
+async function refreshProcessDatasets() {
+    const listing = await TensorSpecAPI.listItems();
+    const tensors = listing.items.filter((item) => item.type === "Spectroscopy DataTree");
+    const select = el("ap-dataset");
+    const previous = select.value;
+    select.innerHTML = "";
+    if (!tensors.length) {
+        select.innerHTML = '<option value="">No spectroscopy data</option>';
+        return;
+    }
+    tensors.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.name;
+        option.textContent = item.name;
+        select.appendChild(option);
+    });
+    if ([...select.options].some((o) => o.value === previous)) select.value = previous;
+}
+
+async function refreshProcessCrystals() {
+    const listing = await TensorSpecAPI.listItems();
+    const crystals = listing.items.filter(
+        (item) => /crystal/i.test(item.type) || /structure/i.test(item.type)
+    );
+    const select = el("ap-crystal");
+    const previous = select.value;
+    select.innerHTML = "";
+    if (!crystals.length) {
+        select.innerHTML = '<option value="">No crystal</option>';
+        return;
+    }
+    crystals.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.name;
+        option.textContent = item.name;
+        select.appendChild(option);
+    });
+    if ([...select.options].some((o) => o.value === previous)) select.value = previous;
+}
+
+function processViewAxes(roles) {
+    // Prefer angle on X and energy on Y for cuts; for maps prefer angle × beta.
+    let xIdx = roles.angle_axis;
+    let yIdx = roles.energy_axis != null ? roles.energy_axis : 0;
+    if (roles.beta_axis != null && roles.energy_axis != null) {
+        // Fermi-style cube: show angle × beta at fixed energy via slider.
+        xIdx = roles.angle_axis;
+        yIdx = roles.beta_axis;
+    }
+    if (xIdx === yIdx) {
+        yIdx = xIdx === 0 ? 1 : 0;
+    }
+    return { xIdx, yIdx };
+}
+
+function processFixed(roles, xIdx, yIdx) {
+    const fixed = {};
+    const shape = roles.shape;
+    const slider = el("ap-fixed-slider");
+    for (let i = 0; i < shape.length; i++) {
+        if (i === xIdx || i === yIdx) continue;
+        if (!slider.disabled && processState.fixedAxis === i) {
+            fixed[i] = Number(slider.value);
+        } else {
+            fixed[i] = Math.floor(shape[i] / 2);
+        }
+    }
+    return fixed;
+}
+
+function convertPayload() {
+    const roles = processState.roles;
+    const { xIdx, yIdx } = processViewAxes(roles);
+    processState.viewX = xIdx;
+    processState.viewY = yIdx;
+    return {
+        angle_axis: roles.angle_axis,
+        energy_axis: roles.energy_axis,
+        beta_axis: roles.beta_axis,
+        center: Number(el("ap-center").value),
+        beta_center: Number(el("ap-beta-center").value),
+        deg_per_unit: Number(el("ap-dpu").value),
+        beta_deg_per_unit: Number(el("ap-beta-dpu").value),
+        photon_energy: Number(el("ap-hv").value),
+        work_function: Number(el("ap-phi").value),
+        energy_mode: el("ap-emode").value,
+        x_idx: xIdx,
+        y_idx: yIdx,
+        fixed: processFixed(roles, xIdx, yIdx),
+        max_points: 512,
+    };
+}
+
+function scheduleProcessPreview() {
+    clearTimeout(processState.debounce);
+    processState.debounce = setTimeout(() => {
+        updateProcessPreview().catch((err) => {
+            el("ap-status").textContent = err.message;
+        });
+    }, 120);
+}
+
+async function loadProcessDataset(name) {
+    if (!name) return;
+    processEnsureViewers();
+    const roles = await TensorSpecAPI.processRoles(name);
+    processState.roles = roles;
+    el("ap-meta").textContent = `${roles.data_type} · ${roles.shape.join("×")} · ${roles.labels.join(", ")}`;
+    el("ap-center").value = String(roles.center);
+    el("ap-beta-center").value = String(roles.beta_center);
+    el("ap-dpu").value = String(roles.deg_per_unit);
+    el("ap-beta-dpu").value = String(roles.beta_deg_per_unit);
+    el("ap-hv").value = String(roles.photon_energy);
+    el("ap-phi").value = String(roles.work_function);
+    el("ap-store").value = `${name}_k`;
+    el("ap-raw-badge").textContent = name;
+
+    const { xIdx, yIdx } = processViewAxes(roles);
+    processState.viewX = xIdx;
+    processState.viewY = yIdx;
+
+    // Extra-axis slider (usually Energy for Fermi maps)
+    const slider = el("ap-fixed-slider");
+    let fixedDim = null;
+    for (let i = 0; i < roles.shape.length; i++) {
+        if (i !== xIdx && i !== yIdx) {
+            fixedDim = i;
+            break;
+        }
+    }
+    if (fixedDim == null) {
+        slider.disabled = true;
+        slider.min = 0;
+        slider.max = 0;
+        el("ap-fixed-label").textContent = "No extra axis";
+    } else {
+        slider.disabled = false;
+        slider.min = 0;
+        slider.max = roles.shape[fixedDim] - 1;
+        slider.value = Math.floor(roles.shape[fixedDim] / 2);
+        el("ap-fixed-label").textContent = `Fixed ${roles.labels[fixedDim]} index`;
+        processState.fixedAxis = fixedDim;
+    }
+
+    const fixed = processFixed(roles, xIdx, yIdx);
+    const raw = await TensorSpecAPI.tensorSlice(name, {
+        x_idx: xIdx,
+        y_idx: yIdx,
+        fixed,
+        max_points: 512,
+    });
+    processState.rawHeader = raw.header;
+    processState.rawViewer.setData(raw.header, raw.values);
+    const centerXi = nearestIndex(raw.header.x_axis, Number(el("ap-center").value));
+    processState.rawViewer.setCrosshair(centerXi, Math.floor(raw.header.shape[0] / 2));
+    processState.rawViewer.setOverlays({
+        vlines: xIdx === roles.angle_axis ? [Number(el("ap-center").value)] : [],
+        hlines: yIdx === roles.angle_axis ? [Number(el("ap-center").value)] : [],
+    });
+    await updateProcessPreview();
+}
+
+async function updateProcessPreview() {
+    const name = el("ap-dataset").value;
+    if (!name || !processState.roles) return;
+    processEnsureViewers();
+    const payload = convertPayload();
+    const preview = await TensorSpecAPI.processInplanePreview(name, payload);
+    processState.kViewer.setData(preview.header, preview.values);
+    el("ap-k-badge").textContent = `Eₖ ref ${Number(preview.header.e_kin_ref).toFixed(2)} eV`;
+
+    // Center marker on raw
+    const roles = processState.roles;
+    const overlays = {
+        vlines: [],
+        hlines: [],
+        polygons: [],
+    };
+    if (processState.viewX === roles.angle_axis) overlays.vlines.push(Number(el("ap-center").value));
+    if (processState.viewY === roles.angle_axis) overlays.hlines.push(Number(el("ap-center").value));
+    if (roles.beta_axis != null) {
+        if (processState.viewX === roles.beta_axis) overlays.vlines.push(Number(el("ap-beta-center").value));
+        if (processState.viewY === roles.beta_axis) overlays.hlines.push(Number(el("ap-beta-center").value));
+    }
+    processState.rawViewer.setOverlays(overlays);
+
+    const kOverlays = { polygons: [], vlines: [0], hlines: roles.beta_axis != null ? [0] : [] };
+    if (el("ap-bz-toggle").checked && processState.bzPolygon) {
+        const poly = processState.bzPolygon;
+        // Map BX polygon onto current view axes (kx on X or Y).
+        const pts = poly.kx.map((kx, i) => {
+            const ky = poly.ky[i];
+            let x = kx;
+            let y = ky;
+            if (preview.header.x_label === "ky") x = ky;
+            if (preview.header.y_label === "kx") y = kx;
+            if (preview.header.x_label === "kx") x = kx;
+            if (preview.header.y_label === "ky") y = ky;
+            // Cuts: only kx on one axis — draw vertical BZ edge span as polygon in kx only is weak;
+            // still draw full polygon projected to view: use kx vs ky when both present, else kx vs mid-y.
+            if (preview.header.y_label === "Energy" || preview.header.x_label === "Energy") {
+                const energyAxis = preview.header.y_label.includes("Energy")
+                    ? preview.header.y_axis
+                    : preview.header.x_axis;
+                const midE = energyAxis[Math.floor(energyAxis.length / 2)];
+                if (preview.header.x_label === "kx") return { x: kx, y: midE };
+                if (preview.header.y_label === "kx") return { x: midE, y: kx };
+            }
+            return { x, y };
+        });
+        kOverlays.polygons = [pts];
+    }
+    processState.kViewer.setOverlays(kOverlays);
+    el("ap-status").textContent = `Preview · mode ${preview.header.energy_mode || "auto"}`;
+}
+
+async function loadBZPolygon() {
+    const crystal = el("ap-crystal").value;
+    if (!crystal) {
+        processState.bzPolygon = null;
+        return;
+    }
+    processState.bzPolygon = await TensorSpecAPI.processSurfaceBZ({
+        crystal_name: crystal,
+        h: Number(el("ap-h").value),
+        k: Number(el("ap-k").value),
+        l: Number(el("ap-l").value),
+    });
+}
+
+el("ap-refresh").addEventListener("click", () => {
+    refreshProcessDatasets().catch((e) => {
+        el("ap-status").textContent = e.message;
+    });
+});
+el("ap-crystal-refresh").addEventListener("click", () => {
+    refreshProcessCrystals().catch((e) => {
+        el("ap-status").textContent = e.message;
+    });
+});
+el("ap-dataset").addEventListener("change", () => {
+    loadProcessDataset(el("ap-dataset").value).catch((e) => {
+        el("ap-status").textContent = e.message;
+    });
+});
+["ap-center", "ap-beta-center", "ap-hv", "ap-phi", "ap-dpu", "ap-beta-dpu", "ap-emode"].forEach((id) => {
+    el(id).addEventListener("input", scheduleProcessPreview);
+    el(id).addEventListener("change", scheduleProcessPreview);
+});
+el("ap-fixed-slider").addEventListener("input", async () => {
+    const name = el("ap-dataset").value;
+    if (!name || !processState.roles) return;
+    try {
+        const roles = processState.roles;
+        const { xIdx, yIdx } = processViewAxes(roles);
+        const fixed = processFixed(roles, xIdx, yIdx);
+        const raw = await TensorSpecAPI.tensorSlice(name, {
+            x_idx: xIdx,
+            y_idx: yIdx,
+            fixed,
+            max_points: 512,
+        });
+        processState.rawHeader = raw.header;
+        processState.rawViewer.setData(raw.header, raw.values);
+        scheduleProcessPreview();
+    } catch (err) {
+        el("ap-status").textContent = err.message;
+    }
+});
+el("ap-suggest").addEventListener("click", async () => {
+    const name = el("ap-dataset").value;
+    if (!name || !processState.roles) return;
+    try {
+        const roles = processState.roles;
+        const { xIdx, yIdx } = processViewAxes(roles);
+        const hint = await TensorSpecAPI.processSuggestCenter(name, {
+            angle_axis: roles.angle_axis,
+            energy_axis: roles.energy_axis,
+            fixed: processFixed(roles, xIdx, yIdx),
+        });
+        el("ap-center").value = String(hint.value);
+        el("ap-status").textContent = `Suggested center ${hint.value.toFixed(4)} (${hint.method}) — fine-tune by drag`;
+        scheduleProcessPreview();
+    } catch (err) {
+        el("ap-status").textContent = err.message;
+    }
+});
+el("ap-bz-toggle").addEventListener("change", async () => {
+    try {
+        if (el("ap-bz-toggle").checked) await loadBZPolygon();
+        scheduleProcessPreview();
+    } catch (err) {
+        el("ap-status").textContent = err.message;
+        el("ap-bz-toggle").checked = false;
+    }
+});
+["ap-crystal", "ap-h", "ap-k", "ap-l"].forEach((id) => {
+    el(id).addEventListener("change", async () => {
+        if (!el("ap-bz-toggle").checked) return;
+        try {
+            await loadBZPolygon();
+            scheduleProcessPreview();
+        } catch (err) {
+            el("ap-status").textContent = err.message;
+        }
+    });
+});
+el("ap-apply").addEventListener("click", async () => {
+    const name = el("ap-dataset").value;
+    if (!name) return;
+    el("ap-apply").disabled = true;
+    try {
+        const payload = {
+            ...convertPayload(),
+            store_as: el("ap-store").value,
+            also_write_processed: true,
+        };
+        const result = await TensorSpecAPI.processInplaneApply(name, payload);
+        el("ap-status").textContent = `Applied as ${result.name} (${result.shape.join("×")})${
+            result.wrote_processed ? " · wrote /processed" : ""
+        }`;
+        await refreshDatasets();
+        await refreshProcessDatasets();
+    } catch (err) {
+        el("ap-status").textContent = err.message;
+    } finally {
+        el("ap-apply").disabled = false;
+    }
+});
+
+// Load process lists when the Process tab is selected
+el("t3").addEventListener("change", () => {
+    if (!el("t3").checked) return;
+    processEnsureViewers();
+    refreshProcessDatasets()
+        .then(() => refreshProcessCrystals())
+        .then(() => {
+            if (el("ap-dataset").value) return loadProcessDataset(el("ap-dataset").value);
+            return null;
+        })
+        .catch((e) => {
+            el("ap-status").textContent = e.message;
+        });
+});

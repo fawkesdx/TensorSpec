@@ -66,3 +66,40 @@ class DataTreeBuilder:
             nodes["/raw/motors"] = xr.Dataset(motor_vars)
 
         return DataTree.from_dict(nodes)
+
+    @staticmethod
+    def dataset_from_tensor(tensor_data: TensorData) -> xr.Dataset:
+        """Build a single Dataset (no tree) for writing into /processed."""
+        coords = {
+            label: (label, ax, {"units": unit})
+            for label, ax, unit in zip(tensor_data.labels, tensor_data.axes, tensor_data.units)
+        }
+        da = xr.DataArray(
+            data=tensor_data.value,
+            coords=coords,
+            dims=tensor_data.labels,
+            name="intensity",
+            attrs={"long_name": tensor_data.data_type},
+        )
+        metadata = dict(tensor_data.metadata or {})
+        metadata.pop("motors", None)
+        ds = xr.Dataset({"data": da})
+        ds.attrs.update(metadata)
+        return ds
+
+    @staticmethod
+    def write_processed(tree: DataTree, tensor_data: TensorData) -> DataTree:
+        """Replace /processed on an existing tree and append a history line."""
+        ds = DataTreeBuilder.dataset_from_tensor(tensor_data)
+        tree["processed"] = ds
+
+        history_node = tree["history"]
+        history = history_node.to_dataset() if hasattr(history_node, "to_dataset") else history_node.ds
+        log = list(history.attrs.get("log") or [])
+        log.append(
+            f"[{datetime.datetime.now().time()}] Wrote /processed ({tensor_data.data_type})"
+        )
+        history = history.copy()
+        history.attrs["log"] = log
+        tree["history"] = history
+        return tree

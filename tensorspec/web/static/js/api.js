@@ -102,6 +102,55 @@ const TensorSpecAPI = (() => {
             if (logFile) form.append("log", logFile);
             return upload("/api/arpes/load", form);
         },
+        processRoles: (name) =>
+            request(`/api/arpes/process/${encodeURIComponent(name)}/roles`),
+        processSuggestCenter: (name, payload) =>
+            request(`/api/arpes/process/${encodeURIComponent(name)}/suggest-center`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        processInplanePreview: async (name, payload) => {
+            const response = await fetch(
+                `/api/arpes/process/${encodeURIComponent(name)}/inplane/preview`,
+                {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                }
+            );
+            if (!response.ok) {
+                let detail = `${response.status} ${response.statusText}`;
+                try {
+                    const body = await response.json();
+                    if (body.detail) detail = body.detail;
+                } catch (err) {
+                    /* binary error */
+                }
+                throw new Error(detail);
+            }
+            const buffer = await response.arrayBuffer();
+            const headerLength = new DataView(buffer).getUint32(0, true);
+            const header = JSON.parse(
+                new TextDecoder().decode(new Uint8Array(buffer, 4, headerLength))
+            );
+            const values = new Float32Array(
+                buffer,
+                4 + headerLength,
+                header.shape[0] * header.shape[1]
+            );
+            return { header, values };
+        },
+        processInplaneApply: (name, payload) =>
+            request(`/api/arpes/process/${encodeURIComponent(name)}/inplane/apply`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        processSurfaceBZ: (payload) =>
+            request("/api/arpes/process/surface-bz", {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
         tensorAxes: (name) =>
             request(`/api/arpes/${encodeURIComponent(name)}/axes`),
 
