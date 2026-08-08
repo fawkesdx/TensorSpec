@@ -832,7 +832,7 @@ if (dom.qeSlabMode) {
 }
 if (dom.qeBackend) {
     dom.qeBackend.addEventListener("change", () => {
-        if (lastSolversInfo) applyQueueEnable(lastSolversInfo);
+        applyQueueEnable(lastSolversInfo);
     });
 }
 dom.qeGenerate.addEventListener("click", generateInputs);
