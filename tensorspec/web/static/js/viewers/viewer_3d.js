@@ -51,6 +51,53 @@ export function bondColor() {
   return BOND_COLOR;
 }
 
+function cross(u, v) {
+  return [
+    u[1] * v[2] - u[2] * v[1],
+    u[2] * v[0] - u[0] * v[2],
+    u[0] * v[1] - u[1] * v[0],
+  ];
+}
+function sub(u, v) { return [u[0]-v[0], u[1]-v[1], u[2]-v[2]]; }
+function add(u, v) { return [u[0]+v[0], u[1]+v[1], u[2]+v[2]]; }
+function scale(u, s) { return [u[0]*s, u[1]*s, u[2]*s]; }
+function dot(u, v) { return u[0]*v[0] + u[1]*v[1] + u[2]*v[2]; }
+function norm(u) {
+  const n = Math.hypot(u[0], u[1], u[2]);
+  return n < 1e-12 ? null : scale(u, 1 / n);
+}
+
+/** @returns {number[]|null} unit normal or null if invalid */
+export function millerNormal(cell, h, k, l) {
+  if (h === 0 && k === 0 && l === 0) return null;
+  const a = cell[0], b = cell[1], c = cell[2];
+  const aS = cross(b, c), bS = cross(c, a), cS = cross(a, b);
+  return norm(add(add(scale(aS, h), scale(bS, k)), scale(cS, l)));
+}
+
+export function planeOffsetFromCenter(cell, normal, depthFrac) {
+  const a = cell[0], b = cell[1], c = cell[2];
+  const corners = [
+    [0,0,0], a, b, c,
+    add(a,b), add(a,c), add(b,c), add(add(a,b),c),
+  ];
+  const center = scale(corners.reduce((s, p) => add(s, p), [0,0,0]), 1/8);
+  const projs = corners.map((p) => dot(sub(p, center), normal));
+  const half = 0.5 * (Math.max(...projs) - Math.min(...projs));
+  const frac = Math.max(-1, Math.min(1, depthFrac));
+  return scale(normal, frac * half);
+}
+
+export function planeSize(cell) {
+  const a = cell[0], b = cell[1], c = cell[2];
+  const diags = [
+    Math.hypot(...add(a,b)),
+    Math.hypot(...add(a,c)),
+    Math.hypot(...add(b,c)),
+  ];
+  return 1.2 * Math.max(...diags);
+}
+
 export class CrystalViewer {
   constructor(container) {
     this.container = container;
@@ -95,6 +142,9 @@ export class CrystalViewer {
 
     this._atomIndexByMesh = new WeakMap();
     this.geometry = null;
+
+    this._cut = { h: 0, k: 0, l: 1, depthFrac: 0, color: "#00ffff", visible: false };
+    this._cutMesh = null;
 
     this._resize = this._resize.bind(this);
     window.addEventListener("resize", this._resize);
@@ -156,6 +206,7 @@ export class CrystalViewer {
     if (this._moireEnvelope) this._drawMoire(this._moireEnvelope, center);
     if (this._bzData) this._drawBZ(this._bzData, center);
 
+    this._syncCutPlane();
     if (frame) this.frameToContent();
   }
 
@@ -535,5 +586,43 @@ export class CrystalViewer {
   legend() {
     if (!this.geometry) return [];
     return this.geometry.elements.map((el) => ({ element: el, color: elementColor(el) }));
+  }
+
+  _syncCutPlane() {
+    if (this._cutMesh) {
+      this.content.remove(this._cutMesh);
+      this._cutMesh.geometry?.dispose();
+      this._cutMesh.material?.dispose();
+      this._cutMesh = null;
+    }
+    if (!this._cut.visible || !this.geometry) return;
+    const { h, k, l, depthFrac, color } = this._cut;
+    const n = millerNormal(this.geometry.cell, h, k, l);
+    if (!n) return;
+    const offset = planeOffsetFromCenter(this.geometry.cell, n, depthFrac);
+    const size = planeSize(this.geometry.cell);
+    const geom = new THREE.PlaneGeometry(size, size);
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.25,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const mesh = new THREE.Mesh(geom, mat);
+    mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(...n));
+    mesh.position.set(...offset);
+    this._cutMesh = mesh;
+    this.content.add(mesh);
+  }
+
+  setCutPlane({ h, k, l, depthFrac, color, visible } = {}) {
+    if (h !== undefined) this._cut.h = Number(h) || 0;
+    if (k !== undefined) this._cut.k = Number(k) || 0;
+    if (l !== undefined) this._cut.l = Number(l) || 0;
+    if (depthFrac !== undefined) this._cut.depthFrac = Number(depthFrac) || 0;
+    if (color !== undefined) this._cut.color = color;
+    if (visible !== undefined) this._cut.visible = Boolean(visible);
+    this._syncCutPlane();
   }
 }
