@@ -13,8 +13,8 @@ note says otherwise. Deferred items stay unchecked.
       (PEEM / XAS / Transport / ML suites remain shells only — see Grand App below).
     - [x] Slice 1 — Session backbone: FastAPI app, per-session workspace, live variable tree
     - [x] Slice 2a — Crystal Suite Tab 1: CIF load, geometry as JSON, three.js viewport
-    - [x] Slice 2b — Crystal Suite Tabs 2-4: CDW modulator, stack & twist, Brillouin zone
-          (includes bulk vdW / HKL exfoliator on Tab 3)
+	- [x] Slice 2b — Crystal Suite Tabs 2-4: CDW modulator, stack & twist, Brillouin zone
+          (includes bulk vdW / HKL exfoliator on Tab 3; MLIP relax + CIF export + workspace push)
     - [x] Slice 3a — ARPES viewer: server-side slicing, crosshair, EDC/MDC/orthogonal curves
     - [x] Slice 3b — ARPES viewer extras: multi-panel snap grid, cross-dataset crosshair sync,
           profile export (CSV/PDF), and the matrix-element simulator tab
@@ -71,7 +71,7 @@ Grand App
 	- [x] Draw polyhedra/planes connecting atoms instead of just sticks (deletable).
 	- [x] CDW Mode: Define atom shifts (dx, dy, dz) and propagate simulated distortions.
 	- [x] Brillouin Zone Engine: Bulk BZ, Cleaving surface BZ, kz slicing, and surface termination projections. (Completed: Tab 4 is fully operational, generating the Wigner-Seitz cell, the hovering surface plane, and exporting them natively.)
-	- [ ] ML Interatomic Potential (MLIP) Relaxation: Fast real-space atomic force relaxation for stacked/cleaved heterostructures (CHGNet / M3GNet integration via matgl).
+	- [x] ML Interatomic Potential (MLIP) Relaxation: Tab 3 stack relax via pretrained CHGNet / M3GNet (`matgl`); CIF download + workspace push/rename for DFT Suite.
 - DFT Suite
 	- [x] Establish Data Pipeline: Pull crystal structure from `workspace.py` (drawn from Crystal Viewer Suite) to perform bulk band structure calculations.
 	- [x] Core Math: High-Symmetry K-Path Generator (calculate k-points between high symmetry nodes like Gamma, M, K).

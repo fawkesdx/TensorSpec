@@ -496,6 +496,25 @@ class StackRequest(BaseModel):
     store_as: str = Field(default="heterostructure", max_length=64)
     bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
     show_bonds: bool = True
+    vacuum: float = Field(default=20.0, ge=5, le=80)
+
+
+class RelaxRequest(BaseModel):
+    """MLIP ionic relaxation for a stacked (or any) crystal in the workspace."""
+
+    model: str = Field(default="chgnet", max_length=32)
+    fmax: float = Field(default=0.1, gt=0, le=5)
+    steps: int = Field(default=200, ge=1, le=2000)
+    relax_cell: bool = False
+    store_as: str = Field(default="", max_length=64)
+    show_bonds: bool = True
+    bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
+
+
+class PushCrystalRequest(BaseModel):
+    """Copy/rename the active structure under a new workspace name (for DFT)."""
+
+    store_as: str = Field(min_length=1, max_length=64)
 
 
 class MoireRequest(BaseModel):

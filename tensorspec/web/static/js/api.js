@@ -94,6 +94,18 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
+        crystalMlipModels: () => request("/api/crystal/mlip/models"),
+        crystalRelax: (name, payload) =>
+            request(`/api/crystal/${encodeURIComponent(name)}/relax`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        crystalPush: (name, storeAs) =>
+            request(`/api/crystal/${encodeURIComponent(name)}/push`, {
+                method: "POST",
+                body: JSON.stringify({ store_as: storeAs }),
+            }),
+        crystalCifUrl: (name) => `/api/crystal/${encodeURIComponent(name)}/cif`,
 
         loadArpes: (file, { name = "", logFile = null } = {}) => {
             const form = new FormData();

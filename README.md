@@ -51,6 +51,7 @@ A dedicated module for attaching ML routines to experimental data:
 The user interface is a browser application served by FastAPI (per-session workspace). There is no Qt / PySide desktop GUI.
 * **Workspace Browser:** Central explorer for active data variables, metadata inspector, and suite launcher ribbon.
 * **Suite Panels:** Crystal, DFT, and ARPES suites are live end-to-end (HTML → API → `core/`). PEEM / XAS / Transport / ML shells exist; engines still pending.
+* **Crystal Tab 3:** stack/twist/exfoliate; optional **MLIP relax** (CHGNet / M3GNet via `matgl`); **CIF download**; **push/rename** into the session workspace for DFT.
 * **Static-First front end:** plain HTML/CSS/vanilla JS (no bundler). Physics stays in Python.
 
 ## Running the App
