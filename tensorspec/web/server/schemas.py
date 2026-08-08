@@ -476,6 +476,7 @@ class GeometryRequest(BaseModel):
     nx: int = Field(default=1, ge=1, le=20)
     ny: int = Field(default=1, ge=1, le=20)
     nz: int = Field(default=1, ge=1, le=20)
+    basis: Literal["conventional", "primitive"] = "conventional"
     bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
     show_bonds: bool = True
 
@@ -497,6 +498,7 @@ class GeometryRequest(BaseModel):
 
 class Atom(BaseModel):
     element: str
+    label: str
     position: list[float]
     radius: float
 
