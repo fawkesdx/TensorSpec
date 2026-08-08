@@ -8,15 +8,43 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/OrbitControls.js";
 
 const CPK_COLORS = {
-  H: "#FFFFFF", C: "#333333", N: "#2233FF", O: "#FF2200",
-  Te: "#FF8C00", Fe: "#E06633", Ta: "#B041FF", Ir: "#0080FF",
-  Nb: "#7A378B", W: "#4682B4", Mo: "#5F9EA0",
+  H:"#FFFFFF", He:"#D9FFFF", Li:"#CC80FF", Be:"#C2FF00", B:"#FFB5B5",
+  C:"#909090", N:"#3050F8", O:"#FF0D0D", F:"#90E050", Ne:"#B3E3F5",
+  Na:"#AB5CF2", Mg:"#8AFF00", Al:"#BFA6A6", Si:"#F0C8A0", P:"#FF8000",
+  S:"#FFFF30", Cl:"#1FF01F", Ar:"#80D1E3", K:"#8F40D4", Ca:"#3DFF00",
+  Sc:"#E6E6E6", Ti:"#BFC2C7", V:"#A6A6AB", Cr:"#8A99C7", Mn:"#9C7AC7",
+  Fe:"#E06633", Co:"#F090A0", Ni:"#50D050", Cu:"#C88033", Zn:"#7D80B0",
+  Ga:"#C28F8F", Ge:"#668F8F", As:"#BD80E3", Se:"#FFA100", Br:"#A62929",
+  Kr:"#5CB8D1", Rb:"#702EB0", Sr:"#00FF00", Y:"#94FFFF", Zr:"#94E0E0",
+  Nb:"#73C2C9", Mo:"#54B5B5", Tc:"#3B9E9E", Ru:"#248F8F", Rh:"#0A7D8C",
+  Pd:"#006985", Ag:"#C0C0C0", Cd:"#FFD98F", In:"#A67573", Sn:"#668080",
+  Sb:"#9E63B5", Te:"#D47A00", I:"#940094", Xe:"#429EB0", Cs:"#57178F",
+  Ba:"#00C900", La:"#70D4FF", Ce:"#FFFFC7", Pr:"#D9FFC7", Nd:"#C7FFC7",
+  Pm:"#A3FFC7", Sm:"#8FFFC7", Eu:"#61FFC7", Gd:"#45FFC7", Tb:"#30FFC7",
+  Dy:"#1FFFC7", Ho:"#00FF9C", Er:"#00E675", Tm:"#00D452", Yb:"#00BF38",
+  Lu:"#00AB24", Hf:"#4DC2FF", Ta:"#4DA6FF", W:"#2194D6", Re:"#267DAB",
+  Os:"#266696", Ir:"#175487", Pt:"#D0D0E0", Au:"#FFD123", Hg:"#B8B8D0",
+  Tl:"#A6544D", Pb:"#575961", Bi:"#9E4FB5", Po:"#AB5C00", At:"#754F45",
+  Rn:"#428296", Fr:"#420066", Ra:"#007D00", Ac:"#70ABFA", Th:"#00BAFF",
+  Pa:"#00A1FF", U:"#008FFF", Np:"#0080FF", Pu:"#006BFF", Am:"#545CF2",
+  Cm:"#785CE3", Bk:"#8A4FE3", Cf:"#A136D4", Es:"#B31FD4", Fm:"#B31FBA",
+  Md:"#B30DA6", No:"#BD0D87", Lr:"#C70066", Rf:"#CC0059", Db:"#D1004F",
+  Sg:"#D90045", Bh:"#E00038", Hs:"#E6002E", Mt:"#EB0026",
 };
-const FALLBACK_COLOR = "#008080";
-const BOND_COLOR = "#d3d3d3";
+const FALLBACK_COLOR = "#808080";
+let BOND_COLOR = "#d3d3d3";
+const colorOverrides = Object.create(null);
 
 export function elementColor(symbol) {
-  return CPK_COLORS[symbol] || FALLBACK_COLOR;
+  return colorOverrides[symbol] || CPK_COLORS[symbol] || FALLBACK_COLOR;
+}
+
+export function setGlobalElementColor(symbol, hex) {
+  colorOverrides[symbol] = hex;
+}
+
+export function setGlobalBondColor(hex) {
+  BOND_COLOR = hex;
 }
 
 export class CrystalViewer {
@@ -48,6 +76,20 @@ export class CrystalViewer {
 
     this.atomScale = 0.5;
     this.bondRadius = 0.1;
+    this.showAxes = true;
+    this._axes = new THREE.AxesHelper(5);
+    this.scene.add(this._axes);
+
+    this._raycaster = new THREE.Raycaster();
+    this._pointer = new THREE.Vector2();
+    this._tooltip = document.createElement("div");
+    this._tooltip.className = "crystal-atom-tooltip";
+    this._tooltip.style.cssText = "position:absolute;pointer-events:none;display:none;padding:4px 8px;background:#111;color:#eee;font:12px/1.3 sans-serif;border-radius:4px;z-index:5;";
+    container.style.position = container.style.position || "relative";
+    container.appendChild(this._tooltip);
+    this.renderer.domElement.addEventListener("pointermove", (e) => this._onPointerMove(e));
+
+    this._atomIndexByMesh = new WeakMap();
     this.geometry = null;
 
     this._resize = this._resize.bind(this);
@@ -270,8 +312,28 @@ export class CrystalViewer {
       });
 
       mesh.instanceMatrix.needsUpdate = true;
+      this._atomIndexByMesh.set(mesh, entries.map((e) => e.index));
       this.content.add(mesh);
     }
+  }
+
+  _onPointerMove(event) {
+    if (!this.geometry) { this._tooltip.style.display = "none"; return; }
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this._pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    this._pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this._raycaster.setFromCamera(this._pointer, this.camera);
+    const meshes = [];
+    this.content.traverse((o) => { if (o.isInstancedMesh && this._atomIndexByMesh.has(o)) meshes.push(o); });
+    const hits = this._raycaster.intersectObjects(meshes, false);
+    if (!hits.length) { this._tooltip.style.display = "none"; return; }
+    const hit = hits[0];
+    const indices = this._atomIndexByMesh.get(hit.object);
+    const atom = this.geometry.atoms[indices[hit.instanceId]];
+    this._tooltip.textContent = `${atom.label} (${atom.element})`;
+    this._tooltip.style.display = "block";
+    this._tooltip.style.left = `${event.clientX - rect.left + 12}px`;
+    this._tooltip.style.top = `${event.clientY - rect.top + 12}px`;
   }
 
   /* Unit cylinders on +Y, oriented per bond, so all bonds share one geometry. */
@@ -362,6 +424,73 @@ export class CrystalViewer {
     this.atomScale = scale;
     if (!this.geometry) return;
     this.render(this.geometry, { ...(this._lastOptions || {}), frame: false });
+  }
+
+  setBondRadius(r) {
+    this.bondRadius = r;
+    if (this.geometry) this.render(this.geometry, { ...(this._lastOptions || {}), frame: false });
+  }
+
+  setShowAxes(on) {
+    this.showAxes = on;
+    this._axes.visible = on;
+  }
+
+  setProjection(mode) {
+    const aspect = this.camera.aspect || 1;
+    const dist = this.camera.position.length();
+    if (mode === "orthographic") {
+      const half = Math.max(dist * Math.tan((45 * Math.PI) / 360), 1);
+      const cam = new THREE.OrthographicCamera(-half * aspect, half * aspect, half, -half, 0.1, 5000);
+      cam.position.copy(this.camera.position);
+      cam.quaternion.copy(this.camera.quaternion);
+      this.camera = cam;
+    } else {
+      const cam = new THREE.PerspectiveCamera(45, aspect, 0.1, 5000);
+      cam.position.copy(this.camera.position);
+      cam.quaternion.copy(this.camera.quaternion);
+      this.camera = cam;
+    }
+    this.controls.object = this.camera;
+    this._resize();
+  }
+
+  lookAlong(which) {
+    if (!this.geometry) return;
+    const [a, b, c] = this.geometry.cell.map((row) => new THREE.Vector3(...row));
+    let dir;
+    if (which === "+a") dir = a.clone();
+    else if (which === "+b") dir = b.clone();
+    else if (which === "+c") dir = c.clone();
+    else dir = a.clone().add(b).add(c);
+    dir.normalize();
+    const dist = this.camera.position.length() || 30;
+    this.camera.position.copy(dir.multiplyScalar(dist));
+    this.controls.target.set(0, 0, 0);
+    this.controls.update();
+  }
+
+  setAzEl(azDeg, elDeg) {
+    const dist = this.camera.position.length() || 30;
+    const az = (azDeg * Math.PI) / 180;
+    const el = (elDeg * Math.PI) / 180;
+    this.camera.position.set(
+      dist * Math.cos(el) * Math.sin(az),
+      dist * Math.sin(el),
+      dist * Math.cos(el) * Math.cos(az),
+    );
+    this.controls.target.set(0, 0, 0);
+    this.controls.update();
+  }
+
+  setElementColor(symbol, hex) {
+    setGlobalElementColor(symbol, hex);
+    if (this.geometry) this.render(this.geometry, { ...(this._lastOptions || {}), frame: false });
+  }
+
+  setBondColor(hex) {
+    setGlobalBondColor(hex);
+    if (this.geometry) this.render(this.geometry, { ...(this._lastOptions || {}), frame: false });
   }
 
   legend() {
