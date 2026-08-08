@@ -202,7 +202,8 @@
                             <input type="file" id="tb-w90-file" accept=".dat,.hr.dat,*" hidden>
                             <button type="button" class="btn btn--block" id="tb-w90-load">&#128194; Load wannier90_hr.dat</button>
                             <label class="check"><input type="checkbox" id="tb-w90-use" disabled> Use uploaded W90 Hamiltonian for Calculate</label>
-                            <label class="check"><input type="checkbox" id="tb-w90-overlay" disabled> Overlay Native W90 Bands (Red Dashed) — not yet</label>
+                            <label class="check"><input type="checkbox" id="tb-w90-overlay" disabled> Overlay Native W90 Bands (Red Dashed)</label>
+                            <p class="hint">With SK primary: second W90 solve on same path. With Use-W90 primary: reuse those eigenvalues (no extra diagonalisation).</p>
                             <p class="status-line" id="tb-w90-status">Status: Using Manual Slater-Koster parameters.</p>
                         </fieldset>
 

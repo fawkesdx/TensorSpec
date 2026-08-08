@@ -149,6 +149,24 @@ export class BandPlot {
             });
         }
 
+        const overlay = this.result.overlay_bands;
+        if (Array.isArray(overlay) && overlay.length) {
+            ctx.save();
+            ctx.setLineDash([6, 4]);
+            ctx.strokeStyle = "#ef4444";
+            ctx.lineWidth = 1.2;
+            overlay.forEach((band) => {
+                ctx.beginPath();
+                for (let i = 0; i < band.length; i++) {
+                    const x = px(k_dist[i]);
+                    const y = py(band[i]);
+                    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                }
+                ctx.stroke();
+            });
+            ctx.restore();
+        }
+
         ctx.restore();
 
         this._drawAxes(ctx, rect, eMin, eMax, node_positions, node_labels, px, {

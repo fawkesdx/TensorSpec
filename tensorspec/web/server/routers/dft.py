@@ -485,14 +485,6 @@ def compute_bands(
     orbitals = _orbital_count(engine, structure, request.use_soc)
     segments = max(1, len(request.custom_labels.split(";")) - 1) if request.path_mode == "custom" else 5
     estimated_k = segments * request.points_per_segment
-    if estimated_k * orbitals ** 3 > DIAGONALISATION_BUDGET:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"About {estimated_k} k-points on {orbitals} orbitals is too large to solve "
-                "in one request. Reduce points per segment, or use a smaller cell."
-            ),
-        )
 
     shells = engine.get_default_hopping(structure.composition.reduced_formula)
 
@@ -506,35 +498,77 @@ def compute_bands(
             )
         w90_filepath = str(hr)
 
+    needs_overlay = bool(request.overlay_wannier)
+    hr_overlay = None
+    if needs_overlay:
+        hr_overlay = _wannier_hr_path(session, name)
+        if hr_overlay is None:
+            raise HTTPException(
+                status_code=422,
+                detail="No uploaded wannier90_hr.dat for this crystal. Load one first.",
+            )
+    solve_factor = 2 if (needs_overlay and not request.use_wannier) else 1
+    if estimated_k * orbitals ** 3 * solve_factor > DIAGONALISATION_BUDGET:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"About {estimated_k} k-points on {orbitals} orbitals is too large to solve "
+                "in one request. Reduce points per segment, or use a smaller cell."
+            ),
+        )
+
+    band_kwargs = dict(
+        path_mode=request.path_mode,
+        custom_coords=request.custom_coords,
+        custom_labels=request.custom_labels,
+        points_per_segment=request.points_per_segment,
+        shell_keys=list(shells.keys()),
+        hoppings=request.hoppings,
+        cutoffs=request.cutoffs,
+        onsite_e=request.onsite_e,
+        orbital_shifts={
+            "0": request.shift_s,
+            "1": request.shift_p,
+            "2": request.shift_d,
+        },
+        use_soc=request.use_soc,
+        soc_strength=request.soc_strength,
+        tb_mode=request.tb_mode,
+    )
+
     started = time.perf_counter()
     try:
         result = band_service.calculate_bands(
             engine,
-            path_mode=request.path_mode,
-            custom_coords=request.custom_coords,
-            custom_labels=request.custom_labels,
-            points_per_segment=request.points_per_segment,
-            shell_keys=list(shells.keys()),
-            hoppings=request.hoppings,
-            cutoffs=request.cutoffs,
-            onsite_e=request.onsite_e,
-            orbital_shifts={
-                "0": request.shift_s,
-                "1": request.shift_p,
-                "2": request.shift_d,
-            },
-            use_soc=request.use_soc,
-            soc_strength=request.soc_strength,
-            tb_mode=request.tb_mode,
             w90_filepath=w90_filepath,
+            **band_kwargs,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    elapsed = time.perf_counter() - started
 
     eigenvalues = np.asarray(result["eigenvalues"])
     k_dist = np.asarray(result["k_dist"], dtype=float)
     node_idx = result["node_idx"] or []
+
+    overlay_bands = None
+    if needs_overlay:
+        if request.use_wannier:
+            overlay_evals = eigenvalues
+        else:
+            try:
+                overlay_result = band_service.calculate_bands(
+                    engine,
+                    w90_filepath=str(hr_overlay),
+                    **band_kwargs,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            overlay_evals = np.asarray(overlay_result["eigenvalues"])
+        overlay_bands = [
+            [float(v) for v in overlay_evals[:, b]] for b in range(overlay_evals.shape[1])
+        ]
+
+    elapsed = time.perf_counter() - started
 
     session.workspace.push_band_structure(
         f"{name}_bands",
@@ -573,6 +607,7 @@ def compute_bands(
         weight_min=float(np.min(result["weights"])) if result.get("weights") is not None else 0.0,
         weight_max=float(np.max(result["weights"])) if result.get("weights") is not None else 1.0,
         unfolded=result.get("weights") is not None,
+        overlay_bands=overlay_bands,
     )
 
 
