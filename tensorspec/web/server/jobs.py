@@ -8,7 +8,9 @@ global concurrency caps. No physics lives here.
 from __future__ import annotations
 
 import collections
+import os
 import secrets
+import signal
 import subprocess
 import threading
 import time
@@ -16,6 +18,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
+
+from tensorspec.web.server.remote_scratch import best_effort_wipe_remote_scratch
 
 
 class JobStatus(str, Enum):
@@ -184,7 +188,14 @@ class JobQueue:
                 job.append_log("[queue] cancelled before start")
             elif process is not None:
                 job.append_log("[queue] cancelling…")
-                process.terminate()
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError, OSError):
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
+            best_effort_wipe_remote_scratch(job.run_dir, log=job.append_log)
             return job
 
     def _loop(self) -> None:
@@ -259,6 +270,7 @@ class JobQueue:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                start_new_session=True,
             )
             job._process = process
 
