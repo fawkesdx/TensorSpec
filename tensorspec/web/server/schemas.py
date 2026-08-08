@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WorkspaceItem(BaseModel):
@@ -540,6 +540,36 @@ class BZRequest(BaseModel):
     h: int = Field(default=0, ge=-10, le=10)
     k: int = Field(default=0, ge=-10, le=10)
     l: int = Field(default=1, ge=-10, le=10)
+
+
+class SceneExportRequest(BaseModel):
+    """Geometry knobs + which scene parts to include in a DCC script export."""
+
+    nx: int = Field(default=1, ge=1, le=20)
+    ny: int = Field(default=1, ge=1, le=20)
+    nz: int = Field(default=1, ge=1, le=20)
+    basis: Literal["conventional", "primitive"] = "conventional"
+    bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
+    show_bonds: bool = True
+    include_atoms: bool = True
+    include_cell: bool = True
+    include_bz: bool = False
+    # BZ options when include_bz
+    bz_scale: float = Field(default=1.0, ge=0.1, le=10)
+    bz_style: Literal["solid", "skeleton", "both"] = "solid"
+    bz_h: int = Field(default=0, ge=-10, le=10)
+    bz_k: int = Field(default=0, ge=-10, le=10)
+    bz_l: int = Field(default=1, ge=-10, le=10)
+
+    @model_validator(mode="after")
+    def _one_include(self):
+        if not (self.include_atoms or self.include_cell or self.include_bz):
+            raise ValueError("Select at least one of Atoms/Bonds, Unit Cell, or Brillouin Zone.")
+        return self
+
+    @property
+    def cell_count(self) -> int:
+        return self.nx * self.ny * self.nz
 
 
 class BZGeometry(BaseModel):

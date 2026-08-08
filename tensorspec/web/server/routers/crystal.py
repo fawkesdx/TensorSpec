@@ -7,6 +7,9 @@ consume the same payload.
 from __future__ import annotations
 
 import re
+import tempfile
+from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -14,6 +17,7 @@ from pymatgen.core import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 from tensorspec.core.crystallography import CrystalEngine
+from tensorspec.core.io.exporters import SceneExporter
 from tensorspec.web.server.schemas import (
     Atom,
     Bond,
@@ -29,6 +33,7 @@ from tensorspec.web.server.schemas import (
     MoireResult,
     PushCrystalRequest,
     RelaxRequest,
+    SceneExportRequest,
     StackRequest,
     TemplateRequest,
 )
@@ -195,6 +200,117 @@ def _geometry_from_structure(
         n_atoms=len(atoms),
         show_cell=show_cell,
     )
+
+
+# Jmol/CPK subset for DCC export; unknown symbols → FALLBACK_CPK.
+_CPK_COLORS: dict[str, str] = {
+    "H": "#FFFFFF", "He": "#D9FFFF", "Li": "#CC80FF", "Be": "#C2FF00", "B": "#FFB5B5",
+    "C": "#909090", "N": "#3050F8", "O": "#FF0D0D", "F": "#90E050", "Ne": "#B3E3F5",
+    "Na": "#AB5CF2", "Mg": "#8AFF00", "Al": "#BFA6A6", "Si": "#F0C8A0", "P": "#FF8000",
+    "S": "#FFFF30", "Cl": "#1FF01F", "Ar": "#80D1E3", "K": "#8F40D4", "Ca": "#3DFF00",
+    "Sc": "#E6E6E6", "Ti": "#BFC2C7", "V": "#A6A6AB", "Cr": "#8A99C7", "Mn": "#9C7AC7",
+    "Fe": "#E06633", "Co": "#F090A0", "Ni": "#50D050", "Cu": "#C88033", "Zn": "#7D80B0",
+    "Ga": "#C28F8F", "Ge": "#668F8F", "As": "#BD80E3", "Se": "#FFA100", "Br": "#A62929",
+    "Kr": "#5CB8D1", "Rb": "#702EB0", "Sr": "#00FF00", "Y": "#94FFFF", "Zr": "#94E0E0",
+    "Nb": "#73C2C9", "Mo": "#54B5B5", "Tc": "#3B9E9E", "Ru": "#248F8F", "Rh": "#0A7D8C",
+    "Pd": "#006985", "Ag": "#C0C0C0", "Cd": "#FFD98F", "In": "#A67573", "Sn": "#668080",
+    "Sb": "#9E63B5", "Te": "#D47A00", "I": "#940094", "Xe": "#429EB0", "Cs": "#57178F",
+    "Ba": "#00C900", "La": "#70D4FF", "Hf": "#4DC2FF", "Ta": "#4DA6FF", "W": "#2194D6",
+    "Re": "#267DAB", "Os": "#266696", "Ir": "#175487", "Pt": "#D0D0E0", "Au": "#FFD123",
+    "Hg": "#B8B8D0", "Tl": "#A6544D", "Pb": "#575961", "Bi": "#9E4FB5", "U": "#008FFF",
+}
+FALLBACK_CPK = "#808080"
+LATTICE_EDGE_COLOR = "#6f7891"
+BOND_EXPORT_COLOR = "#888888"
+BOND_EXPORT_RADIUS = 0.1
+
+
+def _element_cpk(symbol: str) -> str:
+    return _CPK_COLORS.get(symbol, FALLBACK_CPK)
+
+
+def _lattice_edge_tuples(cell: list[list[float]], center: list[float]) -> list[tuple]:
+    """12 parallelepiped edges from origin along a,b,c — same frame as viewer_3d._drawCell."""
+    a = np.asarray(cell[0], dtype=float)
+    b = np.asarray(cell[1], dtype=float)
+    c = np.asarray(cell[2], dtype=float)
+    origin = np.zeros(3)
+    corners = [
+        origin,
+        a,
+        b,
+        c,
+        a + b,
+        a + c,
+        b + c,
+        a + b + c,
+    ]
+    edges = [
+        (0, 1), (0, 2), (0, 3), (1, 4), (1, 5), (2, 4),
+        (2, 6), (3, 5), (3, 6), (4, 7), (5, 7), (6, 7),
+    ]
+    ctr = np.asarray(center, dtype=float)
+    out: list[tuple] = []
+    for s, e in edges:
+        p1 = corners[s] - ctr
+        p2 = corners[e] - ctr
+        out.append(
+            (float(p1[0]), float(p1[1]), float(p1[2]),
+             float(p2[0]), float(p2[1]), float(p2[2]),
+             LATTICE_EDGE_COLOR)
+        )
+    return out
+
+
+def _scene_export_parts(
+    geo: CrystalGeometry,
+    *,
+    include_atoms: bool,
+    include_cell: bool,
+    include_bz: bool,
+    bz_geometry: BZGeometry | None,
+) -> tuple[list, list, list, dict | None]:
+    """Build SceneExporter tuples; positions are center-relative like the three.js viewer."""
+    center = np.asarray(geo.center, dtype=float)
+    atoms: list = []
+    bonds: list = []
+    lattice: list = []
+    bz: dict | None = None
+
+    if include_atoms:
+        for atom in geo.atoms:
+            pos = np.asarray(atom.position, dtype=float) - center
+            atoms.append(
+                (float(pos[0]), float(pos[1]), float(pos[2]),
+                 float(atom.radius), _element_cpk(atom.element))
+            )
+        for bond in geo.bonds:
+            p1 = np.asarray(geo.atoms[bond.i].position, dtype=float) - center
+            p2 = np.asarray(geo.atoms[bond.j].position, dtype=float) - center
+            bonds.append(
+                (float(p1[0]), float(p1[1]), float(p1[2]),
+                 float(p2[0]), float(p2[1]), float(p2[2]),
+                 BOND_EXPORT_RADIUS, BOND_EXPORT_COLOR)
+            )
+
+    if include_cell:
+        lattice = _lattice_edge_tuples(geo.cell, geo.center)
+
+    if include_bz and bz_geometry is not None:
+        hull = getattr(bz_geometry, "hull_points", None)
+        simplices = getattr(bz_geometry, "simplices", None)
+        if hull is not None and simplices is not None:
+            # Center-relative BZ to match viewer overlay (viewer subtracts crystal center).
+            verts = [
+                [float(p[0]) - float(center[0]),
+                 float(p[1]) - float(center[1]),
+                 float(p[2]) - float(center[2])]
+                for p in hull
+            ]
+            faces = [[int(i) for i in tri] for tri in simplices]
+            bz = {"verts": verts, "faces": faces}
+
+    return atoms, bonds, lattice, bz
 
 
 @router.post("/load", response_model=CrystalSummary)
@@ -494,6 +610,93 @@ def download_cif(name: str, session: Session = Depends(current_session)):
     return Response(
         content=text.encode("utf-8"),
         media_type="chemical/x-cif",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/{name}/export/{fmt}")
+def export_scene(
+    name: str,
+    fmt: Literal["3dsmax", "blender"],
+    request: SceneExportRequest,
+    session: Session = Depends(current_session),
+):
+    """Build a 3ds Max (.ms) or Blender (.py) script via SceneExporter."""
+    structure = _require_structure(session, name)
+    structure = _apply_basis(structure, request.basis)
+
+    projected = len(structure) * request.cell_count
+    if projected > MAX_RENDER_ATOMS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{projected} atoms exceeds the {MAX_RENDER_ATOMS} the browser can draw. "
+                "Reduce the supercell."
+            ),
+        )
+
+    supercell = structure.copy()
+    if request.cell_count > 1:
+        supercell.make_supercell([request.nx, request.ny, request.nz])
+
+    geo = _geometry_from_structure(
+        name,
+        supercell,
+        show_bonds=request.show_bonds,
+        bond_threshold=request.bond_threshold,
+    )
+
+    bz_geo: BZGeometry | None = None
+    if request.include_bz:
+        raw = CrystalEngine.calculate_brillouin_zone(structure)
+        if not raw:
+            raise HTTPException(
+                status_code=422, detail="Could not build a Brillouin zone for this cell."
+            )
+        scale = request.bz_scale
+        hull = np.asarray(raw["hull_points"], dtype=float) * scale
+        simplices = [[int(i) for i in tri] for tri in raw["simplices"]]
+        edges = [
+            [[float(v) * scale for v in p] for p in edge]
+            for edge in raw["edges"]
+        ]
+        bz_geo = BZGeometry(
+            name=name,
+            hull_points=[[float(v) for v in row] for row in hull],
+            simplices=simplices,
+            edges=edges,
+            scale=scale,
+            style=request.bz_style,
+        )
+
+    atoms, bonds, lattice, bz = _scene_export_parts(
+        geo,
+        include_atoms=request.include_atoms,
+        include_cell=request.include_cell,
+        include_bz=request.include_bz,
+        bz_geometry=bz_geo,
+    )
+
+    if fmt == "3dsmax":
+        filename = f"{name}_scene.ms"
+        media_type = "text/plain"
+        writer = SceneExporter.export_3dsmax
+    else:
+        filename = f"{name}_scene.py"
+        media_type = "text/x-python"
+        writer = SceneExporter.export_blender
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / filename
+            writer(str(path), atoms, bonds, lattice, bz)
+            content = path.read_bytes()
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Scene export failed: {exc}") from exc
+
+    return Response(
+        content=content,
+        media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
