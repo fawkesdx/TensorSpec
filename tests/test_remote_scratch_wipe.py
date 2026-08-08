@@ -1,0 +1,67 @@
+"""Remote scratch sidecar parse + wipe argv (no live SSH)."""
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import MagicMock
+
+from tensorspec.web.server import remote_scratch as rs
+
+
+class TestRemoteScratchWipe(unittest.TestCase):
+    def test_parse_ok(self):
+        self.assertEqual(
+            rs.parse_remote_scratch_sidecar("einstein\t/home/sandy/qe_scratch/job1"),
+            ("einstein", "/home/sandy/qe_scratch/job1"),
+        )
+
+    def test_parse_rejects_relative(self):
+        self.assertIsNone(rs.parse_remote_scratch_sidecar("einstein\trelative/path"))
+
+    def test_parse_rejects_dotdot(self):
+        self.assertIsNone(
+            rs.parse_remote_scratch_sidecar("einstein\t/home/sandy/../etc")
+        )
+
+    def test_wipe_argv(self):
+        argv = rs.wipe_remote_scratch_argv("einstein", "/home/sandy/qe_scratch/j")
+        self.assertEqual(
+            argv,
+            [
+                "ssh",
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=15",
+                "einstein",
+                "--",
+                "rm", "-rf", "--",
+                "/home/sandy/qe_scratch/j",
+            ],
+        )
+
+    def test_best_effort_missing_sidecar(self):
+        with TemporaryDirectory() as tmp:
+            runner = MagicMock()
+            ok = rs.best_effort_wipe_remote_scratch(
+                Path(tmp), log=lambda _m: None, runner=runner
+            )
+            self.assertFalse(ok)
+            runner.assert_not_called()
+
+    def test_best_effort_calls_runner(self):
+        with TemporaryDirectory() as tmp:
+            p = Path(tmp) / rs.SIDECAR_NAME
+            p.write_text("einstein\t/home/sandy/qe_scratch/j\n", encoding="utf-8")
+            runner = MagicMock(return_value=0)
+            logs: list[str] = []
+            ok = rs.best_effort_wipe_remote_scratch(
+                Path(tmp), log=logs.append, runner=runner
+            )
+            self.assertTrue(ok)
+            runner.assert_called_once()
+            self.assertEqual(
+                runner.call_args[0][0],
+                rs.wipe_remote_scratch_argv("einstein", "/home/sandy/qe_scratch/j"),
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
