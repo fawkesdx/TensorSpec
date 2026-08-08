@@ -1,5 +1,4 @@
 """Analyzer ΔE and deflector Δk helpers."""
-import math
 import unittest
 
 from tensorspec.core.arpes.resolution import (
