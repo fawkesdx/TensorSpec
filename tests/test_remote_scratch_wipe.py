@@ -62,6 +62,39 @@ class TestRemoteScratchWipe(unittest.TestCase):
                 rs.wipe_remote_scratch_argv("einstein", "/home/sandy/qe_scratch/j"),
             )
 
+    def test_best_effort_invalid_sidecar(self):
+        with TemporaryDirectory() as tmp:
+            p = Path(tmp) / rs.SIDECAR_NAME
+            p.write_text("   \n  ", encoding="utf-8")
+            runner = MagicMock()
+            ok = rs.best_effort_wipe_remote_scratch(
+                Path(tmp), log=lambda _m: None, runner=runner
+            )
+            self.assertFalse(ok)
+            runner.assert_not_called()
+
+    def test_best_effort_nonzero_exit(self):
+        with TemporaryDirectory() as tmp:
+            p = Path(tmp) / rs.SIDECAR_NAME
+            p.write_text("einstein\t/home/sandy/qe_scratch/j\n", encoding="utf-8")
+            runner = MagicMock(return_value=1)
+            ok = rs.best_effort_wipe_remote_scratch(
+                Path(tmp), log=lambda _m: None, runner=runner
+            )
+            self.assertFalse(ok)
+            runner.assert_called_once()
+
+    def test_best_effort_runner_raises(self):
+        with TemporaryDirectory() as tmp:
+            p = Path(tmp) / rs.SIDECAR_NAME
+            p.write_text("einstein\t/home/sandy/qe_scratch/j\n", encoding="utf-8")
+            runner = MagicMock(side_effect=OSError("ssh failed"))
+            ok = rs.best_effort_wipe_remote_scratch(
+                Path(tmp), log=lambda _m: None, runner=runner
+            )
+            self.assertFalse(ok)
+            runner.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()
