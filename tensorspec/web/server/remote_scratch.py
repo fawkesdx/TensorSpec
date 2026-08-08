@@ -9,7 +9,8 @@ SIDECAR_NAME = ".tensorspec_remote_scratch"
 
 
 def parse_remote_scratch_sidecar(text: str) -> tuple[str, str] | None:
-    line = (text or "").strip().splitlines()[0] if text else ""
+    lines = (text or "").strip().splitlines()
+    line = lines[0] if lines else ""
     if "\t" not in line:
         return None
     host, path = line.split("\t", 1)
