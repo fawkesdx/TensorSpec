@@ -95,6 +95,13 @@ const TensorSpecAPI = (() => {
                 body: JSON.stringify(payload),
             }),
 
+        loadArpes: (file, { name = "", logFile = null } = {}) => {
+            const form = new FormData();
+            form.append("file", file);
+            if (name) form.append("name", name);
+            if (logFile) form.append("log", logFile);
+            return upload("/api/arpes/load", form);
+        },
         tensorAxes: (name) =>
             request(`/api/arpes/${encodeURIComponent(name)}/axes`),
 

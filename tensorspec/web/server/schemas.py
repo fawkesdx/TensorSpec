@@ -159,6 +159,19 @@ class TensorAxes(BaseModel):
     default_fixed: dict[int, int]
 
 
+class ArpesLoadSummary(BaseModel):
+    """Result of uploading a beamline HDF5 into the spectroscopy workspace."""
+
+    name: str
+    shape: list[int]
+    labels: list[str]
+    units: list[str]
+    data_type: str
+    facility: str = "Unknown"
+    measurement_type: str | None = None
+    source_file: str | None = None
+
+
 class SliceRequest(BaseModel):
     """Which 2D plane to cut out of an N-dimensional tensor."""
 

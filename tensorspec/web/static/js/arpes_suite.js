@@ -862,6 +862,26 @@ el("av-demo").addEventListener("click", async () => {
     }
 });
 
+el("av-load-file").addEventListener("change", async (event) => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    if (!file) return;
+    const logInput = el("av-load-log");
+    const logFile = logInput?.files && logInput.files[0] ? logInput.files[0] : null;
+    board.setBadge(`Loading ${file.name}\u2026`);
+    try {
+        const result = await TensorSpecAPI.loadArpes(file, { logFile });
+        await refreshDatasets();
+        const target = board.active || board.spawn(null, null);
+        await target.loadTensor(result.name);
+        board.setActive(target);
+        const kind = result.measurement_type || result.data_type || "ARPES";
+        board.setBadge(`${result.name} · ${kind} · ${result.shape.join("\u00d7")}`);
+    } catch (err) {
+        board.setBadge(err.message, true);
+    }
+});
+
 el("ar-crystal-refresh").addEventListener("click", () => refreshCrystals().catch((e) => appendLog(e.message)));
 el("ar-run").addEventListener("click", async () => {
     if (!el("ar-crystal").value) {

@@ -97,19 +97,19 @@ Grand App
 	- [ ] Data Loader from various beamlines (MAESTRO, i05 Diamond, SIS SLS, etc.)
 	- [ ] Linked Crosshair Data Viewer (Interactive EDC and MDC extraction)
 	- [ ] data loader from various beamline
-		- [ ] MAESTRO
+		- [x] MAESTRO (modern Fixed/Swept; Preview XY maps; hv/`mono_eV` scans; Slit Defl Fermi maps; dither/binning attrs; aborted scans; optional Measurement Log CSV; web `POST /api/arpes/load`)
 		- [ ] i05 Diamond
 		- [ ] SIS SLS
 		- [ ] ADRESS SLS
 		- [ ] Lorea Alba
 		- [ ] Bloch MaxIV
-	- [ ] Implement the `TensorSpec` Hierarchical Data Container (`xarray.DataTree` / NeXus model) to store measurement arrays and comprehensive beamline metadata (`attrs`).
+	- [x] Implement the `TensorSpec` Hierarchical Data Container (`xarray.DataTree` / NeXus model) to store measurement arrays and comprehensive beamline metadata (`attrs`).
 	- [ ] Structure tree hierarchy into standardized functional nodes:
-		- [ ] `/raw`: Raw analyzer intensity array (`data.value`) bound to angular/energy coordinates (`data.energy`, `data.slitangle`).
-		- [ ] `/raw/motors`: Log multi-axis manipulator variables (`motor1` e.g., polar deflection/theta map, `motor2` e.g., fine piezo scan X/Y, or photon energy $h\nu$ for $k_z$ scans).
+		- [x] `/raw`: Raw analyzer intensity array (`data.value`) bound to angular/energy coordinates (`data.energy`, `data.slitangle`).
+		- [x] `/raw/motors`: Log multi-axis manipulator variables (`motor1` e.g., polar deflection/theta map, `motor2` e.g., fine piezo scan X/Y, or photon energy $h\nu$ for $k_z$ scans).
 		- [ ] `/processed`: Store transformed coordinate cubes (e.g., interpolated $E, k_x, k_y$ volumes, curvature analysis, or normalization).
 		- [ ] `/analysis`: Attach mathematical model outputs (e.g., `/analysis/mdc_peakfit` or `/analysis/edc_peakfit` containing Lorentzian parameters and residuals).
-		- [ ] `/history`: Append sequential audit trail logs of every functional transformation applied to the dataset.
+		- [x] `/history`: Append sequential audit trail logs of every functional transformation applied to the dataset.
 	- [ ] once the data is loaded, there is option to launch a general viewer where it will plot the data according to the kind of data
 		- [ ] it will display the data.energy, data.slitangle, data.value of the dispersion
 			- [ ] I want to have the option to toggle to plot the EDC and MDC on the right and lower panel

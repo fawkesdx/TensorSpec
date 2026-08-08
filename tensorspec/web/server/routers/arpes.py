@@ -8,20 +8,23 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import struct
 from pathlib import Path
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, WebSocket, WebSocketDisconnect
 
 from tensorspec.core import tensor_ops as ops
 from tensorspec.core.arpes_engine import ARPESEngineRouter
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.dft import band_service
 from tensorspec.core.dft_engine import DFTEngineRouter
+from tensorspec.core.io.arpes_loader import ARPESLoader
 from tensorspec.plotting.backends.arpes_figure import export_slice_figure
 from tensorspec.web.server.jobs import Job, JobStatus, get_job_queue
 from tensorspec.web.server.schemas import (
+    ArpesLoadSummary,
     ArpesSimPushRequest,
     ArpesSimRequest,
     AxisInfo,
@@ -39,6 +42,75 @@ router = APIRouter(prefix="/api/arpes", tags=["arpes"])
 
 MAX_SIM_VOXELS = 80 * 80 * 80
 MAX_MESH_POINTS = 40 * 40
+MAX_ARPES_BYTES = 512 * 1024 * 1024
+MAX_LOG_BYTES = 8 * 1024 * 1024
+SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def _safe_label(name: str, fallback: str) -> str:
+    cleaned = (name.strip() or fallback)[:64]
+    if not SAFE_NAME.match(cleaned):
+        raise HTTPException(
+            status_code=422,
+            detail="Name must start with a letter or digit and contain only "
+            "letters, digits, '.', '_' or '-'.",
+        )
+    return cleaned
+
+
+@router.post("/load", response_model=ArpesLoadSummary)
+async def load_arpes_file(
+    file: UploadFile = File(...),
+    log: UploadFile | None = File(default=None),
+    name: str = Form(default=""),
+    session: Session = Depends(current_session),
+) -> ArpesLoadSummary:
+    """Upload a MAESTRO (or other) HDF5 and push it into the session workspace."""
+    filename = file.filename or ""
+    if not filename.lower().endswith((".h5", ".hdf5")):
+        raise HTTPException(status_code=400, detail="Expected a .h5 / .hdf5 file.")
+
+    payload = await file.read()
+    if len(payload) > MAX_ARPES_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the 512 MB limit.")
+    if not payload:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    upload_dir = Path(session.workspace.project_dir) / "uploads" / "arpes"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    safe_file = re.sub(r"[^\w.\-]+", "_", Path(filename).name)[:120] or "upload.h5"
+    dest = upload_dir / safe_file
+    dest.write_bytes(payload)
+
+    log_path = None
+    if log is not None and log.filename:
+        log_bytes = await log.read()
+        if len(log_bytes) > MAX_LOG_BYTES:
+            raise HTTPException(status_code=413, detail="Measurement log exceeds the 8 MB limit.")
+        log_name = re.sub(r"[^\w.\-]+", "_", Path(log.filename).name)[:120] or "measurement_log.csv"
+        log_path = upload_dir / log_name
+        log_path.write_bytes(log_bytes)
+
+    try:
+        tensor = ARPESLoader.load(dest, measurement_log_path=log_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not parse the file: {exc}") from exc
+
+    label = _safe_label(name or Path(filename).stem, "arpes_dataset")
+    session.workspace.push_spectroscopy_data(label, tensor)
+    meta = tensor.metadata or {}
+    return ArpesLoadSummary(
+        name=label,
+        shape=[int(n) for n in tensor.value.shape],
+        labels=list(tensor.labels),
+        units=list(tensor.units),
+        data_type=tensor.data_type,
+        facility=str(meta.get("Facility", "Unknown")),
+        measurement_type=meta.get("Measurement_Type"),
+        source_file=safe_file,
+    )
 
 
 def _require_tensor(session: Session, name: str):
