@@ -766,6 +766,13 @@ async function onWannierFileChosen(event) {
 
 function applyQueueEnable(info) {
     const einstein = dom.qeBackend?.value === "einstein_ssh";
+    if (!info) {
+        dom.qeQueue.disabled = !einstein;
+        if (einstein) {
+            setQeStatus("Einstein (SSH) queue enabled (solvers status pending)");
+        }
+        return;
+    }
     if (info.available) {
         setQeStatus(
             `Solvers ready — max ${maxMpiRanks} MPI ranks`
