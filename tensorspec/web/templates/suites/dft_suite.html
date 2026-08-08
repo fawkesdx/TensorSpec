@@ -115,12 +115,29 @@
                             <label for="tb-path">1D Path Template:</label>
                             <select class="field" id="tb-path">
                                 <option>Auto-Detect BZ Path (PyMatgen)</option>
+                                <option>Primitive hex reference (folded into supercell)</option>
                                 <option>Arbitrary Custom Path</option>
                                 <option>Hexagonal (Template)</option>
                                 <option>Rectangular / Orthorhombic (Template)</option>
                                 <option>Square / Tetragonal (Template)</option>
                             </select>
                         </div>
+                        <p class="hint" id="dft-path-note">
+                            Auto path = Brillouin zone of the loaded cell (folded for twisted/stacked supercells).
+                            Primitive hex reference walks graphene-like Γ–K–M in Å⁻¹, then folds each k into the supercell BZ
+                            (educational — not true spectral-weight unfolding).
+                        </p>
+                        <div class="form-row">
+                            <label for="dft-gap-fid">MEGNet gap fidelity:</label>
+                            <select class="field" id="dft-gap-fid">
+                                <option value="PBE">PBE</option>
+                                <option value="HSE">HSE</option>
+                                <option value="SCAN">SCAN</option>
+                                <option value="GLLB-SC">GLLB-SC</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn btn--block" id="dft-gap-predict" disabled>Predict band gap (MEGNet)</button>
+                        <p class="hint" id="dft-gap-status">Scalar gap only — not full E(k). Needs <code>matgl</code>.</p>
                         <div class="form-row">
                             <label>Relativistic:</label>
                             <div class="inline">

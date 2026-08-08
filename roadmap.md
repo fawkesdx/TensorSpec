@@ -72,9 +72,11 @@ Grand App
 	- [x] CDW Mode: Define atom shifts (dx, dy, dz) and propagate simulated distortions.
 	- [x] Brillouin Zone Engine: Bulk BZ, Cleaving surface BZ, kz slicing, and surface termination projections. (Completed: Tab 4 is fully operational, generating the Wigner-Seitz cell, the hovering surface plane, and exporting them natively.)
 	- [x] ML Interatomic Potential (MLIP) Relaxation: Tab 3 stack relax via pretrained CHGNet / M3GNet (`matgl`); CIF download + workspace push/rename for DFT Suite.
+	- [x] MEGNet band-gap predict (scalar Eg, multi-fidelity PBE/HSE/SCAN/GLLB) on Tab 3 + DFT Suite for lab stacks when full E(k) is heavy.
 - DFT Suite
 	- [x] Establish Data Pipeline: Pull crystal structure from `workspace.py` (drawn from Crystal Viewer Suite) to perform bulk band structure calculations.
 	- [x] Core Math: High-Symmetry K-Path Generator (calculate k-points between high symmetry nodes like Gamma, M, K).
+	- [x] Folded vs educational path: Auto = supercell/moiré BZ (folded for twists); optional primitive-hex Γ–K–M reference folded into supercell (not true spectral-weight unfolding yet).
 	- [x] Core Math: Pull exact Wigner-Seitz BZ nodes (Gamma, M, K, etc.) directly from Tab 4 of the Crystal Suite via global_workspace to define arbitrary 3D k-paths.
 	- [x] Toy Tight Binding (TB) Engine: Built-in simple models (1D chain, 2D square lattice, 2D honeycomb/graphene) to test the solver and plotting.
 	- [x] Generalized TB Capability: UI to define custom hopping parameters and on-site energies.Engine dynamically scales Slater-Koster integrals using Harrison's rules and auto-detects materials via database.

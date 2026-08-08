@@ -106,6 +106,11 @@ const TensorSpecAPI = (() => {
                 body: JSON.stringify({ store_as: storeAs }),
             }),
         crystalCifUrl: (name) => `/api/crystal/${encodeURIComponent(name)}/cif`,
+        crystalGapPredict: (name, fidelity = "PBE") =>
+            request(`/api/crystal/${encodeURIComponent(name)}/gap-predict`, {
+                method: "POST",
+                body: JSON.stringify({ fidelity }),
+            }),
 
         loadArpes: (file, { name = "", logFile = null } = {}) => {
             const form = new FormData();
@@ -343,6 +348,13 @@ const TensorSpecAPI = (() => {
             request(`/api/dft/${encodeURIComponent(name)}/bands`, {
                 method: "POST",
                 body: JSON.stringify(payload),
+            }),
+        dftBzContext: (name) =>
+            request(`/api/dft/${encodeURIComponent(name)}/bz-context`),
+        dftGapPredict: (name, fidelity = "PBE") =>
+            request(`/api/dft/${encodeURIComponent(name)}/gap-predict`, {
+                method: "POST",
+                body: JSON.stringify({ fidelity }),
             }),
         dftSolvers: () => request("/api/dft/solvers"),
         qeGenerate: (name, payload) =>

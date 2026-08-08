@@ -45,7 +45,9 @@ class DemoSeedRequest(BaseModel):
 class BandRequest(BaseModel):
     """Tight-binding parameters. Bounds mirror the DFT Suite spin boxes."""
 
-    path_mode: Literal["auto", "custom", "hexagonal", "rectangular", "square"] = "auto"
+    path_mode: Literal[
+        "auto", "custom", "hexagonal", "rectangular", "square", "primitive_hex_ref"
+    ] = "auto"
     custom_coords: str = Field(default="", max_length=2000)
     custom_labels: str = Field(default="", max_length=500)
     # The desktop app allows 2000, but that runs on the user's own CPU. A
@@ -80,6 +82,11 @@ class BandResult(BaseModel):
     energy_max: float
     orbital_labels: list[str]
     elapsed_seconds: float
+    # Educational labels for supercell / moiré stacks
+    path_kind: str = "standard"
+    path_title: str = ""
+    path_note: str = ""
+    likely_folded: bool = False
 
 
 class StructureOption(BaseModel):
@@ -509,6 +516,12 @@ class RelaxRequest(BaseModel):
     store_as: str = Field(default="", max_length=64)
     show_bonds: bool = True
     bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
+
+
+class GapPredictRequest(BaseModel):
+    """MEGNet scalar band-gap prediction (not a full E(k) dispersion)."""
+
+    fidelity: Literal["PBE", "GLLB-SC", "HSE", "SCAN"] = "PBE"
 
 
 class PushCrystalRequest(BaseModel):
