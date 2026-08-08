@@ -185,6 +185,7 @@ class QERequest(BaseModel):
     slab_mode: bool = False
     # XC functional → QE input_dft (no pseudo filtering)
     functional: Literal["PBE", "LDA", "PBEsol"] = "PBE"
+    backend: Literal["local", "einstein_ssh"] = "local"
 
 
 class SlabPrepareRequest(BaseModel):

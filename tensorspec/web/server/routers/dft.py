@@ -8,6 +8,7 @@ shell text is ever executed.
 from __future__ import annotations
 
 import io
+import os
 import time
 import zipfile
 
@@ -23,7 +24,7 @@ from tensorspec.core.dft import qe_slab
 from tensorspec.core.dft.qe_pipeline import PipelineParams, SolverPaths
 from tensorspec.core.dft_engine import DFTEngineRouter
 from tensorspec.core import mlip_engine
-from tensorspec.web.server.config import load_solver_config
+from tensorspec.web.server.config import REPO_ROOT, load_solver_config
 from tensorspec.web.server.jobs import get_job_queue
 from tensorspec.web.server.schemas import (
     BandRequest,
@@ -110,6 +111,27 @@ def _solver_status() -> SolverStatus:
             max_mpi_ranks=8,
             detail=str(exc),
         )
+
+
+def _remote_qe_script_path() -> Path:
+    return REPO_ROOT / "scripts" / "remote_qe.sh"
+
+
+def _einstein_ssh_commands(
+    run_dir: Path, mpi_ranks: int, host: str
+) -> list[list[str]]:
+    script = _remote_qe_script_path()
+    return [
+        [
+            "bash",
+            str(script),
+            str(run_dir),
+            "--np",
+            str(mpi_ranks),
+            "--host",
+            host,
+        ]
+    ]
 
 
 def _params_from_request(request: QERequest, max_mpi_ranks: int) -> PipelineParams:
@@ -321,20 +343,28 @@ def queue_qe_run(
     cfg, run_dir, params, _files = _prepare_run(
         session, name, request, relative_outdir=False
     )
-    try:
-        cfg.require_exists()
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+    if request.backend == "einstein_ssh":
+        script = _remote_qe_script_path()
+        if not script.is_file():
+            raise HTTPException(503, detail=f"remote_qe.sh not found at {script}")
+        host = os.environ.get("TENSORSPEC_QE_SSH_HOST", "einstein").strip() or "einstein"
+        np_ranks = min(request.mpi_ranks, cfg.max_mpi_ranks)
+        commands = _einstein_ssh_commands(run_dir.resolve(), np_ranks, host)
+    else:
+        try:
+            cfg.require_exists()
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
 
-    solvers = SolverPaths(
-        pw=cfg.pw,
-        wannier90=cfg.wannier90,
-        pw2wannier90=cfg.pw2wannier90,
-        mpirun=cfg.mpirun,
-    )
-    commands = qe_pipeline.build_pipeline_commands(
-        solvers, params, max_mpi_ranks=cfg.max_mpi_ranks
-    )
+        solvers = SolverPaths(
+            pw=cfg.pw,
+            wannier90=cfg.wannier90,
+            pw2wannier90=cfg.pw2wannier90,
+            mpirun=cfg.mpirun,
+        )
+        commands = qe_pipeline.build_pipeline_commands(
+            solvers, params, max_mpi_ranks=cfg.max_mpi_ranks
+        )
 
     queue = get_job_queue(cfg.max_global_jobs, cfg.max_jobs_per_session)
     try:
