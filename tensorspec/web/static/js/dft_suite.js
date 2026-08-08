@@ -35,6 +35,7 @@ const dom = {
     eMin: el("tb-emin"),
     eMax: el("tb-emax"),
     shells: el("tb-shells"),
+    fat: el("tb-fat"),
 
     qeCutoff: el("qe-cutoff"),
     qeSoc: el("qe-soc"),
@@ -72,6 +73,8 @@ let structures = [];
 let activeJobId = null;
 let logSocket = null;
 let maxMpiRanks = 8;
+let lastBandResult = null;
+let lastCrystalName = null;
 
 function setStatus(message, isError = false) {
     dom.status.textContent = message;
@@ -92,6 +95,108 @@ function ensurePlot() {
 
 function selected() {
     return structures.find((s) => s.name === dom.structures.value) || null;
+}
+
+function shellKind(label) {
+    const base = label.replace(/_up$|_dn$/, "");
+    if (base.endsWith("_s")) return "s";
+    if (/_(pz|px|py)$/.test(base)) return "p";
+    if (/_(dz2|dxz|dyz|dx2-y2|dxy)$/.test(base)) return "d";
+    return null;
+}
+
+function elementFromLabel(label) {
+    const i = label.indexOf("_");
+    return i > 0 ? label.slice(0, i) : null;
+}
+
+function populateFatOptions(orbitalLabels) {
+    if (!dom.fat) return;
+    const labels = orbitalLabels || [];
+    dom.fat.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = "none";
+    none.textContent = "None (Standard Lines)";
+    dom.fat.appendChild(none);
+
+    if (!labels.length) {
+        dom.fat.disabled = true;
+        return;
+    }
+
+    const shells = new Set();
+    const elements = new Set();
+    labels.forEach((lab) => {
+        const sk = shellKind(lab);
+        if (sk) shells.add(sk);
+        const elSym = elementFromLabel(lab);
+        if (elSym) elements.add(elSym);
+    });
+
+    if (shells.size) {
+        const group = document.createElement("optgroup");
+        group.label = "Shells";
+        ["s", "p", "d"].forEach((sk) => {
+            if (!shells.has(sk)) return;
+            const opt = document.createElement("option");
+            opt.value = `shell:${sk}`;
+            opt.textContent = `All ${sk}`;
+            group.appendChild(opt);
+        });
+        dom.fat.appendChild(group);
+    }
+
+    if (elements.size) {
+        const group = document.createElement("optgroup");
+        group.label = "Elements";
+        [...elements].sort().forEach((elSym) => {
+            const opt = document.createElement("option");
+            opt.value = `element:${elSym}`;
+            opt.textContent = elSym;
+            group.appendChild(opt);
+        });
+        dom.fat.appendChild(group);
+    }
+
+    const orbGroup = document.createElement("optgroup");
+    orbGroup.label = "Orbitals";
+    [...new Set(labels)].forEach((lab) => {
+        const opt = document.createElement("option");
+        opt.value = `orbital:${lab}`;
+        opt.textContent = lab;
+        orbGroup.appendChild(opt);
+    });
+    dom.fat.appendChild(orbGroup);
+    dom.fat.disabled = false;
+    dom.fat.value = "none";
+}
+
+async function applyFatTarget() {
+    if (!lastBandResult || !lastCrystalName || !dom.fat) return;
+    const target = dom.fat.value || "none";
+    if (target === "none") {
+        lastBandResult = { ...lastBandResult, fat_weights: null, fat_target: "none" };
+        ensurePlot().setResult(lastBandResult);
+        setStatus("Fat bands cleared");
+        return;
+    }
+    try {
+        const fat = await TensorSpecAPI.dftFatBands(lastCrystalName, target);
+        lastBandResult = {
+            ...lastBandResult,
+            fat_weights: fat.fat_weights,
+            fat_target: fat.fat_target,
+            fat_n_orbitals: fat.fat_n_orbitals,
+        };
+        ensurePlot().setResult(lastBandResult);
+        setStatus(
+            fat.fat_weights
+                ? `Fat ${fat.fat_target} (${fat.fat_n_orbitals} orbitals)`
+                : "Fat bands cleared"
+        );
+    } catch (err) {
+        setStatus(err.message, true);
+    }
 }
 
 function renderShells() {
@@ -235,9 +340,12 @@ async function calculate() {
     setStatus(`Solving ${structure.formula}\u2026`);
     try {
         const result = await TensorSpecAPI.dftBands(structure.name, readParameters());
+        lastCrystalName = structure.name;
+        lastBandResult = { ...result, fat_weights: null, fat_target: "none" };
+        populateFatOptions(result.orbital_labels || []);
 
         const view = ensurePlot();
-        view.setResult(result);
+        view.setResult(lastBandResult);
         view.setRange(Number(dom.eMin.value) || -6, Number(dom.eMax.value) || 6);
 
         dom.statBands.textContent = `${result.n_bands} bands, ${result.n_kpoints} k-points`;
@@ -395,6 +503,7 @@ dom.structures.addEventListener("change", () => {
 });
 dom.calculate.addEventListener("click", calculate);
 if (dom.gapPredict) dom.gapPredict.addEventListener("click", predictGap);
+if (dom.fat) dom.fat.addEventListener("change", applyFatTarget);
 dom.qeGenerate.addEventListener("click", generateInputs);
 dom.qeBundle.addEventListener("click", downloadBundle);
 dom.qeQueue.addEventListener("click", queueRun);

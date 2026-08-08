@@ -25,6 +25,8 @@ from tensorspec.web.server.jobs import get_job_queue
 from tensorspec.web.server.schemas import (
     BandRequest,
     BandResult,
+    FatBandRequest,
+    FatBandResult,
     GapPredictRequest,
     JobInfo,
     QEGenerateResponse,
@@ -414,6 +416,7 @@ def compute_bands(
         node_idx,
         result["labels"],
         orbital_positions=[site.coords.tolist() for site in structure],
+        orbital_labels=[str(l) for l in (result["orbital_labels"] or [])],
     )
 
     return BandResult(
@@ -441,4 +444,64 @@ def compute_bands(
         weight_min=float(np.min(result["weights"])) if result.get("weights") is not None else 0.0,
         weight_max=float(np.max(result["weights"])) if result.get("weights") is not None else 1.0,
         unfolded=result.get("weights") is not None,
+    )
+
+
+@router.post("/{name}/bands/fat", response_model=FatBandResult)
+def compute_fat_bands(
+    name: str,
+    request: FatBandRequest,
+    session: Session = Depends(current_session),
+) -> FatBandResult:
+    """Re-project cached eigenvectors onto a fat-band target (no re-diagonalize)."""
+    bands_name = name if name.endswith("_bands") else f"{name}_bands"
+    stored = session.workspace.pull_band_structure(bands_name)
+    if stored is None:
+        # Allow callers that already pass the bands node name without suffix logic
+        stored = session.workspace.pull_band_structure(name)
+        bands_name = name if stored is not None else bands_name
+    if stored is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No band structure '{bands_name}'. Calculate bands first.",
+        )
+
+    evecs = np.asarray(stored.get("eigenvectors"))
+    labels = [str(l) for l in (stored.get("orbital_labels") or [])]
+    if evecs.ndim != 3:
+        raise HTTPException(
+            status_code=422,
+            detail="Cached band structure has no usable eigenvectors for fat projection.",
+        )
+    if not labels:
+        # Reconstruct placeholder labels if an older cache entry lacks them
+        labels = [f"orb_{i}" for i in range(evecs.shape[1])]
+
+    try:
+        idxs = band_service.resolve_fat_indices(labels, request.fat_target)
+        weights = band_service.fat_band_weights(evecs, idxs)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    n_bands = int(weights.shape[1])
+    target = (request.fat_target or "none").strip() or "none"
+    if target.lower() in ("none", "none (standard lines)") or not idxs:
+        return FatBandResult(
+            name=bands_name,
+            fat_target="none",
+            fat_weights=None,
+            fat_n_orbitals=0,
+            orbital_labels=labels,
+            n_bands=n_bands,
+            n_kpoints=int(weights.shape[0]),
+        )
+
+    return FatBandResult(
+        name=bands_name,
+        fat_target=target,
+        fat_weights=[[float(v) for v in weights[:, b]] for b in range(n_bands)],
+        fat_n_orbitals=len(idxs),
+        orbital_labels=labels,
+        n_bands=n_bands,
+        n_kpoints=int(weights.shape[0]),
     )

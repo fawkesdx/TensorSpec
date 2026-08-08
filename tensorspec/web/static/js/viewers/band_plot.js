@@ -6,6 +6,8 @@
  *
  * When `weights` are present (unfold_hex), bands are drawn faint and spectral
  * weight is shown as bright scatter points (ARPES-like intensity).
+ * When `fat_weights` are present, orbital character uses the same scatter style;
+ * if both exist, fat modulates unfold alpha.
  */
 
 const MARGIN = { left: 58, right: 16, top: 16, bottom: 34 };
@@ -71,11 +73,13 @@ export class BandPlot {
         };
         if (rect.width <= 0 || rect.height <= 0) return;
 
-        const { k_dist, bands, node_positions, node_labels, weights } = this.result;
+        const { k_dist, bands, node_positions, node_labels, weights, fat_weights } = this.result;
         const kMax = k_dist[k_dist.length - 1] || 1;
         const { min: eMin, max: eMax } = this.range;
         const eSpan = eMax - eMin || 1;
         const unfolded = Array.isArray(weights) && weights.length === bands.length;
+        const fat = Array.isArray(fat_weights) && fat_weights.length === bands.length;
+        const weighted = unfolded || fat;
 
         const px = (k) => rect.left + (k / kMax) * rect.width;
         const py = (e) => rect.top + rect.height - ((e - eMin) / eSpan) * rect.height;
@@ -85,7 +89,6 @@ export class BandPlot {
         ctx.rect(rect.left, rect.top, rect.width, rect.height);
         ctx.clip();
 
-        // High-symmetry markers first, so the bands sit on top of them.
         ctx.strokeStyle = "#4b5563";
         ctx.lineWidth = 1;
         node_positions.forEach((k) => {
@@ -103,8 +106,7 @@ export class BandPlot {
         ctx.stroke();
         ctx.setLineDash([]);
 
-        if (unfolded) {
-            // Faint guide lines for all supercell bands
+        if (weighted) {
             ctx.strokeStyle = "rgba(96, 165, 250, 0.18)";
             ctx.lineWidth = 1;
             bands.forEach((band) => {
@@ -117,12 +119,13 @@ export class BandPlot {
                 ctx.stroke();
             });
 
-            // Spectral-weight scatter (bright = monolayer character)
             for (let b = 0; b < bands.length; b++) {
                 const band = bands[b];
-                const wband = weights[b];
                 for (let i = 0; i < band.length; i++) {
-                    const w = wband[i] ?? 0;
+                    let w = 1;
+                    if (unfolded) w *= (weights[b][i] ?? 0);
+                    if (fat) w *= (fat_weights[b][i] ?? 0);
+                    if (!unfolded && fat) w = fat_weights[b][i] ?? 0;
                     if (w < WEIGHT_FLOOR) continue;
                     const alpha = Math.min(1, 0.15 + 0.85 * w);
                     const r = 1.2 + 2.2 * w;
@@ -148,10 +151,14 @@ export class BandPlot {
 
         ctx.restore();
 
-        this._drawAxes(ctx, rect, eMin, eMax, node_positions, node_labels, px, unfolded);
+        this._drawAxes(ctx, rect, eMin, eMax, node_positions, node_labels, px, {
+            unfolded,
+            fat,
+        });
     }
 
-    _drawAxes(ctx, rect, eMin, eMax, nodes, labels, px, unfolded = false) {
+    _drawAxes(ctx, rect, eMin, eMax, nodes, labels, px, flags = {}) {
+        const { unfolded = false, fat = false } = flags;
         ctx.strokeStyle = "#3a3a4a";
         ctx.lineWidth = 1;
         ctx.strokeRect(rect.left, rect.top, rect.width, rect.height);
@@ -185,12 +192,16 @@ export class BandPlot {
         ctx.fillText("Energy (eV)", 0, 0);
         ctx.restore();
 
-        if (unfolded) {
+        if (unfolded || fat) {
             ctx.fillStyle = "#fbbf24";
             ctx.font = "10px ui-sans-serif, system-ui";
             ctx.textAlign = "right";
             ctx.textBaseline = "top";
-            ctx.fillText("spectral weight", rect.left + rect.width - 4, rect.top + 4);
+            let tag = "weight";
+            if (unfolded && fat) tag = "unfold × orbital";
+            else if (unfolded) tag = "spectral weight";
+            else tag = "orbital weight";
+            ctx.fillText(tag, rect.left + rect.width - 4, rect.top + 4);
         }
     }
 }
