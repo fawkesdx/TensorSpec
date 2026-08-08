@@ -8,6 +8,12 @@ from tensorspec.web.server import remote_scratch as rs
 
 
 class TestRemoteScratchWipe(unittest.TestCase):
+    def test_remote_qe_script_writes_sidecar_contract(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        text = (repo_root / "scripts" / "remote_qe.sh").read_text(encoding="utf-8")
+        self.assertIn(".tensorspec_remote_scratch", text)
+        self.assertIn("printf", text)
+
     def test_parse_ok(self):
         self.assertEqual(
             rs.parse_remote_scratch_sidecar("einstein\t/home/sandy/qe_scratch/job1"),

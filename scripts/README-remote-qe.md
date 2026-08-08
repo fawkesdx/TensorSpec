@@ -44,6 +44,7 @@ Local Generate/Bundle builds inputs; this script only syncs and executes remotel
 | Prefer | `/data/sandy/qe_scratch` if `/data/sandy` exists and is writable |
 | Fallback | `$HOME/qe_scratch` |
 | Job path | `$SCRATCH_ROOT/<YYYYMMDD-HHMMSS>-<basename>/` |
+| Sidecar | Live runs write `$RUN_DIR/.tensorspec_remote_scratch` (`host<TAB>scratch_path`) for cancel/wipe |
 | Success | Wipe remote scratch unless `--keep-scratch` |
 | Failure | **Keep** remote scratch; still pull allowlist logs/outs |
 
