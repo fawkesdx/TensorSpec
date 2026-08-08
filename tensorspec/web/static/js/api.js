@@ -349,6 +349,11 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
+        dftFatBands: (name, fatTarget = "none") =>
+            request(`/api/dft/${encodeURIComponent(name)}/bands/fat`, {
+                method: "POST",
+                body: JSON.stringify({ fat_target: fatTarget }),
+            }),
         dftBzContext: (name) =>
             request(`/api/dft/${encodeURIComponent(name)}/bz-context`),
         dftGapPredict: (name, fidelity = "PBE") =>

@@ -98,6 +98,28 @@ class BandResult(BaseModel):
     weight_min: float = 0.0
     weight_max: float = 1.0
     unfolded: bool = False
+    # Orbital character fat bands (re-projected from cached evecs)
+    fat_weights: list[list[float]] | None = None
+    fat_target: str = "none"
+    fat_n_orbitals: int = 0
+
+
+class FatBandRequest(BaseModel):
+    """Re-project cached eigenvectors onto an orbital / shell / element target."""
+
+    fat_target: str = Field(default="none", max_length=128)
+
+
+class FatBandResult(BaseModel):
+    """Fat-band weights for an already-computed band structure."""
+
+    name: str
+    fat_target: str
+    fat_weights: list[list[float]] | None = None
+    fat_n_orbitals: int = 0
+    orbital_labels: list[str] = []
+    n_bands: int
+    n_kpoints: int
 
 
 class StructureOption(BaseModel):

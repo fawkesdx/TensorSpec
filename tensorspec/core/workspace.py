@@ -66,7 +66,7 @@ class WorkspaceManager:
             crystals.append(key)
         return crystals
     
-    def push_band_structure(self, name, k_dist, eigenvalues, eigenvectors, k_vecs, node_idx, labels, orbital_positions=None):
+    def push_band_structure(self, name, k_dist, eigenvalues, eigenvectors, k_vecs, node_idx, labels, orbital_positions=None, orbital_labels=None):
         """
         Stores a calculated band structure, its wavefunctions, and basis coordinates.
         """
@@ -78,7 +78,8 @@ class WorkspaceManager:
             'k_vecs': k_vecs,               # Actual 3D k-vectors for matrix elements
             'node_idx': node_idx,           # High symmetry point indices
             'labels': labels,               # High symmetry labels
-            'orbital_positions': orbital_positions or [] # NEW: Atomic basis coords for ARPES ME
+            'orbital_positions': orbital_positions or [],  # Atomic basis coords for ARPES ME
+            'orbital_labels': list(orbital_labels) if orbital_labels is not None else [],
         }
 
     def pull_band_structure(self, name):

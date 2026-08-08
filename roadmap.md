@@ -80,7 +80,7 @@ Grand App
 	- [x] Core Math: Pull exact Wigner-Seitz BZ nodes (Gamma, M, K, etc.) directly from Tab 4 of the Crystal Suite via global_workspace to define arbitrary 3D k-paths.
 	- [x] Toy Tight Binding (TB) Engine: Built-in simple models (1D chain, 2D square lattice, 2D honeycomb/graphene) to test the solver and plotting.
 	- [x] Generalized TB Capability: UI to define custom hopping parameters and on-site energies.Engine dynamically scales Slater-Koster integrals using Harrison's rules and auto-detects materials via database.
-	- [x] Multi-Orbital Projection: Calculate eigenvector probabilities for atomic character mapping (Fat Bands).
+	- [x] Multi-Orbital Projection: Calculate eigenvector probabilities for atomic character mapping (Fat Bands). HTML fat-band dropdown (shell / element / orbital) re-projects cached evecs via `POST …/bands/fat`.
 	- [ ] k.p Perturbation Capability: Near-band-edge models (e.g., Dirac cone effective mass).
 	- [ ] Full DFT Capability: Wrappers to trigger/parse external solvers from Quantum Espresso
 		- [x] Abstract QE Input Generator (scf.in, nscf.in, wannier90.win) decoupled from local executables.

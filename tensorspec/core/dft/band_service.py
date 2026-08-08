@@ -357,6 +357,87 @@ def calculate_bands(engine, *, path_mode: str = PATH_AUTO, custom_coords: str = 
     return out
 
 
+# Orbital character tags used in Chinook / TensorSpec labels: `{el}_{orb}` or
+# `{el}_{orb}_up` / `_dn` under SOC.
+_SHELL_SUFFIXES = {
+    "s": ("_s",),
+    "p": ("_pz", "_px", "_py"),
+    "d": ("_dz2", "_dxz", "_dyz", "_dx2-y2", "_dxy"),
+}
+
+
+def _strip_spin_suffix(label: str) -> str:
+    if label.endswith("_up") or label.endswith("_dn"):
+        return label[:-3]
+    return label
+
+
+def resolve_fat_indices(orbital_labels, fat_target: str) -> list[int]:
+    """
+    Map a fat-band target string to basis-orbital indices.
+
+    Accepted forms: ``none``, ``shell:s|p|d``, ``element:C``, ``orbital:C_pz``,
+    or a bare unique label ``C_pz``.
+    """
+    labels = [str(x) for x in (orbital_labels or [])]
+    raw = (fat_target or "none").strip()
+    if not raw or raw.lower() in ("none", "none (standard lines)"):
+        return []
+
+    target = raw
+    if target.startswith("shell:"):
+        shell = target.split(":", 1)[1].strip().lower()
+        suffixes = _SHELL_SUFFIXES.get(shell)
+        if not suffixes:
+            raise ValueError(f"Unknown shell '{shell}'. Use s, p, or d.")
+        idxs = []
+        for i, lab in enumerate(labels):
+            base = _strip_spin_suffix(lab)
+            if any(base.endswith(suf) for suf in suffixes):
+                idxs.append(i)
+        return idxs
+
+    if target.startswith("element:"):
+        el = target.split(":", 1)[1].strip()
+        if not el:
+            raise ValueError("element: target needs a symbol, e.g. element:C")
+        prefix = f"{el}_"
+        return [i for i, lab in enumerate(labels) if lab.startswith(prefix)]
+
+    if target.startswith("orbital:"):
+        want = target.split(":", 1)[1].strip()
+    else:
+        want = target.strip()
+
+    exact = [i for i, lab in enumerate(labels) if lab == want]
+    if exact:
+        return exact
+    # Allow matching without spin tag when user picked base orbital
+    soft = [i for i, lab in enumerate(labels) if _strip_spin_suffix(lab) == want]
+    if soft:
+        return soft
+    raise ValueError(f"No orbital labelled '{want}' in the cached band structure.")
+
+
+def fat_band_weights(eigenvectors: np.ndarray, indices) -> np.ndarray:
+    """
+    Sum |C|² over selected orbital indices → shape (nk, nband), clipped to [0, 1].
+    """
+    evecs = np.asarray(eigenvectors)
+    if evecs.ndim != 3:
+        raise ValueError(f"eigenvectors must be (nk, norb, nband); got {evecs.shape}")
+    idxs = [int(i) for i in indices]
+    nk, norb, nband = evecs.shape
+    if not idxs:
+        return np.zeros((nk, nband), dtype=float)
+    for i in idxs:
+        if i < 0 or i >= norb:
+            raise ValueError(f"Orbital index {i} out of range for basis size {norb}")
+    probs = np.abs(evecs) ** 2
+    weights = np.sum(probs[:, idxs, :], axis=1)
+    return np.clip(weights.real, 0.0, 1.0)
+
+
 def calculate_2d_mesh(
     engine,
     *,
