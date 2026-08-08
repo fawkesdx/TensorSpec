@@ -36,6 +36,10 @@ const dom = {
     eMax: el("tb-emax"),
     shells: el("tb-shells"),
     fat: el("tb-fat"),
+    w90File: el("tb-w90-file"),
+    w90Load: el("tb-w90-load"),
+    w90Use: el("tb-w90-use"),
+    w90Status: el("tb-w90-status"),
 
     qeCutoff: el("qe-cutoff"),
     qeSoc: el("qe-soc"),
@@ -394,6 +398,7 @@ function readParameters() {
         use_soc: dom.soc.checked,
         soc_strength: Number(dom.socStrength.value) || 0.5,
         tb_mode: dom.hamiltonian.value,
+        use_wannier: Boolean(dom.w90Use?.checked),
     };
 }
 
@@ -555,6 +560,47 @@ async function cancelRun() {
     }
 }
 
+async function loadWannierHr() {
+    const structure = selected();
+    if (!structure) {
+        setStatus("Select a crystal first.", true);
+        return;
+    }
+    if (!dom.w90File) return;
+    dom.w90File.value = "";
+    dom.w90File.click();
+}
+
+async function onWannierFileChosen(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const structure = selected();
+    if (!structure) {
+        setStatus("Select a crystal first.", true);
+        return;
+    }
+    if (dom.w90Load) dom.w90Load.disabled = true;
+    if (dom.w90Status) dom.w90Status.textContent = `Uploading ${file.name}…`;
+    try {
+        const result = await TensorSpecAPI.dftUploadWannier(structure.name, file);
+        if (dom.w90Use) {
+            dom.w90Use.disabled = false;
+            dom.w90Use.checked = true;
+        }
+        if (dom.w90Status) {
+            const scf = result.scf_out_saved ? " (+ scf.out)" : "";
+            dom.w90Status.textContent =
+                `Loaded ${file.name} (${result.bytes} bytes)${scf}. Check “Use uploaded W90” then Calculate.`;
+        }
+        setStatus(`Wannier HR stored for ${structure.name}`);
+    } catch (err) {
+        if (dom.w90Status) dom.w90Status.textContent = err.message;
+        setStatus(err.message, true);
+    } finally {
+        if (dom.w90Load) dom.w90Load.disabled = false;
+    }
+}
+
 async function refreshSolvers() {
     try {
         const info = await TensorSpecAPI.dftSolvers();
@@ -587,6 +633,17 @@ dom.structures.addEventListener("change", () => {
 dom.calculate.addEventListener("click", calculate);
 if (dom.gapPredict) dom.gapPredict.addEventListener("click", predictGap);
 if (dom.fat) dom.fat.addEventListener("change", applyFatTarget);
+if (dom.w90Load) dom.w90Load.addEventListener("click", loadWannierHr);
+if (dom.w90File) dom.w90File.addEventListener("change", onWannierFileChosen);
+if (dom.w90Use) {
+    dom.w90Use.addEventListener("change", () => {
+        if (dom.w90Status) {
+            dom.w90Status.textContent = dom.w90Use.checked
+                ? "Status: Calculate will use uploaded Wannier90 Hamiltonian."
+                : "Status: Using Manual Slater-Koster parameters.";
+        }
+    });
+}
 if (dom.qeSlabPrepare) dom.qeSlabPrepare.addEventListener("click", prepareSlab);
 if (dom.qeSlabMode) {
     dom.qeSlabMode.addEventListener("change", () => {

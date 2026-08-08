@@ -143,15 +143,16 @@
 
                         <div class="form-row">
                             <label for="tb-kgrid">k-Space Grid:</label>
-                            <select class="field" id="tb-kgrid">
+                            <select class="field" id="tb-kgrid" disabled title="HTML viewer: not yet — 1D path only">
                                 <option>1D High-Symmetry Path</option>
-                                <option>2D k-Mesh (kx, ky)</option>
+                                <option disabled>2D k-Mesh (kx, ky) — not yet</option>
                             </select>
                         </div>
                         <div class="form-row">
                             <label for="tb-isoe">2D Isoenergy Cut (eV):</label>
-                            <input class="field" id="tb-isoe" type="number" min="-20" max="20" step="0.1" value="0.0" disabled>
+                            <input class="field" id="tb-isoe" type="number" min="-20" max="20" step="0.1" value="0.0" disabled title="HTML viewer: not yet">
                         </div>
+                        <p class="hint">2D k-mesh / isoenergy cuts: HTML viewer: not yet. Use 1D path below.</p>
                         <div class="form-row">
                             <label for="tb-path">1D Path Template:</label>
                             <select class="field" id="tb-path">
@@ -198,9 +199,11 @@
 
                         <fieldset class="fieldset">
                             <legend>Ab Initio Import (Wannier90)</legend>
-                            <button type="button" class="btn btn--block" disabled>&#128194; Load wannier90_hr.dat</button>
-                            <label class="check"><input type="checkbox" checked disabled> Overlay Native W90 Bands (Red Dashed)</label>
-                            <p class="status-line">Status: Using Manual Slater-Koster parameters.</p>
+                            <input type="file" id="tb-w90-file" accept=".dat,.hr.dat,*" hidden>
+                            <button type="button" class="btn btn--block" id="tb-w90-load">&#128194; Load wannier90_hr.dat</button>
+                            <label class="check"><input type="checkbox" id="tb-w90-use" disabled> Use uploaded W90 Hamiltonian for Calculate</label>
+                            <label class="check"><input type="checkbox" id="tb-w90-overlay" disabled> Overlay Native W90 Bands (Red Dashed) — not yet</label>
+                            <p class="status-line" id="tb-w90-status">Status: Using Manual Slater-Koster parameters.</p>
                         </fieldset>
 
                         <div class="form-row">
@@ -221,7 +224,7 @@
                         </div>
                         <div class="form-row">
                             <label for="tb-pts">Points per Segment:</label>
-                            <input class="field" id="tb-pts" type="number" min="10" max="2000" step="50" value="100">
+                            <input class="field" id="tb-pts" type="number" min="10" max="500" step="50" value="100">
                         </div>
                         <div class="form-row">
                             <label for="tb-onsite">On-site E (eV):</label>

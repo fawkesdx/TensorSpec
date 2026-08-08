@@ -12,7 +12,9 @@ import time
 import zipfile
 
 import numpy as np
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse
 
 from tensorspec.core.dft import band_service
@@ -73,6 +75,18 @@ def _display_label(label: str) -> str:
         .replace("\\Gamma", "\u0393")
         .replace("$", "")
     )
+
+
+def _wannier_dir(session: Session, name: str) -> Path:
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)[:64] or "structure"
+    path = Path(session.workspace.project_dir) / "wannier" / safe
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _wannier_hr_path(session: Session, name: str) -> Path | None:
+    hr = _wannier_dir(session, name) / "wannier90_hr.dat"
+    return hr if hr.is_file() else None
 
 
 def _solver_status() -> SolverStatus:
@@ -420,6 +434,44 @@ def predict_gap(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+@router.post("/{name}/wannier")
+async def upload_wannier_hr(
+    name: str,
+    file: UploadFile = File(...),
+    scf_out: UploadFile | None = File(default=None),
+    session: Session = Depends(current_session),
+):
+    """Store wannier90_hr.dat (and optional scf.out) for later band solves."""
+    _require_structure(session, name)
+    fname = (file.filename or "").lower()
+    if "hr" not in fname and not fname.endswith(".dat"):
+        raise HTTPException(
+            status_code=400,
+            detail="Expected a wannier90_hr.dat (or *.dat) Hamiltonian file.",
+        )
+    payload = await file.read()
+    if len(payload) > 64 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File exceeds the 64 MB limit.")
+
+    dest = _wannier_dir(session, name)
+    hr_path = dest / "wannier90_hr.dat"
+    hr_path.write_bytes(payload)
+
+    scf_saved = False
+    if scf_out is not None and scf_out.filename:
+        scf_bytes = await scf_out.read()
+        if scf_bytes:
+            (dest / "scf.out").write_bytes(scf_bytes)
+            scf_saved = True
+
+    return {
+        "name": name,
+        "hr_path": str(hr_path),
+        "bytes": len(payload),
+        "scf_out_saved": scf_saved,
+    }
+
+
 @router.post("/{name}/bands", response_model=BandResult)
 def compute_bands(
     name: str,
@@ -444,6 +496,16 @@ def compute_bands(
 
     shells = engine.get_default_hopping(structure.composition.reduced_formula)
 
+    w90_filepath = None
+    if request.use_wannier:
+        hr = _wannier_hr_path(session, name)
+        if hr is None:
+            raise HTTPException(
+                status_code=422,
+                detail="No uploaded wannier90_hr.dat for this crystal. Load one first.",
+            )
+        w90_filepath = str(hr)
+
     started = time.perf_counter()
     try:
         result = band_service.calculate_bands(
@@ -464,6 +526,7 @@ def compute_bands(
             use_soc=request.use_soc,
             soc_strength=request.soc_strength,
             tb_mode=request.tb_mode,
+            w90_filepath=w90_filepath,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
