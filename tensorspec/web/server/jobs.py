@@ -172,6 +172,8 @@ class JobQueue:
             return self._jobs.get(job_id)
 
     def cancel(self, job_id: str, session_id: str) -> Job:
+        run_dir: Path | None = None
+        wipe_log: Callable[[str], None] | None = None
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
@@ -195,8 +197,10 @@ class JobQueue:
                         process.terminate()
                     except Exception:
                         pass
-            best_effort_wipe_remote_scratch(job.run_dir, log=job.append_log)
-            return job
+            run_dir = job.run_dir
+            wipe_log = job.append_log
+        best_effort_wipe_remote_scratch(run_dir, log=wipe_log)
+        return job
 
     def _loop(self) -> None:
         while True:
