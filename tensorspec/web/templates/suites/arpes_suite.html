@@ -17,7 +17,7 @@
             <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
             <h1 class="suite-header__title">ARPES Suite</h1>
             <div class="suite-header__spacer"></div>
-            <span class="badge">Process: in-plane → k∥ + BZ overlay</span>
+            <span class="badge">Process: k∥ + hv→kz</span>
         </header>
 
         <div class="tabs">
@@ -296,9 +296,17 @@
 
                         <section class="panel">
                             <div class="panel__header">
-                                <h2 class="panel__title">In-plane → k∥</h2>
+                                <h2 class="panel__title">Process</h2>
                             </div>
                             <div class="panel__body" style="padding:12px">
+                                <fieldset class="fieldset">
+                                    <legend>Module</legend>
+                                    <select class="field" id="ap-mode">
+                                        <option value="inplane">In-plane → k∥</option>
+                                        <option value="kz">Photon → kz</option>
+                                    </select>
+                                </fieldset>
+
                                 <fieldset class="fieldset">
                                     <legend>Dataset</legend>
                                     <div class="inline">
@@ -310,6 +318,7 @@
                                     <p class="hint" id="ap-meta">Load data in Data Viewer first.</p>
                                 </fieldset>
 
+                                <div id="ap-inplane-controls">
                                 <fieldset class="fieldset">
                                     <legend>Γ center (click/drag on raw)</legend>
                                     <div class="form-row">
@@ -324,7 +333,7 @@
                                 </fieldset>
 
                                 <fieldset class="fieldset">
-                                    <legend>Conversion</legend>
+                                    <legend>In-plane conversion</legend>
                                     <div class="form-row">
                                         <label for="ap-hv">Photon (eV):</label>
                                         <input class="field" id="ap-hv" type="number" min="5" max="2000" step="0.1" value="80">
@@ -351,6 +360,33 @@
                                         </select>
                                     </div>
                                 </fieldset>
+                                </div>
+
+                                <div id="ap-kz-controls" hidden>
+                                <fieldset class="fieldset">
+                                    <legend>Inner potential (Vo)</legend>
+                                    <div class="form-row">
+                                        <label for="ap-vo">Vo (eV):</label>
+                                        <input class="field" id="ap-vo" type="number" min="0" max="50" step="0.1" value="15">
+                                    </div>
+                                    <input type="range" id="ap-vo-slider" min="0" max="40" step="0.1" value="15" style="width:100%">
+                                    <div class="form-row">
+                                        <label for="ap-kz-phi">Work Φ (eV):</label>
+                                        <input class="field" id="ap-kz-phi" type="number" min="0" max="10" step="0.1" value="4.5">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-kz-theta">θ (deg):</label>
+                                        <input class="field" id="ap-kz-theta" type="number" min="-90" max="90" step="0.1" value="0">
+                                    </div>
+                                    <div class="form-row">
+                                        <label for="ap-kz-eb">E_B ref (eV):</label>
+                                        <input class="field" id="ap-kz-eb" type="number" step="0.1" value="0">
+                                    </div>
+                                    <label class="hint" style="display:flex;gap:8px;align-items:center">
+                                        <input type="checkbox" id="ap-kz-q"> Soft X-ray photon-momentum correction
+                                    </label>
+                                </fieldset>
+                                </div>
 
                                 <fieldset class="fieldset">
                                     <legend>BZ overlay</legend>
@@ -368,8 +404,11 @@
                                         <label for="ap-l">l</label>
                                         <input class="field" id="ap-l" type="number" step="1" value="1">
                                     </div>
-                                    <label class="hint" style="display:flex;gap:8px;align-items:center">
+                                    <label class="hint" id="ap-bz-inplane-row" style="display:flex;gap:8px;align-items:center">
                                         <input type="checkbox" id="ap-bz-toggle"> Overlay projected surface BZ
+                                    </label>
+                                    <label class="hint" id="ap-bz-perp-row" hidden style="display:flex;gap:8px;align-items:center">
+                                        <input type="checkbox" id="ap-perp-bz-toggle"> Overlay perpendicular BZ (kz guides)
                                     </label>
                                 </fieldset>
 
@@ -379,17 +418,12 @@
                                 </div>
                                 <button type="button" class="btn btn--primary btn--block" id="ap-apply">Apply → workspace</button>
                                 <p class="hint" id="ap-status">Click the raw map to set Γ. Preview updates on the right.</p>
-
-                                <fieldset class="fieldset" style="margin-top:16px;opacity:0.7">
-                                    <legend>Photon → kz (next)</legend>
-                                    <p class="hint">Vo slider + perpendicular BZ will land in a follow-up module on this tab.</p>
-                                </fieldset>
                             </div>
                         </section>
 
                         <section class="panel">
                             <div class="panel__header">
-                                <h2 class="panel__title">Raw (set Γ)</h2>
+                                <h2 class="panel__title" id="ap-raw-title">Raw</h2>
                                 <span class="badge" id="ap-raw-badge">—</span>
                             </div>
                             <div class="panel__body" style="padding:12px;display:flex;flex-direction:column;gap:8px">
@@ -401,7 +435,7 @@
 
                         <section class="panel">
                             <div class="panel__header">
-                                <h2 class="panel__title">k∥ preview</h2>
+                                <h2 class="panel__title" id="ap-k-title">Converted preview</h2>
                                 <span class="badge" id="ap-k-badge">—</span>
                             </div>
                             <div class="panel__body" style="padding:12px">
