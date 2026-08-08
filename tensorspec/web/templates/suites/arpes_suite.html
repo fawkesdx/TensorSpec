@@ -24,11 +24,13 @@
             <input class="tab-radio" type="radio" name="arpes-tabs" id="t1" checked>
             <input class="tab-radio" type="radio" name="arpes-tabs" id="t2">
             <input class="tab-radio" type="radio" name="arpes-tabs" id="t3">
+            <input class="tab-radio" type="radio" name="arpes-tabs" id="t4">
 
             <nav class="tab-bar">
                 <label for="t1">Matrix Element Simulator</label>
                 <label for="t2">Data Viewer</label>
                 <label for="t3">Process</label>
+                <label for="t4">Analysis</label>
             </nav>
 
             <div class="tab-body">
@@ -267,12 +269,13 @@
                                     <input type="file" id="av-load-log" accept=".csv,text/csv" style="display:block;margin-top:4px;width:100%">
                                 </label>
                                 <button type="button" class="btn btn--block" id="av-add-panel" style="margin-top:8px">&#10133; Spawn Panel (Below)</button>
+                                <button type="button" class="btn btn--block btn--primary" id="av-kind-layout" style="margin-top:8px">Open Kind Layout</button>
                                 <h3 class="section-heading">Datasets</h3>
                                 <ul class="window-registry__list" id="av-datasets">
                                     <li class="empty-state">Loading&hellip;</li>
                                 </ul>
                                 <button type="button" class="btn btn--block" id="av-refresh" style="margin-top:12px">&#128260; Refresh List</button>
-                                <p class="hint">Right-click a panel title for Spawn Up/Down/Left/Right, Detach, and Close. Enable Sync to lock matching axes.</p>
+                                <p class="hint">Select a dataset, then Open Kind Layout for linked cut / Fermi / hv panels (Sync on). Right-click titles to spawn more.</p>
                             </div>
                         </section>
 
@@ -444,6 +447,146 @@
                         </section>
 
                     </div>
+                </section>
+
+                <!-- ===== Tab 4: Analysis (peakfit) ===== -->
+                <section class="tab-panel" data-tab="t4">
+                    <div class="controls" style="margin-bottom:12px">
+                        <div class="control">
+                            <label for="an-name">Dataset</label>
+                            <select id="an-name"></select>
+                        </div>
+                        <div class="control">
+                            <label for="an-mode">Mode</label>
+                            <select id="an-mode">
+                                <option value="mdc" selected>MDC (vs momentum)</option>
+                                <option value="edc">EDC (vs energy)</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <label for="an-shape">Lineshape</label>
+                            <select id="an-shape">
+                                <option value="lorentzian" selected>Lorentzian</option>
+                                <option value="voigt">Voigt (instr. Gauss)</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <label for="an-npeaks">N peaks</label>
+                            <input id="an-npeaks" type="number" min="1" max="8" step="1" value="1" style="width:4rem">
+                        </div>
+                        <div class="control">
+                            <label><input type="checkbox" id="an-fd"> Fermi–Dirac (EDC)</label>
+                        </div>
+                        <div class="control">
+                            <label for="an-T">T (K)</label>
+                            <input id="an-T" type="number" step="0.1" value="10" style="width:5rem">
+                        </div>
+                        <div class="control">
+                            <label for="an-fwhm">Analyzer FWHM (eV)</label>
+                            <input id="an-fwhm" type="number" step="0.001" value="0" style="width:5rem">
+                        </div>
+                        <div class="control">
+                            <label for="an-index">Curve index</label>
+                            <input id="an-index" type="range" min="0" max="0" value="0" style="width:10rem">
+                            <span class="hint" id="an-index-label">0</span>
+                        </div>
+                        <div class="control">
+                            <button class="btn btn--ghost" id="an-defaults" type="button">Load defaults</button>
+                            <button class="btn btn--ghost" id="an-suggest" type="button">Suggest seeds</button>
+                            <button class="btn" id="an-fit-curve" type="button">Fit curve</button>
+                            <button class="btn" id="an-fit-stack" type="button">Fit stack → /analysis</button>
+                        </div>
+                    </div>
+                    <p class="hint" id="an-status">Select a 2D cut (or map slice) for EDC/MDC peak fitting.</p>
+
+                    <div class="grid grid--2" style="gap:12px;margin-bottom:12px">
+                        <section class="panel">
+                            <div class="panel__header"><h2 class="panel__title">Seeds</h2></div>
+                            <div class="panel__body" style="padding:12px;overflow:auto;max-height:220px">
+                                <table class="table" id="an-seeds-table" style="width:100%;font-size:0.85rem">
+                                    <thead><tr><th>#</th><th>Center</th><th>Amplitude</th><th>Width</th></tr></thead>
+                                    <tbody id="an-seeds-body"></tbody>
+                                </table>
+                            </div>
+                        </section>
+                        <section class="panel">
+                            <div class="panel__header"><h2 class="panel__title">Fit result (this curve)</h2></div>
+                            <div class="panel__body" style="padding:12px;overflow:auto;max-height:220px">
+                                <pre id="an-result" style="margin:0;font-size:0.8rem;white-space:pre-wrap">—</pre>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="grid grid--2" style="gap:12px">
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Data + fit</h2>
+                                <span class="badge" id="an-curve-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-curve" style="min-height:280px"></div>
+                            </div>
+                        </section>
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Stack: center / integrated</h2>
+                                <span class="badge" id="an-stack-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-stack" style="min-height:280px"></div>
+                            </div>
+                        </section>
+                    </div>
+
+                    <div class="controls" style="margin:16px 0 12px">
+                        <div class="control">
+                            <label for="an-qp-peak">Peak #</label>
+                            <input id="an-qp-peak" type="number" min="0" max="7" step="1" value="0" style="width:4rem">
+                        </div>
+                        <div class="control">
+                            <label for="an-ef">E<sub>F</sub></label>
+                            <input id="an-ef" type="number" step="0.001" value="0" style="width:5rem">
+                        </div>
+                        <div class="control">
+                            <label for="an-se-model">Self-energy</label>
+                            <select id="an-se-model">
+                                <option value="fl" selected>FL (Γ₀ + α ω²)</option>
+                                <option value="mfl">MFL (Γ₀ + α |ω|)</option>
+                                <option value="">Skip</option>
+                            </select>
+                        </div>
+                        <div class="control">
+                            <button class="btn" id="an-qp" type="button">QP results → /analysis</button>
+                        </div>
+                    </div>
+                    <p class="hint" id="an-qp-status">After Fit stack: build δE–E, k<sub>F</sub>, m*, v<sub>F</sub>, and FL/MFL from the peak table.</p>
+
+                    <div class="grid grid--2" style="gap:12px;margin-bottom:12px">
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">δE (Γ) vs E · intensity</h2>
+                                <span class="badge" id="an-de-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-de" style="min-height:260px"></div>
+                            </div>
+                        </section>
+                        <section class="panel">
+                            <div class="panel__header">
+                                <h2 class="panel__title">Dispersion E(k)</h2>
+                                <span class="badge" id="an-ek-badge">—</span>
+                            </div>
+                            <div class="panel__body" style="padding:12px">
+                                <div class="viewport" id="an-ek" style="min-height:260px"></div>
+                            </div>
+                        </section>
+                    </div>
+                    <section class="panel">
+                        <div class="panel__header"><h2 class="panel__title">QP summary</h2></div>
+                        <div class="panel__body" style="padding:12px">
+                            <pre id="an-qp-result" style="margin:0;font-size:0.8rem;white-space:pre-wrap">—</pre>
+                        </div>
+                    </section>
                 </section>
 
             </div>

@@ -153,6 +153,31 @@ class WorkspaceManager:
         item['tree'] = DataTreeBuilder.write_processed(item['tree'], tensor_data)
         return True
 
+    def write_analysis_data(self, name: str, node_name: str, dataset) -> bool:
+        """Write an analysis Dataset under ``/analysis/<node_name>``."""
+        item = self._data.get(name)
+        if not item or item.get('type') != 'spectroscopy_tree':
+            return False
+        item['tree'] = DataTreeBuilder.write_analysis(item['tree'], node_name, dataset)
+        return True
+
+    def pull_analysis_data(self, name: str, node_name: str = "mdc_peakfit"):
+        """Return an analysis Dataset, or None."""
+        item = self._data.get(name)
+        if not item or item.get('type') != 'spectroscopy_tree':
+            return None
+        tree = item['tree']
+        leaf = node_name.strip("/")
+        try:
+            analysis = tree["analysis"]
+            if leaf in analysis.children:
+                node = analysis[leaf]
+            else:
+                return None
+        except Exception:
+            return None
+        return node.to_dataset() if hasattr(node, "to_dataset") else node.ds
+
     def pull_tensor_data(self, name: str, node: str = "raw") -> TensorData:
         """
         Extracts a specific node from a stored DataTree and packages it back 

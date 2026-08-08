@@ -196,6 +196,28 @@ const TensorSpecAPI = (() => {
         tensorAxes: (name) =>
             request(`/api/arpes/${encodeURIComponent(name)}/axes`),
 
+        analysisDefaults: (name) =>
+            request(`/api/arpes/analysis/${encodeURIComponent(name)}/defaults`),
+        analysisFitCurve: (name, payload) =>
+            request(`/api/arpes/analysis/${encodeURIComponent(name)}/curve`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        analysisFitStack: (name, payload) =>
+            request(`/api/arpes/analysis/${encodeURIComponent(name)}/stack`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        analysisQpResults: (name, payload) =>
+            request(`/api/arpes/analysis/${encodeURIComponent(name)}/qp-results`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        analysisGetNode: (name, node) =>
+            request(
+                `/api/arpes/analysis/${encodeURIComponent(name)}/${encodeURIComponent(node)}`
+            ),
+
         /* Unpacks the framed slice: uint32 header length, header JSON, then
            float32 values. The header is padded so the values start aligned
            and can be wrapped without copying. */

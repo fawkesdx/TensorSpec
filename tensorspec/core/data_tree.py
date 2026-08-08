@@ -103,3 +103,20 @@ class DataTreeBuilder:
         history.attrs["log"] = log
         tree["history"] = history
         return tree
+
+    @staticmethod
+    def write_analysis(tree: DataTree, node_name: str, dataset: xr.Dataset) -> DataTree:
+        """Write ``/analysis/<node_name>`` and append a history line."""
+        safe = node_name.strip().strip("/")
+        if not safe or "/" in safe:
+            raise ValueError("Analysis node name must be a single path segment.")
+        tree[f"analysis/{safe}"] = dataset
+
+        history_node = tree["history"]
+        history = history_node.to_dataset() if hasattr(history_node, "to_dataset") else history_node.ds
+        log = list(history.attrs.get("log") or [])
+        log.append(f"[{datetime.datetime.now().time()}] Wrote /analysis/{safe}")
+        history = history.copy()
+        history.attrs["log"] = log
+        tree["history"] = history
+        return tree

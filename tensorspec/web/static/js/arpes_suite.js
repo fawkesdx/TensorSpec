@@ -42,17 +42,71 @@ function csvEscape(value) {
     return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+function axisCoords(axis) {
+    if (!axis || axis.size <= 1) return [axis?.min ?? 0];
+    const step = (axis.max - axis.min) / (axis.size - 1);
+    return Array.from({ length: axis.size }, (_, i) => axis.min + step * i);
+}
+
 const syncBus = {
     panels: new Set(),
-    broadcast(source, xLabel, xValue, yLabel, yValue) {
+    broadcast(source) {
+        if (!source.syncEnabled) return;
+        const state = source.cursorState();
         for (const panel of this.panels) {
             if (panel === source || !panel.syncEnabled) continue;
-            panel.receiveSync(xLabel, xValue, yLabel, yValue);
+            panel.applyCursorState(state);
         }
     },
 };
 
 /* ---- Snap-grid Data Viewer ---- */
+
+function kindLayoutPlan(roles) {
+    const E = roles.energy_axis;
+    const A = roles.angle_axis;
+    let motor1 = roles.beta_axis != null ? roles.beta_axis : roles.photon_axis;
+    let motor2 = null;
+    if (roles.beta_axis != null && roles.photon_axis != null) {
+        motor1 = roles.beta_axis;
+        motor2 = roles.photon_axis;
+    }
+    // Prefer kz / Photon Energy label if present after processing.
+    if (motor1 == null) {
+        const kzIdx = (roles.labels || []).findIndex((label) => /^kz$/i.test(label));
+        if (kzIdx >= 0) motor1 = kzIdx;
+    }
+
+    const energy = E != null ? E : 0;
+    const angle = A != null ? A : (energy === 0 ? 1 : 0);
+
+    if (motor1 == null) {
+        return {
+            kind: "cut",
+            panels: [{ x: angle, y: energy, row: 0, col: 0, title: "Dispersion" }],
+        };
+    }
+    if (motor2 == null) {
+        const kind = roles.beta_axis != null ? "fermi_map" : "hv_scan";
+        return {
+            kind,
+            panels: [
+                { x: angle, y: motor1, row: 0, col: 0, title: "Map (angle × motor)" },
+                { x: angle, y: energy, row: 1, col: 0, title: "Dispersion" },
+                { x: motor1, y: energy, row: 0, col: 1, title: "Motor × Energy" },
+            ],
+        };
+    }
+    return {
+        kind: "two_motor",
+        panels: [
+            { x: angle, y: motor1, row: 0, col: 0, title: "Angle × Motor1" },
+            { x: angle, y: motor2, row: 0, col: 1, title: "Angle × Motor2" },
+            { x: angle, y: energy, row: 1, col: 0, title: "Dispersion" },
+            { x: motor1, y: energy, row: 1, col: 1, title: "Motor1 × Energy" },
+        ],
+    };
+}
 
 class ViewerPanel {
     constructor(board, { row = 0, col = 0 } = {}) {
@@ -207,18 +261,95 @@ class ViewerPanel {
         return axis ? axisText(axis) : "";
     }
 
-    async loadTensor(name) {
+    async loadTensor(name, view = null) {
         const info = await TensorSpecAPI.tensorAxes(name);
         this.name = name;
         this.axes = info.axes;
-        this.xIdx = info.default_x;
-        this.yIdx = info.default_y;
-        this.fixed = { ...info.default_fixed };
+        if (view) {
+            this.xIdx = view.xIdx;
+            this.yIdx = view.yIdx;
+            this.fixed = { ...(view.fixed || {}) };
+            if (view.syncOn) this.dom.sync.checked = true;
+            this.dom.title.textContent = view.title || name;
+        } else {
+            this.xIdx = info.default_x;
+            this.yIdx = info.default_y;
+            this.fixed = { ...info.default_fixed };
+            this.dom.title.textContent = name;
+        }
+        // Ensure fixed covers every non-displayed dim.
+        this.axes.forEach((axis) => {
+            if (axis.index === this.xIdx || axis.index === this.yIdx) {
+                delete this.fixed[axis.index];
+                return;
+            }
+            if (this.fixed[axis.index] == null) {
+                this.fixed[axis.index] = Math.floor(axis.size / 2);
+            }
+        });
         this.crosshair = { x: 0, y: 0 };
-        this.dom.title.textContent = name;
         this.buildAxisPickers();
         this.buildSliders();
         await this.refreshSlice({ recenter: true });
+    }
+
+    cursorState() {
+        const state = {};
+        if (this.header) {
+            state[this.displayedAxisKey("x")] = this.header.x_axis[this.crosshair.x];
+            state[this.displayedAxisKey("y")] = this.header.y_axis[this.crosshair.y];
+        }
+        this.axes.forEach((axis) => {
+            if (axis.index === this.xIdx || axis.index === this.yIdx) return;
+            const index = this.fixed[axis.index];
+            if (index == null) return;
+            const coords = axisCoords(axis);
+            state[axisText(axis)] = coords[Math.min(index, coords.length - 1)];
+        });
+        return state;
+    }
+
+    applyCursorState(state) {
+        if (!this.axes.length || this.syncing || !state) return;
+        this.syncing = true;
+        let sliceNeeded = false;
+        let profileNeeded = false;
+
+        this.axes.forEach((axis) => {
+            const key = axisText(axis);
+            if (!(key in state)) return;
+            if (axis.index === this.xIdx || axis.index === this.yIdx) return;
+            const next = nearestIndex(axisCoords(axis), state[key]);
+            if (this.fixed[axis.index] !== next) {
+                this.fixed[axis.index] = next;
+                sliceNeeded = true;
+            }
+        });
+
+        if (this.header) {
+            let nextX = this.crosshair.x;
+            let nextY = this.crosshair.y;
+            const myX = this.displayedAxisKey("x");
+            const myY = this.displayedAxisKey("y");
+            if (myX in state) nextX = nearestIndex(this.header.x_axis, state[myX]);
+            if (myY in state) nextY = nearestIndex(this.header.y_axis, state[myY]);
+            if (nextX !== this.crosshair.x || nextY !== this.crosshair.y) {
+                this.crosshair = { x: nextX, y: nextY };
+                this.image.setCrosshair(nextX, nextY);
+                profileNeeded = true;
+            }
+        }
+
+        const finish = () => {
+            this.syncing = false;
+        };
+        if (sliceNeeded) {
+            this.buildSliders();
+            this.refreshSlice().then(finish).catch(finish);
+        } else {
+            if (profileNeeded) this.refreshProfiles().catch(() => {});
+            finish();
+        }
     }
 
     buildAxisPickers() {
@@ -276,6 +407,7 @@ class ViewerPanel {
                 readout.textContent = (axis.min + step * v).toFixed(3);
                 counter.textContent = `${v + 1}/${axis.size}`;
                 this.scheduleSlice();
+                if (this.syncEnabled && !this.syncing) syncBus.broadcast(this);
             });
             this.dom.sliders.appendChild(row);
         });
@@ -351,44 +483,12 @@ class ViewerPanel {
             this.refreshProfiles();
         }, 40);
         if (this.syncEnabled && this.header && !this.syncing) {
-            syncBus.broadcast(
-                this,
-                this.displayedAxisKey("x"),
-                this.header.x_axis[x],
-                this.displayedAxisKey("y"),
-                this.header.y_axis[y]
-            );
+            syncBus.broadcast(this);
         }
     }
 
-    receiveSync(sourceXLabel, sourceXValue, sourceYLabel, sourceYValue) {
-        if (!this.header || this.syncing) return;
-        this.syncing = true;
-        let nextX = this.crosshair.x;
-        let nextY = this.crosshair.y;
-        let changed = false;
-        const myX = this.displayedAxisKey("x");
-        const myY = this.displayedAxisKey("y");
-        if (myX === sourceXLabel) {
-            nextX = nearestIndex(this.header.x_axis, sourceXValue);
-            changed = true;
-        } else if (myX === sourceYLabel) {
-            nextX = nearestIndex(this.header.x_axis, sourceYValue);
-            changed = true;
-        }
-        if (myY === sourceYLabel) {
-            nextY = nearestIndex(this.header.y_axis, sourceYValue);
-            changed = true;
-        } else if (myY === sourceXLabel) {
-            nextY = nearestIndex(this.header.y_axis, sourceXValue);
-            changed = true;
-        }
-        if (changed && (nextX !== this.crosshair.x || nextY !== this.crosshair.y)) {
-            this.crosshair = { x: nextX, y: nextY };
-            this.image.setCrosshair(nextX, nextY);
-            this.refreshProfiles();
-        }
-        this.syncing = false;
+    receiveSync() {
+        /* replaced by applyCursorState */
     }
 
     onAxisChanged() {
@@ -574,6 +674,52 @@ class SnapBoard {
         this.rebuild();
         this.setActive(panel);
         return panel;
+    }
+
+    clearAttached() {
+        const copy = [...this.panels];
+        this.panels = [];
+        copy.forEach((panel) => panel.destroy());
+        this.active = null;
+        this.host.replaceChildren();
+        this.rebuild();
+    }
+
+    placePanel(row, col) {
+        const panel = new ViewerPanel(this, { row, col });
+        this.panels.push(panel);
+        this.host.appendChild(panel.root);
+        this.rebuild();
+        return panel;
+    }
+
+    async openKindLayout(name) {
+        this.setBadge(`Building kind layout for ${name}\u2026`);
+        const roles = await TensorSpecAPI.processRoles(name);
+        const plan = kindLayoutPlan(roles);
+        this.clearAttached();
+        const midFixed = {};
+        roles.shape.forEach((_, index) => {
+            midFixed[index] = Math.floor(roles.shape[index] / 2);
+        });
+        for (const spec of plan.panels) {
+            const fixed = {};
+            roles.shape.forEach((_, index) => {
+                if (index === spec.x || index === spec.y) return;
+                fixed[index] = midFixed[index];
+            });
+            const panel = this.placePanel(spec.row, spec.col);
+            await panel.loadTensor(name, {
+                xIdx: spec.x,
+                yIdx: spec.y,
+                fixed,
+                syncOn: true,
+                title: `${name} · ${spec.title}`,
+            });
+        }
+        this.setActive(this.panels[0] || null);
+        this.setBadge(`${name} · ${plan.kind} (${plan.panels.length} panels, Sync on)`);
+        return plan;
     }
 
     neighbor(panel, direction) {
@@ -823,6 +969,7 @@ async function refreshDatasets() {
             li.style.cursor = "pointer";
             if (board.active?.name === item.name) li.style.color = "var(--accent, #60a5fa)";
             li.addEventListener("click", async () => {
+                window.__avLastDataset = item.name;
                 const target = board.active || board.panels[0];
                 board.setActive(target);
                 board.setBadge(`Loading ${item.name}\u2026`);
@@ -845,6 +992,22 @@ el("av-refresh").addEventListener("click", refreshDatasets);
 el("av-add-panel").addEventListener("click", () => {
     board.spawn(board.active || board.panels[0], "Bottom");
     board.setBadge("Spawned panel — click a dataset to load");
+});
+el("av-kind-layout").addEventListener("click", async () => {
+    const name = board.active?.name || window.__avLastDataset;
+    if (!name) {
+        board.setBadge("Select/load a dataset first (click one in the list).", true);
+        return;
+    }
+    el("av-kind-layout").disabled = true;
+    try {
+        await board.openKindLayout(name);
+        await refreshDatasets();
+    } catch (err) {
+        board.setBadge(err.message, true);
+    } finally {
+        el("av-kind-layout").disabled = false;
+    }
 });
 el("av-demo").addEventListener("click", async () => {
     el("av-demo").disabled = true;
@@ -1483,5 +1646,436 @@ el("t3").addEventListener("change", () => {
         })
         .catch((e) => {
             el("ap-status").textContent = e.message;
+        });
+});
+
+/* ---- Analysis: EDC / MDC peakfit ---- */
+
+const analysisState = {
+    defaults: null,
+    seeds: [{ center: 0, amplitude: 1, width: 0.05 }],
+    curveViewer: null,
+    stackViewer: null,
+    deViewer: null,
+    ekViewer: null,
+    lastStack: null,
+    lastQp: null,
+};
+
+function analysisEnsureViewers() {
+    if (!analysisState.curveViewer) {
+        analysisState.curveViewer = new LineViewer(el("an-curve"), { color: "#94a3b8" });
+    }
+    if (!analysisState.stackViewer) {
+        analysisState.stackViewer = new LineViewer(el("an-stack"), { color: "#60a5fa" });
+    }
+    if (!analysisState.deViewer) {
+        analysisState.deViewer = new LineViewer(el("an-de"), { color: "#fbbf24" });
+    }
+    if (!analysisState.ekViewer) {
+        analysisState.ekViewer = new LineViewer(el("an-ek"), { color: "#60a5fa" });
+    }
+}
+
+function analysisViewAxes(defaults) {
+    let xIdx = defaults.angle_axis;
+    let yIdx = defaults.energy_axis != null ? defaults.energy_axis : 0;
+    if (xIdx == null) xIdx = yIdx === 0 ? 1 : 0;
+    if (yIdx === xIdx) yIdx = xIdx === 0 ? 1 : 0;
+    const ndim = defaults.shape.length;
+    if (xIdx >= ndim) xIdx = 0;
+    if (yIdx >= ndim) yIdx = Math.min(1, ndim - 1);
+    return { xIdx, yIdx };
+}
+
+function analysisFixed(defaults, xIdx, yIdx) {
+    const fixed = {};
+    defaults.shape.forEach((size, i) => {
+        if (i === xIdx || i === yIdx) return;
+        fixed[i] = Math.floor(size / 2);
+    });
+    return fixed;
+}
+
+function renderAnalysisSeeds() {
+    const body = el("an-seeds-body");
+    body.innerHTML = "";
+    analysisState.seeds.forEach((seed, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>${i + 1}</td>
+            <td><input data-i="${i}" data-k="center" type="number" step="any" value="${seed.center}" style="width:6rem"></td>
+            <td><input data-i="${i}" data-k="amplitude" type="number" step="any" value="${seed.amplitude}" style="width:6rem"></td>
+            <td><input data-i="${i}" data-k="width" type="number" step="any" value="${seed.width}" style="width:6rem"></td>
+        `;
+        body.appendChild(tr);
+    });
+    body.querySelectorAll("input").forEach((input) => {
+        input.addEventListener("change", () => {
+            const i = Number(input.dataset.i);
+            const k = input.dataset.k;
+            analysisState.seeds[i][k] = Number(input.value);
+        });
+    });
+}
+
+function syncAnalysisSeedCount() {
+    const n = Math.max(1, Math.min(8, Number(el("an-npeaks").value) || 1));
+    el("an-npeaks").value = String(n);
+    while (analysisState.seeds.length < n) {
+        const last = analysisState.seeds[analysisState.seeds.length - 1] || {
+            center: 0,
+            amplitude: 1,
+            width: 0.05,
+        };
+        analysisState.seeds.push({
+            center: last.center + 0.05,
+            amplitude: last.amplitude,
+            width: last.width,
+        });
+    }
+    analysisState.seeds = analysisState.seeds.slice(0, n);
+    renderAnalysisSeeds();
+}
+
+function analysisPayload({ suggest = false, forStack = false } = {}) {
+    const defaults = analysisState.defaults;
+    if (!defaults) throw new Error("Load a dataset first.");
+    const { xIdx, yIdx } = analysisViewAxes(defaults);
+    const mode = el("an-mode").value;
+    const indexMax =
+        mode === "mdc" ? defaults.shape[yIdx] - 1 : defaults.shape[xIdx] - 1;
+    const index = Math.max(0, Math.min(indexMax, Number(el("an-index").value) || 0));
+    const base = {
+        x_idx: xIdx,
+        y_idx: yIdx,
+        fixed: analysisFixed(defaults, xIdx, yIdx),
+        mode,
+        index,
+        half_width: 0,
+        lineshape: el("an-shape").value,
+        analyzer_fwhm: Number(el("an-fwhm").value) || 0,
+        include_fd: el("an-fd").checked && mode === "edc",
+        temperature: Number(el("an-T").value) || 10,
+        mu: 0,
+        seeds: analysisState.seeds.map((s) => ({
+            center: Number(s.center),
+            amplitude: Math.max(Number(s.amplitude), 1e-12),
+            width: Math.max(Number(s.width), 1e-12),
+        })),
+        n_peaks: Number(el("an-npeaks").value) || 1,
+        suggest,
+    };
+    if (!forStack) return base;
+    return {
+        ...base,
+        scan_start: null,
+        scan_stop: null,
+        scan_step: 1,
+        propagate_seeds: true,
+        store: true,
+    };
+}
+
+function updateAnalysisIndexRange() {
+    const defaults = analysisState.defaults;
+    if (!defaults) return;
+    const { xIdx, yIdx } = analysisViewAxes(defaults);
+    const mode = el("an-mode").value;
+    const max = Math.max(
+        0,
+        (mode === "mdc" ? defaults.shape[yIdx] : defaults.shape[xIdx]) - 1
+    );
+    const slider = el("an-index");
+    const prev = Number(slider.value) || 0;
+    slider.max = String(max);
+    slider.value = String(Math.min(prev, max));
+    el("an-index-label").textContent = `${slider.value} / ${max}`;
+}
+
+async function refreshAnalysisDatasets() {
+    const listing = await TensorSpecAPI.listItems();
+    const tensors = listing.items.filter((item) => item.type === "Spectroscopy DataTree");
+    const select = el("an-name");
+    const previous = select.value;
+    select.innerHTML = "";
+    if (!tensors.length) {
+        select.innerHTML = '<option value="">No spectroscopy data</option>';
+        return;
+    }
+    tensors.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.name;
+        option.textContent = item.name;
+        select.appendChild(option);
+    });
+    if ([...select.options].some((o) => o.value === previous)) select.value = previous;
+}
+
+async function loadAnalysisDataset(name) {
+    if (!name) return;
+    analysisEnsureViewers();
+    const defaults = await TensorSpecAPI.analysisDefaults(name);
+    analysisState.defaults = defaults;
+    el("an-T").value = String(defaults.temperature);
+    el("an-fwhm").value = String(defaults.analyzer_fwhm);
+    updateAnalysisIndexRange();
+    el("an-status").textContent = `${name}: shape ${defaults.shape.join("×")} · T=${defaults.temperature} K · FWHM=${defaults.analyzer_fwhm} eV`;
+    syncAnalysisSeedCount();
+}
+
+function plotAnalysisCurve(fit) {
+    analysisEnsureViewers();
+    const label = el("an-mode").value.toUpperCase();
+    analysisState.curveViewer.setCurve({
+        axis: fit.x,
+        values: fit.y,
+        label,
+        unit: "",
+    });
+    analysisState.curveViewer.setOverlays([
+        { values: fit.y_fit, color: "#f472b6", width: 1.8 },
+    ]);
+    el("an-curve-badge").textContent = fit.success ? `χ²=${fit.chi2.toExponential(2)}` : "failed";
+    const lines = (fit.peaks || []).map(
+        (p, i) =>
+            `P${i + 1}: c=${p.center.toFixed(4)}  A=${p.amplitude.toFixed(3)}  Γ=${p.width.toFixed(4)}${
+                p.sigma != null ? `  σ=${p.sigma.toFixed(4)}` : ""
+            }`
+    );
+    el("an-result").textContent = [
+        fit.message || (fit.success ? "ok" : "fit failed"),
+        `scan=${fit.scan_value}`,
+        ...lines,
+    ].join("\n");
+}
+
+function plotAnalysisStack(stack) {
+    analysisEnsureViewers();
+    analysisState.lastStack = stack;
+    const peak0 = 0;
+    const centers = stack.center.map((row) => row[peak0]);
+    const integrated = stack.integrated.map((row) => row[peak0]);
+    // Normalize integrated for overlay scale near centers
+    const cMin = Math.min(...centers);
+    const cMax = Math.max(...centers);
+    const iMin = Math.min(...integrated);
+    const iMax = Math.max(...integrated) || 1;
+    const scaled = integrated.map((v) => cMin + ((v - iMin) / (iMax - iMin || 1)) * (cMax - cMin || 1));
+    analysisState.stackViewer.setCurve({
+        axis: stack.scan,
+        values: centers,
+        label: "center",
+        unit: stack.scan_coord_name,
+    });
+    analysisState.stackViewer.setOverlays([
+        { values: scaled, color: "#34d399", width: 1.5, dash: [4, 3] },
+    ]);
+    const ok = (stack.success || []).filter(Boolean).length;
+    el("an-stack-badge").textContent = `${ok}/${stack.scan.length} ok · ${stack.node}${
+        stack.stored ? " stored" : ""
+    }`;
+}
+
+function plotQpResults(qp) {
+    analysisEnsureViewers();
+    analysisState.lastQp = qp;
+    const de = qp.delta_e;
+    const integ = qp.integrated_intensity;
+    const iMin = Math.min(...integ.integrated);
+    const iMax = Math.max(...integ.integrated) || 1;
+    const gMin = Math.min(...de.width);
+    const gMax = Math.max(...de.width);
+    const scaledI = integ.integrated.map(
+        (v) => gMin + ((v - iMin) / (iMax - iMin || 1)) * (gMax - gMin || 1)
+    );
+    const overlays = [{ values: scaledI, color: "#34d399", width: 1.4, dash: [4, 3] }];
+    if (qp.self_energy && !qp.self_energy.error && qp.self_energy.width_fit) {
+        overlays.push({
+            axis: qp.self_energy.energy,
+            values: qp.self_energy.width_fit,
+            color: "#f472b6",
+            width: 1.8,
+        });
+    }
+    analysisState.deViewer.setCurve({
+        axis: de.energy,
+        values: de.width,
+        label: "Γ (HWHM)",
+        unit: "eV",
+    });
+    analysisState.deViewer.setOverlays(overlays);
+    el("an-de-badge").textContent = qp.self_energy?.model
+        ? `${qp.self_energy.model.toUpperCase()} fit`
+        : "δE–E";
+
+    const disp = qp.dispersion;
+    const paired = disp.k.map((k, i) => ({ k, e: disp.energy[i] })).sort((a, b) => a.k - b.k);
+    analysisState.ekViewer.setCurve({
+        axis: paired.map((p) => p.k),
+        values: paired.map((p) => p.e),
+        label: "E(k)",
+        unit: "eV",
+    });
+    const ekOverlays = [];
+    if (qp.effective_mass && !qp.effective_mass.error) {
+        ekOverlays.push({
+            axis: qp.effective_mass.k,
+            values: qp.effective_mass.energy_fit,
+            color: "#f472b6",
+            width: 1.6,
+        });
+    }
+    if (qp.fermi_velocity && !qp.fermi_velocity.error) {
+        ekOverlays.push({
+            axis: qp.fermi_velocity.k,
+            values: qp.fermi_velocity.energy_fit,
+            color: "#34d399",
+            width: 1.6,
+            dash: [3, 3],
+        });
+    }
+    analysisState.ekViewer.setOverlays(ekOverlays);
+    const kf = (qp.k_fermi?.k_fermi || []).map((v) => v.toFixed(4)).join(", ") || "—";
+    el("an-ek-badge").textContent = `k_F=${kf}`;
+
+    const lines = [
+        qp.stored ? "stored → /analysis/qp_results" : "not stored",
+        `k_F: ${kf} (${qp.k_fermi?.method || "?"})`,
+    ];
+    if (qp.effective_mass && !qp.effective_mass.error) {
+        lines.push(
+            `m*/m_e = ${qp.effective_mass.m_star_over_m_e.toFixed(3)}  (E0=${qp.effective_mass.E0.toFixed(4)}, k0=${qp.effective_mass.k0.toFixed(4)})`
+        );
+    } else if (qp.effective_mass?.error) {
+        lines.push(`m*: ${qp.effective_mass.error}`);
+    }
+    if (qp.fermi_velocity && !qp.fermi_velocity.error) {
+        lines.push(`v_F = ${qp.fermi_velocity.v_F_eV_A.toFixed(3)} eV·Å`);
+    } else if (qp.fermi_velocity?.error) {
+        lines.push(`v_F: ${qp.fermi_velocity.error}`);
+    }
+    if (qp.self_energy && !qp.self_energy.error) {
+        lines.push(
+            `${qp.self_energy.model.toUpperCase()}: Γ0=${qp.self_energy.gamma0.toExponential(3)}, α=${qp.self_energy.alpha.toExponential(3)}  (${qp.self_energy.formula})`
+        );
+    } else if (qp.self_energy?.error) {
+        lines.push(`SE: ${qp.self_energy.error}`);
+    }
+    el("an-qp-result").textContent = lines.join("\n");
+}
+
+el("an-npeaks").addEventListener("change", syncAnalysisSeedCount);
+el("an-mode").addEventListener("change", updateAnalysisIndexRange);
+el("an-index").addEventListener("input", () => {
+    el("an-index-label").textContent = `${el("an-index").value} / ${el("an-index").max}`;
+});
+
+el("an-name").addEventListener("change", () => {
+    loadAnalysisDataset(el("an-name").value).catch((e) => {
+        el("an-status").textContent = e.message;
+    });
+});
+
+el("an-defaults").addEventListener("click", async () => {
+    try {
+        await loadAnalysisDataset(el("an-name").value);
+    } catch (err) {
+        el("an-status").textContent = err.message;
+    }
+});
+
+el("an-suggest").addEventListener("click", async () => {
+    try {
+        const name = el("an-name").value;
+        const fit = await TensorSpecAPI.analysisFitCurve(name, analysisPayload({ suggest: true }));
+        if (fit.seeds_used?.length) {
+            analysisState.seeds = fit.seeds_used.map((s) => ({
+                center: s.center,
+                amplitude: s.amplitude,
+                width: s.width,
+            }));
+            el("an-npeaks").value = String(analysisState.seeds.length);
+            renderAnalysisSeeds();
+        }
+        plotAnalysisCurve(fit);
+        el("an-status").textContent = `Suggested ${analysisState.seeds.length} seed(s) and fitted.`;
+    } catch (err) {
+        el("an-status").textContent = err.message;
+    }
+});
+
+el("an-fit-curve").addEventListener("click", async () => {
+    try {
+        const name = el("an-name").value;
+        const fit = await TensorSpecAPI.analysisFitCurve(name, analysisPayload());
+        plotAnalysisCurve(fit);
+        el("an-status").textContent = fit.success ? "Curve fit OK." : `Curve fit: ${fit.message}`;
+    } catch (err) {
+        el("an-status").textContent = err.message;
+    }
+});
+
+el("an-fit-stack").addEventListener("click", async () => {
+    el("an-fit-stack").disabled = true;
+    try {
+        const name = el("an-name").value;
+        const stack = await TensorSpecAPI.analysisFitStack(name, analysisPayload({ forStack: true }));
+        if (stack.seeds_used?.length) {
+            analysisState.seeds = stack.seeds_used.map((s) => ({
+                center: s.center,
+                amplitude: s.amplitude,
+                width: s.width,
+            }));
+            renderAnalysisSeeds();
+        }
+        plotAnalysisStack(stack);
+        el("an-status").textContent = `Stack fit → /analysis/${stack.node}${
+            stack.stored ? " (stored)" : ""
+        }`;
+    } catch (err) {
+        el("an-status").textContent = err.message;
+    } finally {
+        el("an-fit-stack").disabled = false;
+    }
+});
+
+el("an-qp").addEventListener("click", async () => {
+    el("an-qp").disabled = true;
+    try {
+        const name = el("an-name").value;
+        const mode = el("an-mode").value;
+        const se = el("an-se-model").value;
+        const qp = await TensorSpecAPI.analysisQpResults(name, {
+            peakfit_node: mode === "mdc" ? "mdc_peakfit" : "edc_peakfit",
+            peak: Number(el("an-qp-peak").value) || 0,
+            e_fermi: Number(el("an-ef").value) || 0,
+            fit_mass: true,
+            fit_vf: true,
+            se_model: se || null,
+            store: true,
+        });
+        plotQpResults(qp);
+        el("an-qp-status").textContent = qp.stored
+            ? "QP results stored under /analysis/qp_results."
+            : "QP results computed (not stored).";
+    } catch (err) {
+        el("an-qp-status").textContent = err.message;
+    } finally {
+        el("an-qp").disabled = false;
+    }
+});
+
+el("t4").addEventListener("change", () => {
+    if (!el("t4").checked) return;
+    analysisEnsureViewers();
+    syncAnalysisSeedCount();
+    refreshAnalysisDatasets()
+        .then(() => {
+            if (el("an-name").value) return loadAnalysisDataset(el("an-name").value);
+            return null;
+        })
+        .catch((e) => {
+            el("an-status").textContent = e.message;
         });
 });
