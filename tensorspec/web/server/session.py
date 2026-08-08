@@ -1,9 +1,9 @@
-"""Per-session workspace registry.
+"""Per-browser-session workspace registry.
 
-The desktop app shares one `global_workspace` singleton across the whole
-process. That is unsafe once the app is served to several people at once, so
-every browser session gets its own `WorkspaceManager` and its own directory on
-disk. Nothing here touches physics.
+Each browser tab gets an isolated `WorkspaceManager` so concurrent users never
+share spectroscopy trees or crystal structures. A module-level
+`global_workspace` singleton remains in `core.workspace` for non-web scripts.
+Nothing here touches physics.
 """
 from __future__ import annotations
 

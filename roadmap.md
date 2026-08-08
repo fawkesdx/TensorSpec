@@ -1,8 +1,8 @@
 # TensorSpec Roadmap
 
 ## UI Architecture: HTML Migration (Active)
-The front end is a browser-based HTML interface (FastAPI + `core/`). The older PySide6 GUI
-still exists in-tree until Phase 5 teardown.
+The front end is a browser-based HTML interface (FastAPI + `core/`). The PySide6 desktop
+GUI has been removed (Phase 5).
 
 **Checkbox meaning:** `[x]` = shipped end-to-end for the HTML app (UI + API + `core/`), unless a
 note says otherwise. Deferred items stay unchecked.
@@ -32,8 +32,8 @@ note says otherwise. Deferred items stay unchecked.
 - [x] Phase 4 — Cross-cutting requirements for the multi-user HTML service
       (deployment target remains a shared server on the LBL VPN).
     - [x] Web service layer (`tensorspec/web/server/`): thin request router, zero physics
-    - [x] Per-session workspace: each browser session owns its own data and directory;
-          `global_workspace` remains only for the Qt app until Phase 5
+    - [x] Per-session workspace: each browser session owns its own data and directory
+          (legacy `global_workspace` singleton remains only as a core helper for non-web scripts)
     - [x] Parameter validation: Pydantic schemas mirror the bounds the UI advertises
     - [x] Job queue for long calculations (QE / ARPES sims) so requests never block
           (`web/server/jobs.py`; per-session and global concurrency caps)
@@ -46,14 +46,17 @@ note says otherwise. Deferred items stay unchecked.
     - [x] Command hardening: never build shell commands from raw user input;
           allowlist solver executables and server-control the output directory
           (`web/server/config.py` + `core/dft/qe_pipeline.py`)
-- [ ] Phase 5 — Qt teardown: delete `tensorspec/gui/` and `plotting/viewers/`, drop PySide6 / PyQt6 / pyvistaqt / QtPy / shiboken6 from `requirements.txt`
+- [x] Phase 5 — Qt teardown: deleted `tensorspec/gui/` and Qt-bound plotting backends
+      (`matplotlib_engine.py`, `pyvista_engine.py`; `plotting/viewers/` was already gone).
+      Dropped PySide6 / PyQt6 / pyvistaqt / QtPy / shiboken6 / pyvista / vtk from `requirements.txt`.
+      Headless matplotlib export kept in `plotting/backends/arpes_figure.py`; crystal 3D is three.js.
 
 General Rule for the App
 - [ ] Always give option to work with GPU or CPU rendering. In the browser this maps to WebGL-backed interactive rendering vs. server-side static images. In any suite, detect what kind of machine is being used and use the right machinery.
 
 Grand App
 - Crystal viewer Suite
-	- [x] **Refactor Architectural Modularity:** Decouple monolithic `crystal_viewer.py` into modular architecture (`core/crystallography.py`, `plotting/pyvista_engine.py`, `plotting/matplotlib_engine.py`, and `gui/components/crystal_panel.py`).
+	- [x] **Refactor Architectural Modularity:** Decouple monolithic `crystal_viewer.py` into modular architecture (`core/crystallography.py` + HTML/three.js viewport; Qt panel backends removed in Phase 5).
 	- [x] File loader panel & "Draw" button.
 	- [x] Define Miller indices for bounding the drawing. Define number of unit cells.
 	- [x] Draw atoms as spheres scaled to atomic radii.

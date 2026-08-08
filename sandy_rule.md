@@ -8,7 +8,7 @@ When assisting with this repository, strictly adhere to the following rules:
 4.  **Acknowledge Roadmap:** Always refer back to `roadmap.md` to ensure UI additions fit into the planned Tabbed architecture. When a feature ships (even if it was not pre-listed), update `roadmap.md` in place — mark checkboxes, expand sub-bullets, and refresh the **ARPES Suite — available in HTML now** (or suite-equivalent) summary block. Also keep `README.md` Key Features aligned. Do not make a new roadmap from scratch; tell the user what you changed in those high-level files.
 5.  **Strict Modularity & Separation of Concerns:** Never write monolithic single-file suites. New features and refactored components must strictly separate logic into three distinct layers:
     * **Core Math & Physics Engine (`tensorspec/core/`):** Pure Python/NumPy/PyMatgen logic (e.g., symmetry parsing, Moiré math, ARPES momentum transformations). Zero GUI or plotting imports allowed.
-    * **Rendering & Visualization Backends (`tensorspec/plotting/`):** Dedicated wrapper classes for PyVista, Matplotlib, or PyQtGraph engines.
+    * **Rendering & Visualization Backends (`tensorspec/plotting/`):** Headless figure producers (e.g. matplotlib PNG/SVG). Interactive 3D is three.js in the browser — no Qt/PyVista widgets.
     * **Web UI Layer (`tensorspec/web/`):** HTML templates, CSS, and vanilla JS controllers. No Python UI toolkit (PySide6/Qt) imports are permitted anywhere in this repository.
     * if a long monolithic files need to be separated, always tell me which block to be moved where instead of giving me the whole code so I can follow the logic. when separating files, I want you to tell me what to copy from the old file and what to paste in the new file. I only want to move what I know exist in the old files so we dont lose any feature.
 6.  **Hierarchical Data Architecture:** All multi-dimensional spectroscopic data containers must adopt the **Hierarchical Tree Model** (via `xarray.DataTree` aligned with NeXus/HDF5 standards). Never store disconnected arrays. Every data object must structure its nodes as:
@@ -53,14 +53,13 @@ tensorspec/
 │   ├── __init__.py
 │   └── backends/              # Headless figure/data producers (no GUI toolkit)
 │       ├── __init__.py
-│       ├── matplotlib_engine.py # Static PNG/SVG for 1D lines & 2D maps
-│       └── pyvista_engine.py    # Off-screen 3D render / mesh export
+│       └── arpes_figure.py    # Static PNG/SVG for ARPES slice/profile export
 └── web/                           # Browser UI + FastAPI service. No physics lives here.
     ├── __init__.py
     ├── server/                    # FastAPI layer: request routing only, zero physics
     │   ├── __init__.py
     │   ├── app.py                 # App factory, static mounts, WebSocket setup
-    │   ├── session.py             # Per-session workspace registry (replaces the global singleton)
+    │   ├── session.py             # Per-session workspace registry (HTML multi-user)
     │   ├── jobs.py                # Background job queue for QE / ARPES solvers
     │   ├── schemas.py             # Pydantic models mirroring the UI parameter bounds
     │   └── routers/               # One router per suite, mirroring core/ engines
