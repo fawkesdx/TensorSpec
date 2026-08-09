@@ -51,6 +51,9 @@ const dom = {
     expBz: el("cr-exp-bz"),
     export3ds: el("cr-export-3ds"),
     exportBlender: el("cr-export-blender"),
+    exportFigure: el("cr-export-figure"),
+    exportFigureFmt: el("cr-export-figure-fmt"),
+    exportFigureView: el("cr-export-figure-view"),
     crRender: el("cr-render"),
     crHires: el("cr-hires"),
 
@@ -677,6 +680,47 @@ function sceneExportPayload() {
     };
 }
 
+function figureExportPayload() {
+    const geo = geometryRequest();
+    const payload = {
+        ...geo,
+        omit_atom_indices: omittedAtomIndices(),
+        show_cell: Boolean(dom.showCell?.checked),
+        atom_scale: Number(dom.radius?.value) || 0.5,
+        fmt: dom.exportFigureFmt?.value || "png",
+        title: activeCrystal || "",
+        use_current_view: Boolean(dom.exportFigureView?.checked),
+        camera: null,
+    };
+    if (payload.use_current_view) {
+        const view = ensureViewer();
+        // Viewer recenters scene; API expects absolute Cartesian coords (best-effort).
+        payload.camera = view.getCameraSnapshot();
+    }
+    return payload;
+}
+
+async function exportFigure() {
+    if (!activeCrystal) {
+        setStatus("Load or stack a structure first.", true);
+        return;
+    }
+    const payload = figureExportPayload();
+    setStatus(`Exporting figure (${payload.fmt}) for ${activeCrystal}\u2026`);
+    try {
+        const blob = await TensorSpecAPI.crystalExportFigure(activeCrystal, payload);
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${activeCrystal}_figure.${payload.fmt}`;
+        link.click();
+        URL.revokeObjectURL(url);
+        setStatus(`Exported ${activeCrystal}_figure.${payload.fmt}`);
+    } catch (err) {
+        setStatus(err.message, true);
+    }
+}
+
 async function exportScene(fmt) {
     if (!activeCrystal) {
         setStatus("Load or stack a structure first.", true);
@@ -808,6 +852,7 @@ if (dom.stPush) dom.stPush.addEventListener("click", () => pushActiveCrystal());
 if (dom.crExportCif) dom.crExportCif.addEventListener("click", downloadActiveCif);
 if (dom.export3ds) dom.export3ds.addEventListener("click", () => exportScene("3dsmax"));
 if (dom.exportBlender) dom.exportBlender.addEventListener("click", () => exportScene("blender"));
+if (dom.exportFigure) dom.exportFigure.addEventListener("click", exportFigure);
 dom.crRender?.addEventListener("click", () => refreshGeometry({ frame: true }));
 dom.crHires?.addEventListener("click", () => {
     if (!activeCrystal) { setStatus("Load a crystal first.", true); return; }
