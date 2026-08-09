@@ -629,6 +629,10 @@ async function downloadActiveCif() {
         const omit = omittedAtomIndices();
         const note = omit.length ? ` (${omit.length} atom(s) omitted)` : "";
         setStatus(`Exported ${activeCrystal}.cif${note}`);
+        if (omit.length) {
+            ensureViewer().clearErasedAtoms();
+            await refreshGeometry({ frame: false });
+        }
     } catch (err) {
         setStatus(err.message, true);
     }
@@ -699,6 +703,8 @@ async function pushActiveCrystal(preferredName) {
         });
         activeCrystal = summary.name;
         if (dom.stStore) dom.stStore.value = summary.name;
+        ensureViewer().clearErasedAtoms();
+        await refreshGeometry({ frame: false });
         setStackStatus(`Pushed ${summary.name} (${summary.formula}, ${summary.n_sites} sites) — available in DFT Suite`);
         setStatus(`${summary.name} in workspace`);
     } catch (err) {
