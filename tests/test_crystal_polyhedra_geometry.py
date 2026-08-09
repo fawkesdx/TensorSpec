@@ -4,7 +4,13 @@ import unittest
 from pymatgen.core import Lattice, Structure
 
 from tensorspec.web.server.routers import crystal as crystal_router
-from tensorspec.web.server.schemas import CrystalGeometry, GeometryRequest, Polyhedron
+from tensorspec.web.server.schemas import (
+    CrystalGeometry,
+    GeometryRequest,
+    Polyhedron,
+    RelaxRequest,
+    StackRequest,
+)
 
 
 def _diamond_si() -> Structure:
@@ -27,6 +33,14 @@ class TestPolyhedraSchemaDefaults(unittest.TestCase):
         req = GeometryRequest()
         self.assertFalse(req.show_polyhedra)
         self.assertTrue(req.show_bonds)
+
+    def test_stack_request_show_polyhedra_default_false(self):
+        req = StackRequest(layers=[{"name": "si"}])
+        self.assertFalse(req.show_polyhedra)
+
+    def test_relax_request_show_polyhedra_default_false(self):
+        req = RelaxRequest()
+        self.assertFalse(req.show_polyhedra)
 
     def test_crystal_geometry_polyhedra_default_empty(self):
         self.assertEqual(CrystalGeometry.model_fields["polyhedra"].default, [])

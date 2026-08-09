@@ -477,7 +477,11 @@ def build_stack(
     label = _safe_label(request.store_as, "heterostructure")
     _store(session, label, stacked)
     return _geometry_from_structure(
-        label, stacked, show_bonds=request.show_bonds, bond_threshold=request.bond_threshold
+        label,
+        stacked,
+        show_bonds=request.show_bonds,
+        show_polyhedra=request.show_polyhedra,
+        bond_threshold=request.bond_threshold,
     )
 
 
@@ -884,6 +888,7 @@ def relax_crystal(
         label,
         result["structure"],
         show_bonds=request.show_bonds,
+        show_polyhedra=request.show_polyhedra,
         bond_threshold=request.bond_threshold,
     )
     return {

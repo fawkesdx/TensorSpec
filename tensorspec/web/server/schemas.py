@@ -669,6 +669,7 @@ class StackRequest(BaseModel):
     store_as: str = Field(default="heterostructure", max_length=64)
     bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
     show_bonds: bool = True
+    show_polyhedra: bool = False
     vacuum: float = Field(default=20.0, ge=5, le=80)
 
 
@@ -681,6 +682,7 @@ class RelaxRequest(BaseModel):
     relax_cell: bool = False
     store_as: str = Field(default="", max_length=64)
     show_bonds: bool = True
+    show_polyhedra: bool = False
     bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
 
 
