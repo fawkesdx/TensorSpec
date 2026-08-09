@@ -36,6 +36,15 @@ def _match_i0_column(columns: list[str]) -> str | None:
     return None
 
 
+def _coerce_i0_value(value: Any) -> float | None:
+    if value is None or pd.isna(value):
+        return None
+    match = pd.Series([str(value)]).str.extract(
+        r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)"
+    ).iloc[0, 0]
+    return None if pd.isna(match) else float(match)
+
+
 def infer_pol_from_name(name: str) -> str:
     """Return 'CP'|'CM'|'LH'|'LV'|'unknown' via case-insensitive substring."""
     folded = name.casefold()
@@ -112,7 +121,7 @@ def load_beamline_csv(path: Path | str) -> dict[str, Any]:
     i0_value: float | list[float] | None = None
     beam_current: float | list[float] | None = None
     if i0_col is not None:
-        raw_vals = series[i0_col]
+        raw_vals = [_coerce_i0_value(value) for value in series[i0_col]]
         if len(raw_vals) == 1:
             i0_value = raw_vals[0]
         else:

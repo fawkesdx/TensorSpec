@@ -78,6 +78,15 @@ class TestPeemLoaders(unittest.TestCase):
             self.assertTrue(td.metadata.get("csv_attached"))
             self.assertEqual(td.metadata.get("I0"), 2.0)
 
+    def test_csv_i0_coerces_units_and_blank_cells(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "beam.csv"
+            path.write_text("frame,I0\n0,1.5 nA\n1,\n2,2.0\n")
+
+            metadata = pl.load_beamline_csv(path)
+
+            self.assertEqual(metadata["I0"], [1.5, None, 2.0])
+
     def test_csv_ambiguity_no_auto_attach(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

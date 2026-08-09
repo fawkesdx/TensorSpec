@@ -32,6 +32,8 @@ const state = {
     vmax: 1,
     frameData: null,
     requestId: 0,
+    climCustomized: false,
+    frameTimer: null,
 };
 
 function setBusy(busy, message = "") {
@@ -84,12 +86,14 @@ async function showFrame(index) {
         if (requestId !== state.requestId) return;
         state.frameIndex = clamped;
         state.frameData = frame;
-        state.vmin = frame.vmin;
-        state.vmax = frame.vmax;
         dom.frame.value = String(clamped);
         dom.frameLabel.textContent = `${clamped + 1} / ${state.nFrames}`;
-        dom.vmin.value = String(frame.vmin);
-        dom.vmax.value = String(frame.vmax);
+        if (!state.climCustomized) {
+            state.vmin = frame.vmin;
+            state.vmax = frame.vmax;
+            dom.vmin.value = String(frame.vmin);
+            dom.vmax.value = String(frame.vmax);
+        }
         const details = [frame.frame_name, frame.pol, `${frame.shape[1]} × ${frame.shape[0]}`]
             .filter(Boolean);
         dom.frameMeta.textContent = details.join(" · ");
@@ -134,6 +138,8 @@ async function acceptLoad(summary) {
     state.nFrames = summary.n_frames;
     state.frameIndex = 0;
     state.frameData = null;
+    state.climCustomized = false;
+    clearTimeout(state.frameTimer);
     dom.name.value = summary.name;
     dom.frame.min = "0";
     dom.frame.max = String(Math.max(0, summary.n_frames - 1));
@@ -211,13 +217,20 @@ dom.continueWithout.addEventListener("click", () => {
     dom.csvStatus.textContent = "Continuing without beamline CSV";
 });
 
-dom.frame.addEventListener("input", () => showFrame(dom.frame.value));
+dom.frame.addEventListener("input", () => {
+    const index = Math.max(0, Math.min(state.nFrames - 1, Number(dom.frame.value) || 0));
+    dom.frameLabel.textContent = `${index + 1} / ${state.nFrames}`;
+    state.requestId += 1;
+    clearTimeout(state.frameTimer);
+    state.frameTimer = setTimeout(() => showFrame(index), 125);
+});
 
 for (const input of [dom.vmin, dom.vmax]) {
     input.addEventListener("input", () => {
         const vmin = Number(dom.vmin.value);
         const vmax = Number(dom.vmax.value);
         if (!Number.isFinite(vmin) || !Number.isFinite(vmax)) return;
+        state.climCustomized = true;
         state.vmin = Math.min(vmin, vmax);
         state.vmax = Math.max(vmin, vmax);
         renderFrame();

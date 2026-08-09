@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
+import tifffile
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from tensorspec.core.io.peem_loaders import (
@@ -22,6 +23,7 @@ from tensorspec.web.server.session import Session, current_session
 router = APIRouter(prefix="/api/peem", tags=["peem"])
 
 MAX_PEEM_BYTES = 512 * 1024 * 1024
+MAX_PEEM_FRAMES = 10_000
 MAX_CSV_BYTES = 8 * 1024 * 1024
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
@@ -35,7 +37,7 @@ def _resolve_allowed(path: Path, session: Session) -> Path:
     if not any(resolved == root or root in resolved.parents for root in roots):
         raise HTTPException(status_code=403, detail="Path outside allowed roots.")
     if not resolved.exists():
-        raise HTTPException(status_code=404, detail=f"Not found: {resolved}")
+        raise HTTPException(status_code=404, detail="Path not found.")
     return resolved
 
 
@@ -61,6 +63,64 @@ def _read_upload(upload: UploadFile, limit: int, kind: str) -> bytes:
     if not payload:
         raise HTTPException(status_code=400, detail=f"Uploaded {kind.lower()} is empty.")
     return payload
+
+
+def _tif_paths(source_path: Path) -> list[Path]:
+    if source_path.is_dir():
+        candidates = sorted(source_path.glob("*.tif")) + sorted(
+            source_path.glob("*.tiff")
+        )
+        seen: set[str] = set()
+        paths: list[Path] = []
+        for candidate in candidates:
+            key = candidate.name.casefold()
+            if key not in seen:
+                seen.add(key)
+                paths.append(candidate)
+        return paths
+    if source_path.suffix.lower() in (".tif", ".tiff"):
+        return [source_path]
+    raise HTTPException(
+        status_code=400, detail="Server path must be a TIF file or directory."
+    )
+
+
+def _enforce_peem_size(source_path: Path) -> None:
+    paths = _tif_paths(source_path)
+    if sum(path.stat().st_size for path in paths) > MAX_PEEM_BYTES:
+        raise HTTPException(status_code=413, detail="PEEM TIF files exceed 512 MB.")
+
+    n_frames = 0
+    float64_bytes = 0
+    try:
+        for path in paths:
+            with tifffile.TiffFile(path) as tif:
+                if not tif.pages:
+                    continue
+                if len(tif.pages) == 1:
+                    shape = tuple(int(size) for size in tif.pages[0].shape)
+                    n_frames += shape[0] if len(shape) == 3 else 1
+                    float64_bytes += int(np.prod(shape)) * 8
+                else:
+                    n_frames += len(tif.pages)
+                    float64_bytes += sum(
+                        int(np.prod(page.shape)) * 8 for page in tif.pages
+                    )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Could not inspect PEEM TIF data: {exc}"
+        ) from exc
+
+    if n_frames > MAX_PEEM_FRAMES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"PEEM data exceeds the {MAX_PEEM_FRAMES}-frame limit.",
+        )
+    if float64_bytes > MAX_PEEM_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="PEEM float64 expansion exceeds the 512 MB limit.",
+        )
 
 
 def _extract_zip(payload: bytes, destination: Path) -> Path:
@@ -193,6 +253,7 @@ def load_peem(
         raise HTTPException(
             status_code=400, detail="Provide exactly one of file or server_path."
         )
+    label = _safe_label(name, "peem") if name is not None else None
 
     upload_root = Path(session.workspace.project_dir) / "uploads" / "peem"
     upload_root.mkdir(parents=True, exist_ok=True)
@@ -223,6 +284,8 @@ def load_peem(
         source_path = _resolve_allowed(Path(server_path or ""), session)
         fallback = source_path.stem if source_path.is_file() else source_path.name
         load_directory = source_path if source_path.is_dir() else source_path.parent
+
+    _enforce_peem_size(source_path)
 
     explicit_csv = _csv_path_from_inputs(
         csv=csv,
@@ -261,7 +324,8 @@ def load_peem(
             status_code=422, detail=f"Could not load PEEM data: {exc}"
         ) from exc
 
-    label = _safe_label(name or fallback, "peem")
+    if label is None:
+        label = _safe_label(_safe_upload_name(fallback, "peem"), "peem")
     session.workspace.push_spectroscopy_data(label, tensor)
     attached = bool((tensor.metadata or {}).get("csv_attached", False))
     candidates = (
