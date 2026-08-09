@@ -224,11 +224,93 @@ class ChinookTightBindingEngine:
             'spin': spin_dict
         }
 
+    def _solve_bands_simple_scalar_numpy(
+        self, k_points, custom_hopping=None, onsite_e=0.0, cutoffs=None,
+        orbital_shifts=None, tb_mode="Simple Scalar",
+    ):
+        """Diagonalize isotropic list-mode hoppings with numpy (no chinook)."""
+        shells = []
+        if custom_hopping:
+            distances = cutoffs if cutoffs else [1.6, 2.6, 3.1, 4.5]
+            for i, (key, t_val) in enumerate(custom_hopping.items()):
+                r_max = distances[i] if i < len(distances) else 10.0
+                shells.append((t_val, r_max))
+
+        tb_dict = self.export_chinook_dictionary(
+            shells=shells,
+            onsite_e=onsite_e,
+            use_soc=False,
+            soc_strength=0.0,
+            tb_mode=tb_mode,
+            orbital_shifts=orbital_shifts,
+        )
+        hops = tb_dict.get("list") or tb_dict.get("H") or []
+        if not hops:
+            raise RuntimeError("Simple Scalar hopping list empty.")
+
+        n_orb = int(max(max(int(h[0]), int(h[1])) for h in hops)) + 1
+        k_points = np.asarray(k_points, dtype=float)
+        nk = k_points.shape[0]
+        evals = np.zeros((nk, n_orb), dtype=float)
+        evecs = np.zeros((nk, n_orb, n_orb), dtype=complex)
+
+        for ik, k in enumerate(k_points):
+            H = np.zeros((n_orb, n_orb), dtype=complex)
+            for row in hops:
+                ia, ib = int(row[0]), int(row[1])
+                Rx, Ry, Rz = float(row[2]), float(row[3]), float(row[4])
+                t = complex(row[5])
+                phase = np.exp(1j * (k[0] * Rx + k[1] * Ry + k[2] * Rz))
+                H[ia, ib] += t * phase
+            # Hermitize numerical noise
+            H = 0.5 * (H + H.conj().T)
+            w, v = np.linalg.eigh(H)
+            evals[ik] = np.real(w)
+            evecs[ik] = v
+
+        raw_labels = []
+        for site in self.crystal_structure:
+            for orb_str in self._get_orbital_basis(site.species_string):
+                if orb_str.endswith("0"):
+                    orb_name = "s"
+                elif orb_str[1] == "1":
+                    orb_name = "p" + orb_str[2:]
+                elif orb_str[1] == "2":
+                    if orb_str.endswith("ZR"):
+                        orb_name = "dz2"
+                    elif orb_str.endswith("XY"):
+                        orb_name = "dx2-y2"
+                    else:
+                        orb_name = "d" + orb_str[2:]
+                else:
+                    orb_name = orb_str
+                raw_labels.append(f"{site.species_string}_{orb_name}")
+
+        self.basis = None
+        self.H_dict = tb_dict
+        self.tb_model = None
+        return evals, evecs, raw_labels
+
     def solve_bands(self, k_points, custom_hopping=None, onsite_e=0.0, use_soc=False, soc_strength=0.5, w90_filepath=None, cutoffs=None, tb_mode="Simple Scalar", orbital_shifts=None):
-        if build_lib is None or klib is None:
-            raise ImportError("Chinook is not installed properly. Cannot calculate bands.")
         if not self.crystal_structure:
             raise ValueError("No structure loaded.")
+
+        chinook_missing = build_lib is None or klib is None
+        scalar_ok = ("Scalar" in (tb_mode or "")) and (not use_soc) and (not w90_filepath)
+        if chinook_missing and not scalar_ok:
+            raise ImportError(
+                "Chinook is not installed. Simple Scalar (no SOC) works without it; "
+                "Slater-Koster / SOC / Wannier require: pip install chinook"
+            )
+        if chinook_missing and scalar_ok:
+            return self._solve_bands_simple_scalar_numpy(
+                k_points,
+                custom_hopping=custom_hopping,
+                onsite_e=onsite_e,
+                cutoffs=cutoffs,
+                orbital_shifts=orbital_shifts,
+                tb_mode=tb_mode,
+            )
 
         if w90_filepath:
             tb_dict, basis_args = self.export_wannier_dictionary(w90_filepath, use_soc)
