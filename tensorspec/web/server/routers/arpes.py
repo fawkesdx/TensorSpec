@@ -11,6 +11,7 @@ import json
 import os
 import re
 import struct
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -102,8 +103,81 @@ def _require_remote_arpes_script() -> Path:
     return script
 
 
+def _request_json_for_remote(request: ArpesSimRequest) -> dict:
+    data = request.model_dump()
+    data["model"] = "A"
+    return data
+
+
 def _build_einstein_sim_worker(session_id: str, request: ArpesSimRequest):
-    raise NotImplementedError("_build_einstein_sim_worker is Task 2")
+    """Closure for Einstein SSH sim; queue only passes the Job."""
+
+    def worker(job: Job) -> None:
+        session = session_store._sessions.get(session_id)
+        if session is None:
+            raise RuntimeError("Session expired before the simulation started.")
+
+        structure = session.workspace.pull_structure_object(request.crystal_name)
+        if structure is None:
+            raise ValueError(f"Crystal '{request.crystal_name}' is missing from the workspace.")
+
+        job.run_dir.mkdir(parents=True, exist_ok=True)
+        cif_path = job.run_dir / "structure.cif"
+        structure.to(filename=str(cif_path))
+        (job.run_dir / "request.json").write_text(
+            json.dumps(_request_json_for_remote(request), indent=2),
+            encoding="utf-8",
+        )
+        for name in ("intensity.npz", "meta.json"):
+            p = job.run_dir / name
+            if p.exists():
+                p.unlink()
+
+        argv = _einstein_arpes_argv(job.run_dir.resolve(), _arpes_ssh_host())
+        job.append_log(f"[arpes] einstein_ssh: {' '.join(argv)}")
+        if job._cancel.is_set():
+            return
+
+        process = subprocess.Popen(
+            argv,
+            cwd=str(job.run_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            start_new_session=True,
+        )
+        job._process = process
+        assert process.stdout is not None
+        for line in process.stdout:
+            job.append_log(line.rstrip("\n"))
+        code = process.wait()
+        job._process = None
+        if job._cancel.is_set():
+            return
+        if code != 0:
+            raise RuntimeError(f"remote_arpes_me.sh exited {code}")
+
+        npz_path = job.run_dir / "intensity.npz"
+        if not npz_path.is_file():
+            raise RuntimeError("intensity.npz missing after remote run")
+        data = np.load(npz_path)
+        cube = np.asarray(data["intensity"], dtype=float)
+        job.result = {
+            "store_as": request.store_as,
+            "crystal_name": request.crystal_name,
+            "model": "A",
+            "intensity": cube,
+            "axes": {
+                "E": np.asarray(data["E"], dtype=float),
+                "kx": np.asarray(data["kx"], dtype=float),
+                "ky": np.asarray(data["ky"], dtype=float),
+            },
+            "shape": list(cube.shape),
+        }
+        job.append_log(f"[arpes] cube shape {list(cube.shape)} (E, kx, ky)")
+
+    return worker
 
 
 def _safe_label(name: str, fallback: str) -> str:
