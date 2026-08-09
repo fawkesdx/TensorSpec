@@ -108,6 +108,28 @@ const TensorSpecAPI = (() => {
                 ),
             }),
         crystalCifUrl: (name) => `/api/crystal/${encodeURIComponent(name)}/cif`,
+        /** GET unfiltered CIF, or POST with omit_atom_indices + nx/ny/nz/basis when omit non-empty. */
+        crystalCifDownload: async (name, payload = {}) => {
+            const omit = payload.omit_atom_indices || [];
+            const url = `/api/crystal/${encodeURIComponent(name)}/cif`;
+            const response = await fetch(url, {
+                method: omit.length ? "POST" : "GET",
+                credentials: "same-origin",
+                headers: omit.length ? { "Content-Type": "application/json" } : undefined,
+                body: omit.length ? JSON.stringify(payload) : undefined,
+            });
+            if (!response.ok) {
+                let detail = `${response.status} ${response.statusText}`;
+                try {
+                    const body = await response.json();
+                    if (body.detail) detail = body.detail;
+                } catch (err) {
+                    /* ignore */
+                }
+                throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+            }
+            return response.blob();
+        },
         crystalCifPost: async (name, payload = {}) => {
             const response = await fetch(
                 `/api/crystal/${encodeURIComponent(name)}/cif`,

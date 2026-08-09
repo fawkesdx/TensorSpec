@@ -82,6 +82,8 @@ const dom = {
     stPush: el("st-push"),
     crExportCif: el("cr-export-cif"),
     crPush: el("cr-push"),
+    eraser: el("cr-eraser"),
+    eraserReset: el("cr-eraser-reset"),
 
     exSource: el("ex-source"),
     exRefresh: el("ex-refresh"),
@@ -213,6 +215,21 @@ function applyViewerChrome(view) {
     applyCutPlane(view);
 }
 
+function omittedAtomIndices() {
+    return viewer ? viewer.getOmittedAtomIndices() : [];
+}
+
+function drawExportKnobs() {
+    const geo = geometryRequest();
+    return {
+        nx: geo.nx,
+        ny: geo.ny,
+        nz: geo.nz,
+        basis: geo.basis,
+        omit_atom_indices: omittedAtomIndices(),
+    };
+}
+
 function geometryRequest() {
     return {
         nx: Number(dom.nx.value) || 1,
@@ -240,6 +257,7 @@ async function refreshGeometry({ frame = true } = {}) {
     try {
         const geometry = await TensorSpecAPI.crystalGeometry(activeCrystal, geometryRequest());
         const view = ensureViewer();
+        view.clearErasedAtoms();
         applyViewerChrome(view);
         view.render(geometry, {
             frame,
@@ -368,6 +386,7 @@ async function renderStack() {
         activeCrystal = geometry.name;
         const view = ensureViewer();
         view.clearBrillouinZone();
+        view.clearErasedAtoms();
         applyViewerChrome(view);
         view.render(geometry, {
             frame: true,
@@ -566,6 +585,14 @@ const syncCut = () => applyCutPlane(ensureViewer());
 dom.cut?.addEventListener("change", syncCut);
 dom.depth?.addEventListener("input", syncCut);
 
+dom.eraser?.addEventListener("change", () => {
+    ensureViewer().setEraserEnabled(dom.eraser.checked);
+});
+dom.eraserReset?.addEventListener("click", () => {
+    ensureViewer().clearErasedAtoms();
+    setStatus("Erase reset");
+});
+
 [
     dom.cdwEnable, dom.cdwTarget, dom.qa, dom.qb, dom.qc,
     dom.ax, dom.ay, dom.cdwAz, dom.cdwPhase,
@@ -585,15 +612,26 @@ dom.bzClear.addEventListener("click", () => {
     setStatus("BZ cleared");
 });
 
-function downloadActiveCif() {
+async function downloadActiveCif() {
     if (!activeCrystal) {
         setStatus("Load or stack a structure first.", true);
         return;
     }
-    const link = document.createElement("a");
-    link.href = TensorSpecAPI.crystalCifUrl(activeCrystal);
-    link.download = `${activeCrystal}.cif`;
-    link.click();
+    setStatus(`Exporting CIF for ${activeCrystal}\u2026`);
+    try {
+        const blob = await TensorSpecAPI.crystalCifDownload(activeCrystal, drawExportKnobs());
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `${activeCrystal}.cif`;
+        link.click();
+        URL.revokeObjectURL(url);
+        const omit = omittedAtomIndices();
+        const note = omit.length ? ` (${omit.length} atom(s) omitted)` : "";
+        setStatus(`Exported ${activeCrystal}.cif${note}`);
+    } catch (err) {
+        setStatus(err.message, true);
+    }
 }
 
 function sceneExportPayload() {
@@ -613,6 +651,7 @@ function sceneExportPayload() {
         bz_h: Number(dom.bzH?.value) || 0,
         bz_k: Number(dom.bzK?.value) || 0,
         bz_l: Number(dom.bzL?.value) || 1,
+        omit_atom_indices: omittedAtomIndices(),
     };
 }
 
@@ -654,7 +693,10 @@ async function pushActiveCrystal(preferredName) {
     }
     setStackStatus(`Pushing as ${storeAs}\u2026`);
     try {
-        const summary = await TensorSpecAPI.crystalPush(activeCrystal, storeAs);
+        const summary = await TensorSpecAPI.crystalPush(activeCrystal, {
+            store_as: storeAs,
+            ...drawExportKnobs(),
+        });
         activeCrystal = summary.name;
         if (dom.stStore) dom.stStore.value = summary.name;
         setStackStatus(`Pushed ${summary.name} (${summary.formula}, ${summary.n_sites} sites) — available in DFT Suite`);
@@ -686,6 +728,7 @@ async function relaxActiveStack() {
         if (dom.stStore) dom.stStore.value = result.stored_as;
         const view = ensureViewer();
         view.clearBrillouinZone();
+        view.clearErasedAtoms();
         applyViewerChrome(view);
         view.render(result.geometry, {
             frame: true,
