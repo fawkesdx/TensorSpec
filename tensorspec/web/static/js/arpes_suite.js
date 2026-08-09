@@ -915,10 +915,24 @@ async function refreshCrystals() {
     if ([...select.options].some((o) => o.value === previous)) select.value = previous;
 }
 
+function syncArpesBackendUi() {
+    const einstein = el("ar-backend")?.value === "einstein_ssh";
+    const model = el("ar-model");
+    if (!model) return;
+    [...model.options].forEach((opt) => {
+        if (opt.value === "B1") {
+            opt.disabled = einstein;
+            opt.hidden = einstein;
+        }
+    });
+    if (einstein && model.value === "B1") model.value = "A";
+}
+
 function simPayload() {
     return {
         crystal_name: el("ar-crystal").value,
         model: el("ar-model").value,
+        backend: el("ar-backend")?.value || "local",
         store_as: "simulated_arpes",
         photon_energy: Number(el("ar-hv").value),
         work_function: Number(el("ar-phi").value),
@@ -1139,6 +1153,9 @@ el("ar-de-manual").addEventListener("change", () => {
     });
 });
 syncResolution();
+
+el("ar-backend")?.addEventListener("change", syncArpesBackendUi);
+syncArpesBackendUi();
 
 el("ar-run").addEventListener("click", async () => {
     if (!el("ar-crystal").value) {
