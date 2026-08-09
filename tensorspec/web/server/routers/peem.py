@@ -233,7 +233,10 @@ def load_peem(
     auto_candidates: list[Path] = []
     loader_csv = explicit_csv
     if explicit_csv is None:
-        loader_csv, auto_candidates = _auto_csv_choice(load_directory, fallback)
+        preferred_stem = source_path.name if source_path.is_dir() else source_path.stem
+        loader_csv, auto_candidates = _auto_csv_choice(
+            load_directory, preferred_stem
+        )
         if loader_csv is not None and loader_csv.stat().st_size > MAX_CSV_BYTES:
             raise HTTPException(
                 status_code=413,
