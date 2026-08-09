@@ -145,6 +145,7 @@ Grand App
 - [ ] PEEM Suite — deferred (vision; first slice = load + view)
 	- [ ] loader of tif file stacks
 	- [ ] loader of sequences of series of tif files from a folder
+	- [ ] accompanying beamline CSV metadata (sidecar with TIF / folder): parse and store in workspace attrs (I0 / beam current and other beamline params). Needed later to normalize CP vs CM for sum rule; load+view slice should attach CSV even before sum-rule UI exists
 	- [ ] stack the CP and CM together or LH and LV together depending on the files
 	- [ ] once stacked, build drift-correction options
 	- [ ] separate those CP and CM or LH and LV
@@ -153,6 +154,7 @@ Grand App
 		- [ ] UI: plot spectra, toggle background overlay, toggle bg-subtracted spectra separately.
 		- [ ] several spectra and their background-related toggles can be plotted together
 	- [ ] perform sum rule analysis if it is CP and CM data
+		- [ ] normalize CP/CM (and similar pairs) using I0 / beam current from accompanying CSV before sum rule
 	- [ ] analysis of spectra / sum rule switchable: picture-wide | user ROI | pixel-to-pixel (noisy / slower)
 		- [ ] ROI shapes: rectangle, ellipse, or custom polygon (straight segments or curved/interpolated from clicked points)
 	- [ ] ALWAYS include statistical analysis for background / sum rule (uncertainty often dominated by BG choice): vary plausible backgrounds and report sum-rule spread
