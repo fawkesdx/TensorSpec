@@ -88,6 +88,12 @@ class DataTreeBuilder:
         return ds
 
     @staticmethod
+    def merge_raw_attrs(tree: DataTree, attrs: dict) -> DataTree:
+        """Merge metadata into ``/raw`` without rebuilding its intensity cube."""
+        tree["raw"].ds.attrs.update(attrs)
+        return tree
+
+    @staticmethod
     def write_processed(tree: DataTree, tensor_data: TensorData) -> DataTree:
         """Replace /processed on an existing tree and append a history line."""
         ds = DataTreeBuilder.dataset_from_tensor(tensor_data)

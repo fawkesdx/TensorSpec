@@ -146,6 +146,14 @@ class WorkspaceManager:
         }
         print(f"DataTree '{name}' successfully pushed to Global Workspace.")
 
+    def merge_spectroscopy_raw_attrs(self, name: str, attrs: dict) -> bool:
+        """Merge metadata into an existing spectroscopy tree's ``/raw`` node."""
+        item = self._data.get(name)
+        if not item or item.get('type') != 'spectroscopy_tree':
+            return False
+        item['tree'] = DataTreeBuilder.merge_raw_attrs(item['tree'], attrs)
+        return True
+
     def write_processed_data(self, name: str, tensor_data: TensorData) -> bool:
         """Write a processed cube into ``/processed`` of an existing spectroscopy tree."""
         item = self._data.get(name)
