@@ -754,6 +754,17 @@ export class CrystalViewer {
     this._syncCutPlane();
   }
 
+  getCameraSnapshot() {
+    const p = this.camera.position;
+    const t = this.controls?.target ?? new THREE.Vector3();
+    const u = this.camera.up;
+    return {
+      position: [p.x, p.y, p.z],
+      target: [t.x, t.y, t.z],
+      up: [u.x, u.y, u.z],
+    };
+  }
+
   capturePNG(scale = 2) {
     const canvas = this.renderer.domElement;
     const w = canvas.width;

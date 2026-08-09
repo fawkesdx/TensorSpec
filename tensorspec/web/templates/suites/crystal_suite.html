@@ -62,7 +62,7 @@
                                 <select class="field" id="cr-backend" disabled title="HTML viewer: not yet">
                                     <option>three.js (GPU)</option>
                                 </select>
-                                <p class="hint">Graphics backends Matplotlib/PyVista: HTML viewer: not yet.</p>
+                                <p class="hint">Interactive viewer: three.js. Publication figures: Export figure (Matplotlib). PyVista: not in this build.</p>
                             </div>
 
                             <fieldset class="fieldset">
@@ -185,6 +185,16 @@
                                     <button type="button" class="btn" id="cr-export-3ds">Export 3ds Max</button>
                                     <button type="button" class="btn" id="cr-export-blender">Export Blender</button>
                                 </div>
+                                <div class="form-row form-row--stacked">
+                                    <label for="cr-export-figure-fmt">Figure format:</label>
+                                    <select class="field" id="cr-export-figure-fmt">
+                                        <option value="png" selected>PNG</option>
+                                        <option value="svg">SVG</option>
+                                        <option value="pdf">PDF</option>
+                                    </select>
+                                </div>
+                                <label class="check"><input type="checkbox" id="cr-export-figure-view"> Use current view</label>
+                                <button type="button" class="btn btn--block" id="cr-export-figure">Export figure (Matplotlib)</button>
                             </fieldset>
 
                             <button type="button" class="btn btn--primary" id="cr-render">&#127912; Render Structure</button>
