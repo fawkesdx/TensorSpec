@@ -51,6 +51,7 @@ xarray
 fastapi>=0.115
 uvicorn[standard]>=0.32
 python-multipart>=0.0.9
+httpx>=0.27
 
 # --- OPTIONAL MLIP RELAXATION (Crystal Suite Tab 3) ---
 # Uncomment / install when you want CHGNet / M3GNet stack relaxation:
