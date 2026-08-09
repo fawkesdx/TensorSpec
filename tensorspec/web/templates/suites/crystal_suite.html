@@ -108,7 +108,9 @@
                                 <label class="check"><input type="checkbox" id="cr-axes" checked> Show Axes</label>
                                 <label class="check"><input type="checkbox" id="cr-show-cell" checked> Show Conv. Box</label>
                                 <label class="check"><input type="checkbox" id="cr-show-prim" disabled> Show Prim. Box (use Primitive Basis)</label>
-                                <label class="check"><input type="checkbox" id="cr-eraser" disabled> Enable Interactive Eraser Brush (HTML viewer: not yet)</label>
+                                <label class="check"><input type="checkbox" id="cr-eraser"> Enable Interactive Eraser Brush</label>
+                                <p class="hint">Camera locks while eraser is on. Erased atoms are omitted from 3ds/Blender/CIF/push exports. Re-Draw clears the erase set.</p>
+                                <button type="button" class="btn" id="cr-eraser-reset">Reset erase</button>
                             </fieldset>
 
                             <fieldset class="fieldset">
