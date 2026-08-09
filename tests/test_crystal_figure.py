@@ -32,6 +32,14 @@ class TestCrystalFigure(unittest.TestCase):
         raw = cf.export_crystal_figure(atoms=atoms, bonds=[], cell=None, fmt="svg")
         self.assertIn(b"<svg", raw.lower())
 
+    def test_h_only_png_nonempty(self):
+        atoms = [{"element": "H", "position": [0, 0, 0], "radius": 0.3}]
+        raw = cf.export_crystal_figure(atoms=atoms, bonds=[], cell=None, fmt="png")
+        empty = cf.export_crystal_figure(atoms=[], bonds=[], cell=None, fmt="png")
+        self.assertGreater(len(raw), 100)
+        self.assertTrue(raw[:8] == b"\x89PNG\r\n\x1a\n")
+        self.assertNotEqual(raw, empty)
+
 
 if __name__ == "__main__":
     unittest.main()
