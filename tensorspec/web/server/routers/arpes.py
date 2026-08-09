@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import struct
 from pathlib import Path
@@ -24,6 +25,7 @@ from tensorspec.core.io.arpes_loader import ARPESLoader
 from tensorspec.core import arpes_process
 from tensorspec.core import arpes_peakfit, arpes_results, arpes_gap, arpes_overlay, arpes_volume
 from tensorspec.plotting.backends.arpes_figure import export_slice_figure
+from tensorspec.web.server.config import REPO_ROOT
 from tensorspec.web.server.jobs import Job, JobStatus, get_job_queue
 from tensorspec.web.server.schemas import (
     ArpesLoadSummary,
@@ -61,6 +63,47 @@ MAX_MESH_POINTS = 40 * 40
 MAX_ARPES_BYTES = 512 * 1024 * 1024
 MAX_LOG_BYTES = 8 * 1024 * 1024
 SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+
+def _remote_arpes_me_script_path() -> Path:
+    return REPO_ROOT / "scripts" / "remote_arpes_me.sh"
+
+
+def _arpes_ssh_host() -> str:
+    return (
+        os.environ.get("TENSORSPEC_ARPES_SSH_HOST")
+        or os.environ.get("TENSORSPEC_QE_SSH_HOST")
+        or "einstein"
+    ).strip() or "einstein"
+
+
+def _einstein_arpes_argv(run_dir: Path, host: str) -> list[str]:
+    return [
+        "bash",
+        str(_remote_arpes_me_script_path()),
+        str(run_dir),
+        "--host",
+        host,
+    ]
+
+
+def _refuse_b1_on_einstein(request: ArpesSimRequest) -> None:
+    if request.backend == "einstein_ssh" and request.model != "A":
+        raise HTTPException(
+            status_code=422,
+            detail="Einstein (SSH) supports Option A only until chinook is installed on Einstein.",
+        )
+
+
+def _require_remote_arpes_script() -> Path:
+    script = _remote_arpes_me_script_path()
+    if not script.is_file():
+        raise HTTPException(status_code=503, detail=f"remote_arpes_me.sh not found at {script}")
+    return script
+
+
+def _build_einstein_sim_worker(session_id: str, request: ArpesSimRequest):
+    raise NotImplementedError("_build_einstein_sim_worker is Task 2")
 
 
 def _safe_label(name: str, fallback: str) -> str:
@@ -1059,6 +1102,13 @@ def queue_simulation(
             detail=f"Detector grid is {voxels} voxels; reduce steps (cap {MAX_SIM_VOXELS}).",
         )
 
+    _refuse_b1_on_einstein(request)
+    if request.backend == "einstein_ssh":
+        _require_remote_arpes_script()
+        worker = _build_einstein_sim_worker(session.session_id, request)
+    else:
+        worker = _build_sim_worker(session.session_id, request)
+
     run_dir = Path(session.workspace.project_dir) / "arpes_jobs" / request.store_as
     run_dir.mkdir(parents=True, exist_ok=True)
     queue = get_job_queue()
@@ -1067,7 +1117,7 @@ def queue_simulation(
             session_id=session.session_id,
             run_name=request.store_as,
             run_dir=run_dir,
-            worker=_build_sim_worker(session.session_id, request),
+            worker=worker,
             total_steps=2,
         )
     except RuntimeError as exc:

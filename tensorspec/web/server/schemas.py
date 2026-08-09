@@ -762,6 +762,7 @@ class ArpesSimRequest(BaseModel):
 
     crystal_name: str = Field(min_length=1, max_length=64)
     model: Literal["A", "B1"] = "A"
+    backend: Literal["local", "einstein_ssh"] = "local"
     store_as: str = Field(default="simulated_arpes", min_length=1, max_length=64)
 
     photon_energy: float = Field(default=90.0, ge=5, le=2000)
