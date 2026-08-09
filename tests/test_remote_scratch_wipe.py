@@ -13,6 +13,9 @@ class TestRemoteScratchWipe(unittest.TestCase):
         text = (repo_root / "scripts" / "remote_qe.sh").read_text(encoding="utf-8")
         self.assertIn(".tensorspec_remote_scratch", text)
         self.assertIn("printf", text)
+        # macOS BSD date rejects GNU `date -Is`
+        self.assertNotIn("date -Is", text)
+        self.assertIn("date '+%Y-%m-%dT%H:%M:%S%z'", text)
 
     def test_parse_ok(self):
         self.assertEqual(
