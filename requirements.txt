@@ -19,6 +19,7 @@ packaging==26.2
 palettable==3.3.3
 pandas==2.3.3
 pillow==11.3.0
+tifffile>=2024.8.30
 platformdirs==4.4.0
 plotly==6.7.0
 pooch==1.9.0
