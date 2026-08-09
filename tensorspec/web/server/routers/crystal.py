@@ -27,6 +27,7 @@ from tensorspec.web.server.schemas import (
     Atom,
     Bond,
     BZGeometry,
+    Polyhedron,
     BZRequest,
     CrystalCifRequest,
     CrystalGeometry,
@@ -217,6 +218,7 @@ def _geometry_from_structure(
     structure: Structure,
     *,
     show_bonds: bool = True,
+    show_polyhedra: bool = False,
     bond_threshold: float = 1.15,
 ) -> CrystalGeometry:
     if len(structure) > MAX_RENDER_ATOMS:
@@ -250,9 +252,26 @@ def _geometry_from_structure(
         )
 
     bonds: list[Bond] = []
-    if show_bonds:
+    bond_i = np.array([], dtype=int)
+    bond_j = np.array([], dtype=int)
+    if show_bonds or show_polyhedra:
         found = CrystalEngine.compute_bonds(structure, thresh_multiplier=bond_threshold)
-        bonds = [Bond(i=int(a), j=int(b)) for a, b in zip(found["i"], found["j"])]
+        bond_i, bond_j = found["i"], found["j"]
+        if show_bonds:
+            bonds = [Bond(i=int(a), j=int(b)) for a, b in zip(bond_i, bond_j)]
+
+    polyhedra: list[Polyhedron] = []
+    if show_polyhedra:
+        raw = CrystalEngine.compute_coordination_polyhedra(coords, bond_i, bond_j)
+        polyhedra = [
+            Polyhedron(
+                center=p["center"],
+                vertices=p["vertices"],
+                simplices=p["simplices"],
+                vertex_atom_indices=p["vertex_atom_indices"],
+            )
+            for p in raw
+        ]
 
     center = coords.mean(axis=0) if len(coords) else np.zeros(3)
     show_cell = float(structure.lattice.a) < DUMMY_CELL_A
@@ -261,6 +280,7 @@ def _geometry_from_structure(
         name=name,
         atoms=atoms,
         bonds=bonds,
+        polyhedra=polyhedra,
         cell=[[float(v) for v in row] for row in structure.lattice.matrix],
         center=[float(v) for v in center],
         elements=sorted({a.element for a in atoms}),
@@ -593,6 +613,7 @@ def get_geometry(
         name,
         supercell,
         show_bonds=request.show_bonds,
+        show_polyhedra=request.show_polyhedra,
         bond_threshold=request.bond_threshold,
     )
 
