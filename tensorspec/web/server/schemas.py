@@ -290,6 +290,48 @@ class ArpesLoadSummary(BaseModel):
     source_file: str | None = None
 
 
+class PeemLoadSummary(BaseModel):
+    """Result of loading a PEEM TIF stack or sequence."""
+
+    name: str
+    shape: list[int]
+    n_frames: int
+    data_type: str
+    pol_summary: dict[str, int]
+    source: str
+    loader: str
+    csv_attached: bool
+    I0_present: bool
+    csv_prompt: bool = False
+    csv_candidates: list[str] = Field(default_factory=list)
+
+
+class PeemMeta(BaseModel):
+    """PEEM stack metadata needed by the frame viewer."""
+
+    name: str
+    shape: list[int]
+    labels: list[str]
+    n_frames: int
+    frame_names: list[str]
+    pol: list[str]
+    csv_attached: bool
+    I0_present: bool
+    I0: float | list[float] | None = None
+
+
+class PeemFrame(BaseModel):
+    """One PEEM intensity frame and suggested display limits."""
+
+    index: int
+    shape: list[int]
+    intensity: list[list[float]]
+    vmin: float
+    vmax: float
+    pol: str | None = None
+    frame_name: str | None = None
+
+
 class InplaneConvertRequest(BaseModel):
     """User-driven angle → k∥ conversion with a chosen Γ center."""
 

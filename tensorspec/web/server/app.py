@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from tensorspec.web.server.routers import arpes as arpes_router
 from tensorspec.web.server.routers import crystal as crystal_router
 from tensorspec.web.server.routers import dft as dft_router
+from tensorspec.web.server.routers import peem as peem_router
 from tensorspec.web.server.routers import workspace as workspace_router
 from tensorspec.web.server.session import Session, current_session, session_store
 
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
     app.include_router(crystal_router.router)
     app.include_router(arpes_router.router)
     app.include_router(dft_router.router)
+    app.include_router(peem_router.router)
 
     @app.get("/", include_in_schema=False)
     @app.get("/main_browser.html", include_in_schema=False)
