@@ -69,6 +69,17 @@ class TestRunArpesMeA(unittest.TestCase):
             r = subprocess.run([PY, str(SCRIPT), str(job)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 2)
 
+    def test_missing_axis_keys_exit_2(self):
+        with TemporaryDirectory() as tmp:
+            job = Path(tmp)
+            _write_si_job(job)
+            req = json.loads((job / "request.json").read_text(encoding="utf-8"))
+            del req["kx"]
+            (job / "request.json").write_text(json.dumps(req), encoding="utf-8")
+            r = subprocess.run([PY, str(SCRIPT), str(job)], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 2, msg=r.stderr + r.stdout)
+            self.assertIn("invalid request", (job / "remote_arpes_me.log").read_text(encoding="utf-8"))
+
     def test_tiny_option_a_writes_npz(self):
         with TemporaryDirectory() as tmp:
             job = Path(tmp)

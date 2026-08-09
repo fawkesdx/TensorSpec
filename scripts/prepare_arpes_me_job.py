@@ -36,7 +36,7 @@ _DEFAULT_REQUEST = {
     "slit_angle": 15.0,
     "mesh_resolution": 20,
     "hoppings": [2.7, 0.0, 0.0, -0.3],
-    "cutoffs": [1.6, 2.6, 3.1, 4.5],
+    "cutoffs": [2.6, 3.1, 4.5, 5.5],
     "onsite_e": 0.0,
     "tb_mode": "Simple Scalar (Isotropic)",
     "store_as": "simulated_arpes",
