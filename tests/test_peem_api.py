@@ -236,6 +236,38 @@ class TestPeemApi(unittest.TestCase):
             self.assertEqual(frame.json()["pol"], "CM")
             self.assertEqual(frame.json()["intensity"], [[2.0] * 3, [2.0] * 3])
 
+    def test_zip_csv_match_prefers_extracted_directory_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            payload = io.BytesIO()
+            frame = io.BytesIO()
+            tifffile.imwrite(frame, np.ones((2, 2), dtype=np.uint16))
+            with zipfile.ZipFile(payload, "w") as archive:
+                archive.writestr("beam_run/a.tif", frame.getvalue())
+                archive.writestr("beam_run/beam_run.csv", "I0\n2.5\n")
+                archive.writestr("beam_run/upload_name.csv", "I0\n9.9\n")
+
+            response = client.post(
+                "/api/peem/load",
+                files={
+                    "file": (
+                        "upload_name.zip",
+                        payload.getvalue(),
+                        "application/zip",
+                    )
+                },
+                data={"name": "zip_csv"},
+            )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(response.json()["csv_attached"])
+            meta = client.get("/api/peem/zip_csv/meta")
+            self.assertEqual(meta.status_code, 200, meta.text)
+            self.assertEqual(meta.json()["I0"], 2.5)
+
     def test_repeated_upload_filename_uses_clean_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = self._session(tmp)
