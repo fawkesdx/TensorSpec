@@ -528,6 +528,7 @@ class GeometryRequest(BaseModel):
     basis: Literal["conventional", "primitive"] = "conventional"
     bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
     show_bonds: bool = True
+    show_polyhedra: bool = False
 
     # CDW: phase is degrees (the Qt path double-converted; the web path does not).
     cdw_enabled: bool = False
@@ -557,6 +558,13 @@ class Bond(BaseModel):
     j: int
 
 
+class Polyhedron(BaseModel):
+    center: int
+    vertices: list[list[float]]
+    simplices: list[list[int]]
+    vertex_atom_indices: list[int]
+
+
 class CrystalGeometry(BaseModel):
     """A renderer-agnostic scene description.
 
@@ -568,6 +576,7 @@ class CrystalGeometry(BaseModel):
     name: str
     atoms: list[Atom]
     bonds: list[Bond]
+    polyhedra: list[Polyhedron] = []
     cell: list[list[float]]
     center: list[float]
     elements: list[str]
