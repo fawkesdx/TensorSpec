@@ -209,7 +209,7 @@ export class CrystalViewer {
 
   /* Draws a payload from POST /api/crystal/{name}/geometry. */
   render(geometry, options = {}) {
-    const { showBonds = true, showCell = true, frame = true } = options;
+    const { showBonds = true, showPolyhedra = false, showCell = true, frame = true } = options;
     this.geometry = geometry;
     this._lastOptions = options;
     this.clear();
@@ -218,6 +218,7 @@ export class CrystalViewer {
 
     this._drawAtoms(geometry, center);
     if (showBonds) this._drawBonds(geometry, center);
+    if (showPolyhedra && geometry.polyhedra?.length) this._drawPolyhedra(geometry, center);
     const drawCell = showCell && geometry.show_cell !== false;
     if (drawCell) this._drawCell(geometry, center);
 
@@ -504,6 +505,40 @@ export class CrystalViewer {
 
     mesh.instanceMatrix.needsUpdate = true;
     this.content.add(mesh);
+  }
+
+  _drawPolyhedra(geometry, center) {
+    for (const poly of geometry.polyhedra) {
+      if (this._erasedAtomIndices.has(poly.center)) continue;
+      if (poly.vertex_atom_indices?.some((idx) => this._erasedAtomIndices.has(idx))) continue;
+
+      const centerAtom = geometry.atoms[poly.center];
+      if (!centerAtom || !poly.vertices?.length || !poly.simplices?.length) continue;
+
+      const positions = [];
+      poly.vertices.forEach((p) => {
+        const v = new THREE.Vector3(...p).sub(center);
+        positions.push(v.x, v.y, v.z);
+      });
+      const indices = [];
+      poly.simplices.forEach((tri) => indices.push(...tri));
+
+      const geom = new THREE.BufferGeometry();
+      geom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+      geom.setIndex(indices);
+      geom.computeVertexNormals();
+
+      this.content.add(new THREE.Mesh(
+        geom,
+        new THREE.MeshStandardMaterial({
+          color: elementColor(centerAtom.element),
+          transparent: true,
+          opacity: 0.3,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        }),
+      ));
+    }
   }
 
   _drawCell(geometry, center) {
