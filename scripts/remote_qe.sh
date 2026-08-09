@@ -258,7 +258,7 @@ cd '$SCRATCH'
 exec > >(tee -a remote_qe.log) 2>&1
 source "\$HOME/tensorspec-solvers.env" 2>/dev/null || export PATH="\$HOME/miniconda3/envs/qe/bin:\$PATH"
 
-echo "=== remote pipeline start \$(date -Is) np=$NP ==="
+echo "=== remote pipeline start \$(date '+%Y-%m-%dT%H:%M:%S%z') np=$NP ==="
 echo "PATH=\$PATH"
 command -v pw.x
 command -v mpirun
@@ -286,7 +286,7 @@ if [ "$HAS_WAN" -eq 1 ]; then
   wannier90.x wannier90 > wannier90.wout 2>&1
 fi
 
-echo "=== remote pipeline OK \$(date -Is) ==="
+echo "=== remote pipeline OK \$(date '+%Y-%m-%dT%H:%M:%S%z') ==="
 EOF
 
 # Always attempt pull (success or failure). Never wipe if pull fails.
@@ -297,7 +297,7 @@ pull_allowlist || PULL_RC=$?
 # Merge: ensure local transcript notes remote status
 {
   echo ""
-  echo "=== local wrapper remote_status=$REMOTE_STATUS pull_rc=$PULL_RC $(date -Is) ==="
+  echo "=== local wrapper remote_status=$REMOTE_STATUS pull_rc=$PULL_RC $(date '+%Y-%m-%dT%H:%M:%S%z') ==="
 } >>"$LOCAL_LOG"
 
 if [[ "$REMOTE_STATUS" -ne 0 ]]; then

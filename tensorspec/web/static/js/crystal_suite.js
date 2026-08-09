@@ -856,12 +856,17 @@ if (dom.exportFigure) dom.exportFigure.addEventListener("click", exportFigure);
 dom.crRender?.addEventListener("click", () => refreshGeometry({ frame: true }));
 dom.crHires?.addEventListener("click", () => {
     if (!activeCrystal) { setStatus("Load a crystal first.", true); return; }
-    const url = ensureViewer().capturePNG(2);
+    const view = ensureViewer();
+    if (!view.geometry) {
+        setStatus("Render the structure first.", true);
+        return;
+    }
+    const url = view.capturePNG(2);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${activeCrystal || "structure"}.png`;
+    a.download = `${activeCrystal || "structure"}_viewport.png`;
     a.click();
-    setStatus("Saved high-res PNG");
+    setStatus(`Saved ${activeCrystal}_viewport.png (three.js canvas)`);
 });
 if (dom.crPush) {
     dom.crPush.addEventListener("click", () => {

@@ -232,7 +232,7 @@ pull_allowlist || PULL_RC=$?
 # Merge: ensure local transcript notes remote status
 {
   echo ""
-  echo "=== local wrapper remote_status=$REMOTE_STATUS pull_rc=$PULL_RC $(date -Is) ==="
+  echo "=== local wrapper remote_status=$REMOTE_STATUS pull_rc=$PULL_RC $(date '+%Y-%m-%dT%H:%M:%S%z') ==="
 } >>"$LOCAL_LOG"
 
 if [[ "$REMOTE_STATUS" -ne 0 ]]; then

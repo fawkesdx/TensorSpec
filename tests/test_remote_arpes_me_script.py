@@ -19,6 +19,9 @@ class TestRemoteArpesMeScript(unittest.TestCase):
         self.assertIn("run_arpes_me_a.py", text)
         self.assertIn("--dry-run", text)
         self.assertIn("ssh", text)  # live path uses ssh; dry-run exits before invoke
+        # macOS BSD date rejects GNU `date -Is`; keep portable format
+        self.assertNotIn("date -Is", text)
+        self.assertIn("date '+%Y-%m-%dT%H:%M:%S%z'", text)
 
     def test_script_writes_sidecar_contract(self):
         text = SCRIPT.read_text(encoding="utf-8")
