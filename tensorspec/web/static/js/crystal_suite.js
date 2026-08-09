@@ -25,6 +25,7 @@ const dom = {
     bondThick: el("cr-bondthick"),
     swatches: el("cr-swatches"),
     conn: el("cr-conn"),
+    pbr: el("cr-pbr"),
     axes: el("cr-axes"),
     showCell: el("cr-show-cell"),
     projection: el("cr-projection"),
@@ -208,6 +209,7 @@ function applyViewerChrome(view) {
     view.atomScale = Number(dom.radius.value) || 0.5;
     view.setBondRadius(Number(dom.bondThick?.value) || 0.1);
     view.setShowAxes(Boolean(dom.axes?.checked));
+    view.setPbrShiny(Boolean(dom.pbr?.checked));
     applyCutPlane(view);
 }
 
@@ -536,6 +538,7 @@ dom.bondThick?.addEventListener("change", () => {
 dom.radius?.addEventListener("change", () => {
     ensureViewer().setAtomScale(Number(dom.radius.value) || 0.5);
 });
+dom.pbr?.addEventListener("change", () => ensureViewer().setPbrShiny(dom.pbr.checked));
 dom.axes?.addEventListener("change", () => ensureViewer().setShowAxes(dom.axes.checked));
 dom.showCell?.addEventListener("change", () => refreshGeometry({ frame: false }));
 dom.projection?.addEventListener("change", () => ensureViewer().setProjection(dom.projection.value));
