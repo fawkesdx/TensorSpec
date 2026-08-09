@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run ARPES Option A ME in a prepared job directory (Einstein entrypoint)."""
+"""Run ARPES Option A/B1 ME in a prepared job directory (Einstein entrypoint)."""
 from __future__ import annotations
 
 import json
@@ -95,10 +95,15 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("request.json missing")
         req = json.loads(req_path.read_text(encoding="utf-8"))
         model = str(req.get("model", "A"))
-        if model != "A":
-            raise ValueError(
-                f"remote runner supports Option A only (got model={model!r}); B1 out of scope"
-            )
+        if model not in ("A", "B1"):
+            raise ValueError(f"model must be 'A' or 'B1' (got {model!r})")
+
+        if model == "B1":
+            try:
+                import chinook  # noqa: F401
+            except ImportError as e:
+                _log(job_dir, f"[arpes] missing dependency: {e}")
+                return 6
 
         kx = _axis(req, "kx")
         ky = _axis(req, "ky")
@@ -145,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
 
         _log(job_dir, f"[arpes] mesh ready ({band_data['n_bands']} bands)")
         arpes = ARPESEngineRouter()
-        results = arpes.run_simulation("A", band_data, _experiment_kwargs(req))
+        results = arpes.run_simulation(model, band_data, _experiment_kwargs(req))
         intensity = np.asarray(results["intensity_broadened"], dtype=float)
         kx_ax, ky_ax = results.get("k_axes", (None, None))
         e_ax = results.get("e_axis")
@@ -162,7 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             ky=np.asarray(ky_ax, dtype=float),
         )
         meta = {
-            "model": "A",
+            "model": model,
             "shape": list(cube.shape),
             "formula": structure.composition.reduced_formula,
             "timestamp": datetime.now(timezone.utc).isoformat(),
