@@ -230,14 +230,26 @@ function drawExportKnobs() {
     };
 }
 
+function connectionMode() {
+    const conn = dom.conn?.value || "bonds";
+    return {
+        show_bonds: conn === "bonds",
+        show_polyhedra: conn === "polyhedra",
+        showBonds: conn === "bonds",
+        showPolyhedra: conn === "polyhedra",
+    };
+}
+
 function geometryRequest() {
+    const conn = connectionMode();
     return {
         nx: Number(dom.nx.value) || 1,
         ny: Number(dom.ny.value) || 1,
         nz: Number(dom.nz.value) || 1,
         bond_threshold: Number(dom.threshold.value) || 1.15,
         basis: dom.basisPrim?.checked ? "primitive" : "conventional",
-        show_bonds: dom.conn?.value !== "none",
+        show_bonds: conn.show_bonds,
+        show_polyhedra: conn.show_polyhedra,
         cdw_enabled: Boolean(dom.cdwEnable.checked),
         cdw_target: dom.cdwTarget.value || "All Elements",
         cdw_qx: Number(dom.qa.value) || 0,
@@ -259,9 +271,11 @@ async function refreshGeometry({ frame = true } = {}) {
         const view = ensureViewer();
         view.clearErasedAtoms();
         applyViewerChrome(view);
+        const conn = connectionMode();
         view.render(geometry, {
             frame,
-            showBonds: dom.conn?.value !== "none",
+            showBonds: conn.showBonds,
+            showPolyhedra: conn.showPolyhedra,
             showCell: Boolean(dom.showCell?.checked),
         });
         rebuildSwatches(geometry.elements);
@@ -381,16 +395,18 @@ async function renderStack() {
                 name, sc_x, sc_y, z_shift, twist,
             })),
             store_as: storeAs,
-            show_bonds: dom.conn?.value !== "none",
+            show_bonds: connectionMode().show_bonds,
         });
         activeCrystal = geometry.name;
         const view = ensureViewer();
         view.clearBrillouinZone();
         view.clearErasedAtoms();
         applyViewerChrome(view);
+        const conn = connectionMode();
         view.render(geometry, {
             frame: true,
-            showBonds: dom.conn?.value !== "none",
+            showBonds: conn.showBonds,
+            showPolyhedra: conn.showPolyhedra,
             showCell: Boolean(dom.showCell?.checked),
         });
         fillTargets(geometry.elements);
@@ -647,6 +663,7 @@ function sceneExportPayload() {
         bond_threshold: geo.bond_threshold,
         basis: geo.basis,
         show_bonds: geo.show_bonds,
+        show_polyhedra: geo.show_polyhedra,
         include_atoms: Boolean(dom.expAtoms?.checked),
         include_cell: Boolean(dom.expCell?.checked),
         include_bz: Boolean(dom.expBz?.checked),
@@ -728,7 +745,7 @@ async function relaxActiveStack() {
             steps: Number(dom.stSteps.value) || 200,
             relax_cell: !!dom.stRelaxCell?.checked,
             store_as: storeAs,
-            show_bonds: dom.conn?.value !== "none",
+            show_bonds: connectionMode().show_bonds,
         });
         activeCrystal = result.stored_as;
         if (dom.stStore) dom.stStore.value = result.stored_as;
@@ -736,9 +753,11 @@ async function relaxActiveStack() {
         view.clearBrillouinZone();
         view.clearErasedAtoms();
         applyViewerChrome(view);
+        const conn = connectionMode();
         view.render(result.geometry, {
             frame: true,
-            showBonds: dom.conn?.value !== "none",
+            showBonds: conn.showBonds,
+            showPolyhedra: conn.showPolyhedra,
             showCell: Boolean(dom.showCell?.checked),
         });
         fillTargets(result.geometry.elements);
