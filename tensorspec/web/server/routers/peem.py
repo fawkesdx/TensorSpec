@@ -5,6 +5,7 @@ import re
 import zipfile
 from collections import Counter
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -126,6 +127,22 @@ def _csv_path_from_inputs(
     return None
 
 
+def _auto_csv_choice(
+    directory: Path, preferred_stem: str
+) -> tuple[Path | None, list[Path]]:
+    """Mirror loader auto-selection so size is checked before CSV parsing."""
+    candidates = find_beamline_csv(directory, preferred_stem)
+    if len(candidates) == 1:
+        return candidates[0], candidates
+    preferred = preferred_stem.casefold()
+    matches = [
+        path
+        for path in candidates
+        if path.stem.casefold() == preferred or preferred in path.stem.casefold()
+    ]
+    return (matches[0] if len(matches) == 1 else None), candidates
+
+
 def _require_tensor(session: Session, name: str):
     tensor = session.workspace.pull_tensor_data(name)
     if tensor is None:
@@ -179,6 +196,10 @@ def load_peem(
 
     upload_root = Path(session.workspace.project_dir) / "uploads" / "peem"
     upload_root.mkdir(parents=True, exist_ok=True)
+    upload_dir = upload_root
+    if file is not None or csv is not None:
+        upload_dir = upload_root / uuid4().hex
+        upload_dir.mkdir()
     source_path: Path
     load_directory: Path
     fallback: str
@@ -187,13 +208,11 @@ def load_peem(
         filename = _safe_upload_name(file.filename or "", "peem.tif")
         payload = _read_upload(file, MAX_PEEM_BYTES, "PEEM file")
         fallback = Path(filename).stem or "peem"
-        dataset_dir = upload_root / fallback
-        dataset_dir.mkdir(parents=True, exist_ok=True)
         if filename.lower().endswith(".zip"):
-            source_path = _extract_zip(payload, dataset_dir)
+            source_path = _extract_zip(payload, upload_dir)
             load_directory = source_path
         elif filename.lower().endswith((".tif", ".tiff")):
-            source_path = dataset_dir / filename
+            source_path = upload_dir / filename
             source_path.write_bytes(payload)
             load_directory = source_path.parent
         else:
@@ -209,14 +228,23 @@ def load_peem(
         csv=csv,
         csv_path=csv_path,
         session=session,
-        upload_dir=upload_root,
+        upload_dir=upload_dir,
     )
+    auto_candidates: list[Path] = []
+    loader_csv = explicit_csv
+    if explicit_csv is None:
+        loader_csv, auto_candidates = _auto_csv_choice(load_directory, fallback)
+        if loader_csv is not None and loader_csv.stat().st_size > MAX_CSV_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Auto-discovered CSV exceeds the 8 MB limit.",
+            )
 
     try:
         if source_path.is_dir():
-            tensor = load_tif_sequence(source_path, csv_path=explicit_csv)
+            tensor = load_tif_sequence(source_path, csv_path=loader_csv)
         elif source_path.suffix.lower() in (".tif", ".tiff"):
-            tensor = load_tif_stack(source_path, csv_path=explicit_csv)
+            tensor = load_tif_stack(source_path, csv_path=loader_csv)
         else:
             raise HTTPException(
                 status_code=400, detail="Server path must be a TIF file or directory."
@@ -236,7 +264,7 @@ def load_peem(
     candidates = (
         []
         if attached or explicit_csv is not None
-        else [str(path) for path in find_beamline_csv(load_directory, fallback)]
+        else [str(path) for path in auto_candidates]
     )
     return _summary(
         label,
@@ -257,11 +285,15 @@ def attach_csv(
     tensor = _require_tensor(session, name)
     upload_root = Path(session.workspace.project_dir) / "uploads" / "peem"
     upload_root.mkdir(parents=True, exist_ok=True)
+    upload_dir = upload_root
+    if csv is not None:
+        upload_dir = upload_root / uuid4().hex
+        upload_dir.mkdir()
     selected = _csv_path_from_inputs(
         csv=csv,
         csv_path=csv_path,
         session=session,
-        upload_dir=upload_root,
+        upload_dir=upload_dir,
     )
     if selected is None:
         raise HTTPException(status_code=400, detail="Provide csv or csv_path.")
@@ -280,9 +312,8 @@ def attach_csv(
             "columns": csv_meta.get("columns"),
             "series": csv_meta.get("series"),
         },
+        "beam_current": csv_meta.get("beam_current"),
     }
-    if csv_meta.get("beam_current") is not None:
-        attrs["beam_current"] = csv_meta["beam_current"]
     if not session.workspace.merge_spectroscopy_raw_attrs(name, attrs):
         raise HTTPException(status_code=404, detail=f"PEEM data '{name}' not found.")
     return _summary(name, _require_tensor(session, name))

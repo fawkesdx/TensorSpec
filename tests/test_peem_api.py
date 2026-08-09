@@ -78,6 +78,41 @@ class TestPeemApi(unittest.TestCase):
             self.assertEqual(tensor.metadata["beamline_csv"], str(csv_path.resolve()))
             self.assertEqual(tensor.metadata["beamline_table"]["series"]["I0"], [3.3])
 
+    def test_replacing_csv_clears_stale_beam_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a.tif", np.ones((2, 2), dtype=np.uint16))
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="replace",
+                session=session,
+            )
+            first = root / "first.csv"
+            first.write_text("beam_current\n8.1\n")
+            second = root / "second.csv"
+            second.write_text("I0\n2.4\n")
+            peem_router.attach_csv(
+                "replace", csv=None, csv_path=str(first), session=session
+            )
+            self.assertEqual(
+                session.workspace.pull_tensor_data("replace").metadata["beam_current"],
+                8.1,
+            )
+
+            peem_router.attach_csv(
+                "replace", csv=None, csv_path=str(second), session=session
+            )
+
+            metadata = session.workspace.pull_tensor_data("replace").metadata
+            self.assertIsNone(metadata.get("beam_current"))
+            self.assertEqual(metadata["I0"], 2.4)
+            self.assertEqual(metadata["beamline_csv"], str(second.resolve()))
+
     def test_ambiguous_csv_requests_prompt_with_candidates(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = self._session(tmp)
@@ -103,6 +138,27 @@ class TestPeemApi(unittest.TestCase):
             self.assertEqual(
                 summary.csv_candidates, [str(one.resolve()), str(two.resolve())]
             )
+
+    def test_auto_discovered_csv_enforces_size_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a.tif", np.ones((2, 2), dtype=np.uint16))
+            oversized = root / "run.csv"
+            oversized.write_bytes(b"I0\n" + b"x" * peem_router.MAX_CSV_BYTES)
+
+            with self.assertRaises(HTTPException) as ctx:
+                peem_router.load_peem(
+                    file=None,
+                    server_path=str(root),
+                    csv=None,
+                    csv_path=None,
+                    name="oversized",
+                    session=session,
+                )
+
+            self.assertEqual(ctx.exception.status_code, 413)
 
     def test_path_escape_forbidden(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -174,6 +230,50 @@ class TestPeemApi(unittest.TestCase):
             self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(response.json()["shape"], [2, 2, 3])
             self.assertEqual(response.json()["pol_summary"], {"CP": 1, "CM": 1})
+            frame = client.get("/api/peem/uploaded/frame/1")
+            self.assertEqual(frame.status_code, 200, frame.text)
+            self.assertEqual(frame.json()["shape"], [2, 3])
+            self.assertEqual(frame.json()["pol"], "CM")
+            self.assertEqual(frame.json()["intensity"], [[2.0] * 3, [2.0] * 3])
+
+    def test_repeated_upload_filename_uses_clean_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+
+            first = io.BytesIO()
+            with zipfile.ZipFile(first, "w") as archive:
+                for filename, value in (("a.tif", 1), ("stale.tif", 9)):
+                    frame = io.BytesIO()
+                    tifffile.imwrite(frame, np.full((2, 2), value, dtype=np.uint16))
+                    archive.writestr(filename, frame.getvalue())
+            response = client.post(
+                "/api/peem/load",
+                files={"file": ("same.zip", first.getvalue(), "application/zip")},
+                data={"name": "first"},
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["n_frames"], 2)
+
+            second = io.BytesIO()
+            with zipfile.ZipFile(second, "w") as archive:
+                frame = io.BytesIO()
+                tifffile.imwrite(frame, np.full((2, 2), 3, dtype=np.uint16))
+                archive.writestr("a.tif", frame.getvalue())
+            response = client.post(
+                "/api/peem/load",
+                files={"file": ("same.zip", second.getvalue(), "application/zip")},
+                data={"name": "second"},
+            )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["n_frames"], 1)
+            self.assertNotEqual(
+                Path(session.workspace.pull_tensor_data("first").metadata["source"]),
+                Path(session.workspace.pull_tensor_data("second").metadata["source"]),
+            )
 
 
 if __name__ == "__main__":
