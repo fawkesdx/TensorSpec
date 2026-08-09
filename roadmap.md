@@ -145,7 +145,11 @@ Grand App
 - [ ] PEEM Suite — deferred (vision; first slice = load + view)
 	- [ ] loader of tif file stacks
 	- [ ] loader of sequences of series of tif files from a folder
-	- [ ] accompanying beamline CSV metadata (sidecar with TIF / folder): parse and store in workspace attrs (I0 / beam current and other beamline params). Needed later to normalize CP vs CM for sum rule; load+view slice should attach CSV even before sum-rule UI exists
+	- [ ] accompanying beamline CSV metadata (I0 / beam current and other beamline params) for later CP vs CM sum-rule normalization
+		- [ ] when user points at a folder (or stack path’s parent), auto-search that folder for a companion CSV first
+		- [ ] if none found, prompt user for CSV path / upload
+		- [ ] if user has no CSV, still load TIF data; leave I0/etc. missing and allow attaching / updating CSV (or similar metadata) later
+		- [ ] load+view slice: attach on load + “update metadata” path; apply I0 in sum-rule slice
 	- [ ] stack the CP and CM together or LH and LV together depending on the files
 	- [ ] once stacked, build drift-correction options
 	- [ ] separate those CP and CM or LH and LV
