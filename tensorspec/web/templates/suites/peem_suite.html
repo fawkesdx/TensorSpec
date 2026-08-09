@@ -12,34 +12,68 @@
 
 <body>
     <div class="suite">
-
         <header class="suite-header">
             <a class="suite-header__back" href="../main_browser.html">&#8592; Workspace Browser</a>
             <h1 class="suite-header__title">PEEM Suite</h1>
             <div class="suite-header__spacer"></div>
-            <span class="badge">Planned &mdash; no engine yet</span>
+            <span class="badge">Load + view</span>
         </header>
 
         <div class="suite-body suite-body--split">
-
             <section class="panel">
                 <div class="panel__header">
                     <h2 class="panel__title">Stack Processing</h2>
                 </div>
                 <div class="panel__body" style="padding:12px">
-
-                    <p class="hint">This suite has no Python engine yet. The controls below trace the workflow recorded
-                        in <code>roadmap.md</code> so the layout is settled before <code>core/peem_engine.py</code> is
-                        written.</p>
-
                     <fieldset class="fieldset">
                         <legend>1. Load</legend>
-                        <button type="button" class="btn btn--block" disabled>&#128194; Load TIF Stack</button>
-                        <button type="button" class="btn btn--block" disabled>&#128193; Load Folder Sequence</button>
-                        <p class="status-line">No stack loaded</p>
+                        <div class="form-row">
+                            <label for="peem-name">Dataset name:</label>
+                            <input class="field" id="peem-name" type="text" maxlength="64" placeholder="From source name">
+                        </div>
+
+                        <label class="btn btn--block" for="peem-tif" style="display:block;text-align:center;cursor:pointer">
+                            &#128194; Load TIF Stack
+                        </label>
+                        <input id="peem-tif" type="file" accept=".tif,.tiff,image/tiff" hidden>
+
+                        <label class="btn btn--block" for="peem-zip" style="display:block;text-align:center;cursor:pointer;margin-top:8px">
+                            &#128230; Upload Folder ZIP
+                        </label>
+                        <input id="peem-zip" type="file" accept=".zip,application/zip" hidden>
+
+                        <div class="form-row form-row--stacked" style="margin-top:8px">
+                            <label for="peem-server-path">Server TIF or folder path:</label>
+                            <div class="inline">
+                                <input class="field" id="peem-server-path" type="text" placeholder="/path/to/run">
+                                <button type="button" class="btn" id="peem-load-path">Load</button>
+                            </div>
+                        </div>
+                        <p class="status-line" id="peem-status">No stack loaded</p>
                     </fieldset>
 
-                    <fieldset class="fieldset">
+                    <fieldset class="fieldset" id="peem-csv-controls" disabled>
+                        <legend>Beamline CSV</legend>
+                        <label class="hint" for="peem-csv-file" style="display:block">
+                            Attach or update CSV:
+                            <input id="peem-csv-file" type="file" accept=".csv,text/csv" style="display:block;margin-top:4px;width:100%">
+                        </label>
+                        <div class="form-row form-row--stacked">
+                            <label for="peem-csv-path">Or server CSV path:</label>
+                            <input class="field" id="peem-csv-path" type="text" placeholder="/path/to/beamline.csv">
+                        </div>
+                        <button type="button" class="btn btn--block" id="peem-attach-csv">Attach / update CSV</button>
+                        <p class="hint" id="peem-csv-status">Load a dataset first.</p>
+                    </fieldset>
+
+                    <fieldset class="fieldset" id="peem-csv-prompt" hidden>
+                        <legend>Beamline CSV not attached</legend>
+                        <p class="hint">No beamline CSV found. Choose CSV, or Continue without.</p>
+                        <ul class="planned" id="peem-csv-candidates"></ul>
+                        <button type="button" class="btn btn--block" id="peem-continue">Continue without</button>
+                    </fieldset>
+
+                    <fieldset class="fieldset" disabled>
                         <legend>2. Contrast Pairing</legend>
                         <div class="form-row">
                             <label for="peem-mode">Pair Mode:</label>
@@ -53,7 +87,7 @@
                         <button type="button" class="btn btn--block" disabled>&#9878; Separate Pairs</button>
                     </fieldset>
 
-                    <fieldset class="fieldset">
+                    <fieldset class="fieldset" disabled>
                         <legend>3. Drift Correction</legend>
                         <div class="form-row">
                             <label for="peem-algo">Algorithm:</label>
@@ -74,7 +108,7 @@
                         <button type="button" class="btn btn--block" disabled>&#127919; Apply Drift Correction</button>
                     </fieldset>
 
-                    <fieldset class="fieldset">
+                    <fieldset class="fieldset" disabled>
                         <legend>4. Background &amp; Analysis</legend>
                         <label class="check"><input type="checkbox" checked> Apply background subtraction to all frames</label>
                         <button type="button" class="btn btn--block" disabled>&#9660; Subtract Background</button>
@@ -83,7 +117,6 @@
                     </fieldset>
 
                     <button type="button" class="btn btn--primary" disabled>&#128229; Push Stack to Workspace</button>
-
                 </div>
             </section>
 
@@ -92,17 +125,26 @@
                     <h2 class="panel__title">Image Stack Viewer</h2>
                 </div>
                 <div class="panel__body" style="padding:12px; display:flex; flex-direction:column; gap:12px">
-                    <div class="canvas" style="flex:1 1 auto">
-                        <div class="canvas__glyph" aria-hidden="true">&#9635;</div>
-                        <p class="canvas__title">PEEM Image Canvas</p>
-                        <p class="canvas__meta">Frame viewer with (x, y, z, Time) navigation, drift overlay, and
-                            asymmetry maps.</p>
+                    <div class="canvas" style="flex:1 1 auto;min-height:360px;padding:0;overflow:auto">
+                        <canvas id="peem-canvas" width="1" height="1"
+                            style="display:block;width:100%;height:auto;image-rendering:pixelated"
+                            aria-label="PEEM intensity frame"></canvas>
+                    </div>
+                    <div>
+                        <label for="peem-frame">Frame <span id="peem-frame-label">0 / 0</span></label>
+                        <input id="peem-frame" type="range" min="0" max="0" value="0" disabled style="width:100%">
+                        <div class="inline" style="margin-top:8px">
+                            <label for="peem-vmin">Min:</label>
+                            <input class="field field--num" id="peem-vmin" type="number" step="any" disabled>
+                            <label for="peem-vmax">Max:</label>
+                            <input class="field field--num" id="peem-vmax" type="number" step="any" disabled>
+                        </div>
+                        <p class="hint" id="peem-frame-meta">Load a stack to view frames.</p>
                     </div>
                     <div>
                         <h3 class="section-heading">Planned capabilities (roadmap)</h3>
                         <ul class="planned">
-                            <li>Loader for TIF file stacks</li>
-                            <li>Loader for sequences of TIF files from a folder</li>
+                            <li>TIF stack and folder sequence loaders are live</li>
                             <li>Stack CP/CM or LH/LV together depending on the files</li>
                             <li>Drift correction options once stacked</li>
                             <li>Separate CP/CM or LH/LV after processing</li>
@@ -112,20 +154,21 @@
                     </div>
                 </div>
             </section>
-
         </div>
 
         <footer class="statusbar">
             <div class="statusbar__group">
-                <span>Static shell &mdash; Phase 2</span>
-                <span>Engine not implemented</span>
+                <span id="peem-footer-status">No stack loaded</span>
+                <span>Load + view</span>
             </div>
             <div class="statusbar__group">
                 <span>PEEM Suite</span>
             </div>
         </footer>
-
     </div>
+
+    <script src="../../static/js/api.js"></script>
+    <script type="module" src="../../static/js/peem_suite.js"></script>
 </body>
 
 </html>

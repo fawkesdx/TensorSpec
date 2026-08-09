@@ -209,6 +209,25 @@ const TensorSpecAPI = (() => {
             if (logFile) form.append("log", logFile);
             return upload("/api/arpes/load", form);
         },
+        loadPeem: ({ file, serverPath, csvFile, csvPath, name } = {}) => {
+            const form = new FormData();
+            if (file) form.append("file", file);
+            if (serverPath) form.append("server_path", serverPath);
+            if (csvFile) form.append("csv", csvFile);
+            if (csvPath) form.append("csv_path", csvPath);
+            if (name) form.append("name", name);
+            return upload("/api/peem/load", form);
+        },
+        peemMeta: (name) =>
+            request(`/api/peem/${encodeURIComponent(name)}/meta`),
+        peemFrame: (name, i) =>
+            request(`/api/peem/${encodeURIComponent(name)}/frame/${i}`),
+        peemAttachCsv: (name, { csvFile, csvPath } = {}) => {
+            const form = new FormData();
+            if (csvFile) form.append("csv", csvFile);
+            if (csvPath) form.append("csv_path", csvPath);
+            return upload(`/api/peem/${encodeURIComponent(name)}/attach-csv`, form);
+        },
         processRoles: (name) =>
             request(`/api/arpes/process/${encodeURIComponent(name)}/roles`),
         processSuggestCenter: (name, payload) =>
