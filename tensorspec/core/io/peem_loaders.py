@@ -45,6 +45,38 @@ def infer_pol_from_name(name: str) -> str:
     return "unknown"
 
 
+def _stem_matches(path: Path, preferred_stem: str) -> bool:
+    preferred_fold = preferred_stem.casefold()
+    stem_fold = path.stem.casefold()
+    return stem_fold == preferred_fold or preferred_fold in stem_fold
+
+
+def _auto_attach_csv(directory: Path, preferred_stem: str | None = None) -> dict[str, Any] | None:
+    """
+    Attach beamline CSV only when unambiguous:
+    - exactly one *.csv in directory, or
+    - exactly one path whose stem matches preferred_stem.
+    """
+    candidates = find_beamline_csv(directory)
+    if not candidates:
+        return None
+
+    if len(candidates) == 1:
+        chosen = candidates[0]
+    elif preferred_stem:
+        matching = [path for path in candidates if _stem_matches(path, preferred_stem)]
+        if len(matching) == 1:
+            chosen = matching[0]
+        else:
+            return None
+    else:
+        return None
+
+    csv_meta = load_beamline_csv(chosen)
+    csv_meta["beamline_csv"] = str(chosen)
+    return csv_meta
+
+
 def find_beamline_csv(directory: Path, preferred_stem: str | None = None) -> list[Path]:
     """
     Return candidate *.csv paths in directory (non-recursive).
@@ -56,12 +88,7 @@ def find_beamline_csv(directory: Path, preferred_stem: str | None = None) -> lis
     if not preferred_stem:
         return candidates
 
-    preferred_fold = preferred_stem.casefold()
-    matching = [
-        path
-        for path in candidates
-        if path.stem.casefold() == preferred_fold or preferred_fold in path.stem.casefold()
-    ]
+    matching = [path for path in candidates if _stem_matches(path, preferred_stem)]
     non_matching = [path for path in candidates if path not in matching]
     return matching + non_matching
 
@@ -153,12 +180,34 @@ def package_stack(
 
 
 def _read_tif_frames(path: Path) -> np.ndarray:
-    data = tifffile.imread(path)
-    if data.ndim == 2:
-        return data[np.newaxis, ...]
-    if data.ndim == 3:
-        return data
-    raise ValueError(f"Unexpected TIF shape {data.shape} in {path}")
+    with tifffile.TiffFile(path) as tif:
+        if not tif.pages:
+            raise ValueError(f"No TIFF pages in {path}")
+
+        if len(tif.pages) == 1:
+            frame = tif.pages[0].asarray()
+            if frame.ndim == 3:
+                return frame
+            if frame.ndim == 2:
+                return frame[np.newaxis, ...]
+            raise ValueError(f"Unexpected TIFF page shape {frame.shape} in {path}")
+
+        frames_list: list[np.ndarray] = []
+        ref_shape: tuple[int, ...] | None = None
+        for page_idx, page in enumerate(tif.pages):
+            frame = page.asarray()
+            if frame.ndim != 2:
+                raise ValueError(
+                    f"Expected 2D TIFF page in {path}, page {page_idx} shape {frame.shape}"
+                )
+            if ref_shape is None:
+                ref_shape = frame.shape
+            elif frame.shape != ref_shape:
+                raise ValueError(
+                    f"TIFF pages differ in {path}: page {page_idx} {frame.shape} vs {ref_shape}"
+                )
+            frames_list.append(frame)
+        return np.stack(frames_list, axis=0)
 
 
 def load_tif_stack(path: Path | str, *, csv_path: Path | str | None = None) -> TensorData:
@@ -173,10 +222,7 @@ def load_tif_stack(path: Path | str, *, csv_path: Path | str | None = None) -> T
         csv_meta = load_beamline_csv(csv_path)
         csv_meta["beamline_csv"] = str(Path(csv_path))
     else:
-        found = find_beamline_csv(path.parent, preferred_stem=path.stem)
-        if found:
-            csv_meta = load_beamline_csv(found[0])
-            csv_meta["beamline_csv"] = str(found[0])
+        csv_meta = _auto_attach_csv(path.parent, preferred_stem=path.stem)
 
     return package_stack(
         frames,
@@ -224,6 +270,8 @@ def load_tif_sequence(directory: Path | str, *, csv_path: Path | str | None = No
     if csv_path is not None:
         csv_meta = load_beamline_csv(csv_path)
         csv_meta["beamline_csv"] = str(Path(csv_path))
+    else:
+        csv_meta = _auto_attach_csv(directory, preferred_stem=directory.name)
 
     return package_stack(
         frames,
