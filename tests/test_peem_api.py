@@ -48,6 +48,87 @@ class TestPeemApi(unittest.TestCase):
             self.assertEqual(len(frame.intensity), 4)
             self.assertEqual((frame.vmin, frame.vmax), (1.0, 1.0))
 
+    def test_meta_accepts_i0_units_and_blank_cells(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a.tif", np.ones((2, 2), dtype=np.uint16))
+            (root / "run.csv").write_text("frame,I0\n0,1.5 nA\n1,\n2,2.0\n")
+
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="i0_units",
+                session=session,
+            )
+            meta = peem_router.get_meta("i0_units", session=session)
+
+            self.assertEqual(meta.I0, [1.5, None, 2.0])
+
+    def test_server_path_rejects_float64_expansion_over_limit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a.tif", np.ones((3, 3), dtype=np.uint16))
+
+            original_limit = peem_router.MAX_PEEM_BYTES
+            peem_router.MAX_PEEM_BYTES = 64
+            try:
+                with self.assertRaises(HTTPException) as ctx:
+                    peem_router.load_peem(
+                        file=None,
+                        server_path=str(root),
+                        csv=None,
+                        csv_path=None,
+                        name="too_large",
+                        session=session,
+                    )
+            finally:
+                peem_router.MAX_PEEM_BYTES = original_limit
+
+            self.assertEqual(ctx.exception.status_code, 413)
+
+    def test_server_folder_with_spaces_gets_safe_fallback_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run with spaces"
+            root.mkdir()
+            tifffile.imwrite(root / "a.tif", np.ones((2, 2), dtype=np.uint16))
+
+            summary = peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name=None,
+                session=session,
+            )
+
+            self.assertEqual(summary.name, "run_with_spaces")
+
+    def test_invalid_name_is_rejected_before_loading(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "empty"
+            root.mkdir()
+
+            with self.assertRaises(HTTPException) as ctx:
+                peem_router.load_peem(
+                    file=None,
+                    server_path=str(root),
+                    csv=None,
+                    csv_path=None,
+                    name="bad name",
+                    session=session,
+                )
+
+            self.assertEqual(ctx.exception.status_code, 422)
+            self.assertIn("Name must", ctx.exception.detail)
+
     def test_attach_csv_after_load_merges_raw_attrs(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = self._session(tmp)
@@ -235,6 +316,33 @@ class TestPeemApi(unittest.TestCase):
             self.assertEqual(frame.json()["shape"], [2, 3])
             self.assertEqual(frame.json()["pol"], "CM")
             self.assertEqual(frame.json()["intensity"], [[2.0] * 3, [2.0] * 3])
+
+    def test_zip_rejects_float64_expansion_after_extract(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            frame = io.BytesIO()
+            tifffile.imwrite(frame, np.zeros((20, 20), dtype=np.uint16))
+            payload = io.BytesIO()
+            with zipfile.ZipFile(payload, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("nested/a.tif", frame.getvalue())
+            archive_bytes = payload.getvalue()
+            limit = max(len(archive_bytes), len(frame.getvalue())) + 100
+            self.assertLess(limit, 20 * 20 * 8)
+
+            original_limit = peem_router.MAX_PEEM_BYTES
+            peem_router.MAX_PEEM_BYTES = limit
+            try:
+                response = client.post(
+                    "/api/peem/load",
+                    files={"file": ("run.zip", archive_bytes, "application/zip")},
+                )
+            finally:
+                peem_router.MAX_PEEM_BYTES = original_limit
+
+            self.assertEqual(response.status_code, 413, response.text)
 
     def test_zip_csv_match_prefers_extracted_directory_name(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -317,7 +317,7 @@ class PeemMeta(BaseModel):
     pol: list[str]
     csv_attached: bool
     I0_present: bool
-    I0: float | list[float] | None = None
+    I0: float | list[float | None] | None = None
 
 
 class PeemFrame(BaseModel):
