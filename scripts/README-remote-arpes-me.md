@@ -1,19 +1,30 @@
 # Remote ARPES ME on Einstein
 
-Run a prepared ARPES Option A (Simple Scalar matrix-element) job on Einstein from a Mac job directory via rsync + SSH. Heavy mesh work stays on Einstein scratch; only `intensity.npz`, `meta.json`, and `remote_arpes_me.log` are pulled back.
+Run a prepared ARPES Option A (Simple Scalar matrix-element) or Option B1 (Chinook TB) job on Einstein from a Mac job directory via rsync + SSH. Heavy mesh work stays on Einstein scratch; only `intensity.npz`, `meta.json`, and `remote_arpes_me.log` are pulled back.
 
 ## Prerequisites
 
 - SSH host `einstein` works from this machine (`ssh einstein` / `Host einstein` in `~/.ssh/config`).
 - Einstein TensorSpec checkout at `~/TensorSpec` (override with `TENSORSPEC_ROOT` on the remote).
 - Remote Python env: `~/TensorSpec/TensorSpec_env/bin/python` with repo dependencies installed.
-- **Chinook is not required** for `tb_mode: "Simple Scalar (Isotropic)"` (default in prepared jobs).
+- **Chinook is not required** for `tb_mode: "Simple Scalar (Isotropic)"` (Option A / default in prepared jobs).
+- **Chinook is required** for Option B1 and Slater-Koster matrix-element paths.
+
+### Chinook on Einstein
+
+Install into the remote env (once per Einstein checkout):
+
+```bash
+ssh einstein 'cd ~/TensorSpec && TensorSpec_env/bin/pip install chinook'
+```
+
+Option A with Simple Scalar runs without Chinook. Option B1 and non-scalar ME modes fail at remote validation if Chinook is missing.
 
 ## Job dir layout
 
 Required:
 
-- `request.json` — Option A parameters (model `"A"`, k/energy grids, mesh, hoppings, etc.)
+- `request.json` — Option A or B1 parameters (`model`: `"A"` or `"B1"`, k/energy grids, mesh, hoppings, etc.)
 - Exactly one of:
   - `structure.cif`, or
   - `structure.json`
@@ -80,6 +91,6 @@ Remote validation/simulation exit codes 2, 4, and 6 are preserved. Scratch is wi
 
 ## Scope limits
 
-- **Option B1** (full Chinook / non-scalar paths) is out of scope for this CLI.
-- **Web Queue** integration is not wired yet — CLI only.
+- **Option B1** (Chinook TB / Slater-Koster) is supported when Chinook is installed in Einstein `TensorSpec_env`.
+- **Web Queue** can submit Option A or B1 to Einstein (SSH) when `remote_arpes_me.sh` is present.
 - Do not point this script at the git repo root; `request.json` + structure guard against accidental sync.

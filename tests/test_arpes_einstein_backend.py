@@ -49,10 +49,10 @@ class TestArpesEinsteinBackend(unittest.TestCase):
     def test_script_path_exists(self):
         self.assertTrue(arpes_router._remote_arpes_me_script_path().is_file())
 
-    def test_b1_einstein_returns_422(self):
-        with self.assertRaises(HTTPException) as ctx:
-            arpes_router._refuse_b1_on_einstein(_tiny_request(backend="einstein_ssh", model="B1"))
-        self.assertEqual(ctx.exception.status_code, 422)
+    def test_request_json_keeps_b1(self):
+        req = _tiny_request(backend="einstein_ssh", model="B1")
+        data = arpes_router._request_json_for_remote(req)
+        self.assertEqual(data["model"], "B1")
 
     def test_missing_script_returns_503(self):
         with patch.object(
@@ -78,7 +78,7 @@ class TestArpesEinsteinBackend(unittest.TestCase):
             )
             run_dir = Path(tmp) / "arpes_jobs" / "sim"
             run_dir.mkdir(parents=True)
-            req = _tiny_request(backend="einstein_ssh")
+            req = _tiny_request(backend="einstein_ssh", model="B1")
 
             def fake_popen(argv, **kwargs):
                 cube = np.ones((4, 4, 4), dtype=float)
@@ -117,12 +117,12 @@ class TestArpesEinsteinBackend(unittest.TestCase):
                     store._sessions = {session.session_id: session}
                     worker(job)
             self.assertIsInstance(job.result, dict)
-            self.assertEqual(job.result["model"], "A")
+            self.assertEqual(job.result["model"], "B1")
             self.assertEqual(tuple(job.result["intensity"].shape), (4, 4, 4))
             self.assertTrue((run_dir / "request.json").is_file())
             self.assertTrue((run_dir / "structure.cif").is_file())
             dumped = json.loads((run_dir / "request.json").read_text())
-            self.assertEqual(dumped["model"], "A")
+            self.assertEqual(dumped["model"], "B1")
 
 
 if __name__ == "__main__":
