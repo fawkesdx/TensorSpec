@@ -745,6 +745,88 @@ def download_cif_filtered(
     )
 
 
+@router.post("/{name}/export/figure")
+def export_figure_route(
+    name: str,
+    request: CrystalFigureExportRequest,
+    session: Session = Depends(current_session),
+):
+    """Matplotlib PNG/SVG/PDF of the current structure (Draw-equivalent knobs)."""
+    structure = _require_structure(session, name)
+    structure = _apply_basis(structure, request.basis)
+
+    projected = len(structure) * request.cell_count
+    if projected > MAX_RENDER_ATOMS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{projected} atoms exceeds the {MAX_RENDER_ATOMS} the browser can draw. "
+                "Reduce the supercell."
+            ),
+        )
+
+    supercell = structure.copy()
+    if request.cell_count > 1:
+        supercell.make_supercell([request.nx, request.ny, request.nz])
+
+    geo = _geometry_from_structure(
+        name,
+        supercell,
+        show_bonds=request.show_bonds,
+        show_polyhedra=request.show_polyhedra,
+        bond_threshold=request.bond_threshold,
+    )
+
+    omit = normalize_omit_indices(request.omit_atom_indices, geo.n_atoms)
+    geo = _filter_geometry_by_omit(geo, omit)
+
+    colors = {el: _element_cpk(el) for el in geo.elements}
+    atoms = [
+        {"element": atom.element, "position": atom.position, "radius": atom.radius}
+        for atom in geo.atoms
+    ]
+    bonds = [(bond.i, bond.j) for bond in geo.bonds]
+    polyhedra = (
+        [{"vertices": p.vertices, "simplices": p.simplices} for p in geo.polyhedra]
+        if request.show_polyhedra
+        else None
+    )
+
+    camera = None
+    if request.use_current_view and request.camera is not None:
+        camera = request.camera.model_dump()
+
+    show_cell = request.show_cell and geo.show_cell
+    cell = geo.cell if show_cell else None
+
+    try:
+        payload = export_crystal_figure(
+            atoms=atoms,
+            bonds=bonds,
+            cell=cell,
+            polyhedra=polyhedra,
+            show_bonds=request.show_bonds,
+            show_cell=show_cell,
+            atom_scale=request.atom_scale,
+            colors=colors,
+            title=request.title,
+            fmt=request.fmt,
+            camera=camera,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Figure export failed: {exc}") from exc
+
+    media = {"png": "image/png", "svg": "image/svg+xml", "pdf": "application/pdf"}[
+        request.fmt
+    ]
+    filename = f"{name}_figure.{request.fmt}"
+    return Response(
+        content=payload,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/{name}/export/{fmt}")
 def export_scene(
     name: str,
@@ -831,88 +913,6 @@ def export_scene(
     return Response(
         content=content,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-
-
-@router.post("/{name}/export/figure")
-def export_figure_route(
-    name: str,
-    request: CrystalFigureExportRequest,
-    session: Session = Depends(current_session),
-):
-    """Matplotlib PNG/SVG/PDF of the current structure (Draw-equivalent knobs)."""
-    structure = _require_structure(session, name)
-    structure = _apply_basis(structure, request.basis)
-
-    projected = len(structure) * request.cell_count
-    if projected > MAX_RENDER_ATOMS:
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"{projected} atoms exceeds the {MAX_RENDER_ATOMS} the browser can draw. "
-                "Reduce the supercell."
-            ),
-        )
-
-    supercell = structure.copy()
-    if request.cell_count > 1:
-        supercell.make_supercell([request.nx, request.ny, request.nz])
-
-    geo = _geometry_from_structure(
-        name,
-        supercell,
-        show_bonds=request.show_bonds,
-        show_polyhedra=request.show_polyhedra,
-        bond_threshold=request.bond_threshold,
-    )
-
-    omit = normalize_omit_indices(request.omit_atom_indices, geo.n_atoms)
-    geo = _filter_geometry_by_omit(geo, omit)
-
-    colors = {el: _element_cpk(el) for el in geo.elements}
-    atoms = [
-        {"element": atom.element, "position": atom.position, "radius": atom.radius}
-        for atom in geo.atoms
-    ]
-    bonds = [(bond.i, bond.j) for bond in geo.bonds]
-    polyhedra = (
-        [{"vertices": p.vertices, "simplices": p.simplices} for p in geo.polyhedra]
-        if request.show_polyhedra
-        else None
-    )
-
-    camera = None
-    if request.use_current_view and request.camera is not None:
-        camera = request.camera.model_dump()
-
-    show_cell = request.show_cell and geo.show_cell
-    cell = geo.cell if show_cell else None
-
-    try:
-        payload = export_crystal_figure(
-            atoms=atoms,
-            bonds=bonds,
-            cell=cell,
-            polyhedra=polyhedra,
-            show_bonds=request.show_bonds,
-            show_cell=show_cell,
-            atom_scale=request.atom_scale,
-            colors=colors,
-            title=request.title,
-            fmt=request.fmt,
-            camera=camera,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Figure export failed: {exc}") from exc
-
-    media = {"png": "image/png", "svg": "image/svg+xml", "pdf": "application/pdf"}[
-        request.fmt
-    ]
-    filename = f"{name}_figure.{request.fmt}"
-    return Response(
-        content=payload,
-        media_type=media,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
