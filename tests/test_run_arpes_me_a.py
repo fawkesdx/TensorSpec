@@ -52,13 +52,21 @@ def _write_si_job(job: Path, model="A", mesh=4, steps=4):
 
 
 class TestRunArpesMeA(unittest.TestCase):
-    def test_rejects_b1(self):
+    def test_rejects_unknown_model(self):
         with TemporaryDirectory() as tmp:
             job = Path(tmp)
-            _write_si_job(job, model="B1")
+            _write_si_job(job, model="B2")
             r = subprocess.run([PY, str(SCRIPT), str(job)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 2)
-            self.assertIn("Option A", (r.stderr + r.stdout))
+
+    def test_accepts_b1_model_field(self):
+        """B1 is a valid model string; may exit 6/4 if chinook missing in CI."""
+        with TemporaryDirectory() as tmp:
+            job = Path(tmp)
+            _write_si_job(job, model="B1", mesh=4, steps=4)
+            r = subprocess.run([PY, str(SCRIPT), str(job)], capture_output=True, text=True)
+            self.assertNotIn("Option A only", r.stderr + r.stdout)
+            self.assertIn(r.returncode, (0, 4, 6))
 
     def test_missing_request_exit_2(self):
         with TemporaryDirectory() as tmp:
