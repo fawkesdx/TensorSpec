@@ -3,7 +3,7 @@ import os
 import json
 import warnings
 import numpy as np
-from scipy.spatial import ConvexHull, KDTree
+from scipy.spatial import ConvexHull, KDTree, QhullError
 from pymatgen.core import Structure, Lattice
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 from pymatgen.core.surface import SlabGenerator
@@ -85,6 +85,39 @@ class CrystalEngine:
 
         return {"i": i_idx[mask], "j": j_idx[mask],
                 "distances": dists[mask], "vectors": vecs[mask]}
+
+    @staticmethod
+    def compute_coordination_polyhedra(
+        coords: np.ndarray,
+        bonds_i: np.ndarray,
+        bonds_j: np.ndarray,
+    ) -> list[dict]:
+        """Return list of {center, vertices, simplices, vertex_atom_indices}. Skip <4 neighbors / QhullError."""
+        adjacency: dict[int, set[int]] = {}
+        for i, j in zip(bonds_i, bonds_j):
+            adjacency.setdefault(int(i), set()).add(int(j))
+            adjacency.setdefault(int(j), set()).add(int(i))
+
+        polyhedra = []
+        for center, neighbors in adjacency.items():
+            if len(neighbors) < 4:
+                continue
+            neighbor_list = sorted(neighbors)
+            neighbor_coords = coords[neighbor_list]
+            try:
+                hull = ConvexHull(neighbor_coords)
+            except QhullError:
+                continue
+
+            vert_indices = hull.vertices
+            index_map = {orig: new for new, orig in enumerate(vert_indices)}
+            polyhedra.append({
+                "center": center,
+                "vertices": neighbor_coords[vert_indices].tolist(),
+                "simplices": [[index_map[s] for s in simplex] for simplex in hull.simplices],
+                "vertex_atom_indices": [neighbor_list[i] for i in vert_indices],
+            })
+        return polyhedra
 
     @staticmethod
     def apply_cdw_distortion(supercell: Structure, target_el: str, q_vec: tuple, amp_vec: tuple, phase_deg: float) -> Structure:
