@@ -18,11 +18,17 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 from tensorspec.core.crystallography import CrystalEngine
 from tensorspec.core.io.exporters import SceneExporter
+from tensorspec.web.server.geometry_filter import (
+    filter_geometry_atoms_bonds,
+    filter_structure_by_omit,
+    normalize_omit_indices,
+)
 from tensorspec.web.server.schemas import (
     Atom,
     Bond,
     BZGeometry,
     BZRequest,
+    CrystalCifRequest,
     CrystalGeometry,
     CrystalSummary,
     ExfoliateRequest,
@@ -98,6 +104,68 @@ def _apply_basis(structure: Structure, basis: str) -> Structure:
                 status_code=422,
                 detail=f"Could not convert to primitive basis: {exc}",
             ) from exc
+    return structure.copy()
+
+
+def _is_default_knobs(
+    *,
+    omit_atom_indices: list[int],
+    nx: int,
+    ny: int,
+    nz: int,
+    basis: str,
+) -> bool:
+    return (
+        not omit_atom_indices
+        and nx == 1
+        and ny == 1
+        and nz == 1
+        and basis == "conventional"
+    )
+
+
+def _build_knobbed_structure(
+    structure: Structure,
+    *,
+    basis: str,
+    nx: int,
+    ny: int,
+    nz: int,
+    omit_atom_indices: list[int] | None = None,
+) -> Structure:
+    """Apply basis, optional supercell, and omit filter — same path as Draw/export."""
+    structure = _apply_basis(structure, basis)
+    cell_count = nx * ny * nz
+    projected = len(structure) * cell_count
+    if projected > MAX_RENDER_ATOMS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{projected} atoms exceeds the {MAX_RENDER_ATOMS} the browser can draw. "
+                "Reduce the supercell."
+            ),
+        )
+    out = structure.copy()
+    if cell_count > 1:
+        out.make_supercell([nx, ny, nz])
+    omit = normalize_omit_indices(omit_atom_indices, len(out))
+    if omit:
+        out = filter_structure_by_omit(out, omit)
+    return out
+
+
+def _filter_geometry_by_omit(geo: CrystalGeometry, omit: set[int]) -> CrystalGeometry:
+    if not omit:
+        return geo
+    filtered_atoms, filtered_bonds = filter_geometry_atoms_bonds(geo.atoms, geo.bonds, omit)
+    return geo.model_copy(
+        update={
+            "atoms": filtered_atoms,
+            "bonds": filtered_bonds,
+            "n_atoms": len(filtered_atoms),
+            "elements": sorted({a.element for a in filtered_atoms}),
+        }
+    )
     raise HTTPException(status_code=422, detail=f"Unknown basis: {basis}")
 
 
@@ -614,6 +682,43 @@ def download_cif(name: str, session: Session = Depends(current_session)):
     )
 
 
+@router.post("/{name}/cif")
+def download_cif_filtered(
+    name: str,
+    request: CrystalCifRequest,
+    session: Session = Depends(current_session),
+):
+    """Download CIF after applying Draw knobs (supercell, basis, omit)."""
+    structure = _require_structure(session, name)
+    if _is_default_knobs(
+        omit_atom_indices=request.omit_atom_indices,
+        nx=request.nx,
+        ny=request.ny,
+        nz=request.nz,
+        basis=request.basis,
+    ):
+        filtered = structure.copy()
+    else:
+        filtered = _build_knobbed_structure(
+            structure,
+            basis=request.basis,
+            nx=request.nx,
+            ny=request.ny,
+            nz=request.nz,
+            omit_atom_indices=request.omit_atom_indices,
+        )
+    try:
+        text = filtered.to(fmt="cif")
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"CIF export failed: {exc}") from exc
+    filename = f"{name}.cif"
+    return Response(
+        content=text.encode("utf-8"),
+        media_type="chemical/x-cif",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/{name}/export/{fmt}")
 def export_scene(
     name: str,
@@ -645,6 +750,9 @@ def export_scene(
         show_bonds=request.show_bonds,
         bond_threshold=request.bond_threshold,
     )
+
+    omit = normalize_omit_indices(request.omit_atom_indices, geo.n_atoms)
+    geo = _filter_geometry_by_omit(geo, omit)
 
     bz_geo: BZGeometry | None = None
     if request.include_bz:
@@ -710,7 +818,24 @@ def push_crystal_alias(
     """Store a copy under ``store_as`` so DFT Suite can pick it by that name."""
     structure = _require_structure(session, name)
     label = _safe_label(request.store_as, name)
-    return _store(session, label, structure)
+    if _is_default_knobs(
+        omit_atom_indices=request.omit_atom_indices,
+        nx=request.nx,
+        ny=request.ny,
+        nz=request.nz,
+        basis=request.basis,
+    ):
+        to_store = structure
+    else:
+        to_store = _build_knobbed_structure(
+            structure,
+            basis=request.basis,
+            nx=request.nx,
+            ny=request.ny,
+            nz=request.nz,
+            omit_atom_indices=request.omit_atom_indices,
+        )
+    return _store(session, label, to_store)
 
 
 @router.post("/{name}/relax")

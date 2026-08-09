@@ -45,9 +45,9 @@ def filter_geometry_atoms_bonds(
 def filter_structure_by_omit(structure: Structure, omit: set[int]) -> Structure:
     """Return new Structure without sites at omit indices (OOR ignored)."""
     valid_omit = {i for i in omit if 0 <= i < len(structure)}
-    keep = [i for i in range(len(structure)) if i not in valid_omit]
-    if len(keep) == len(structure):
+    if not valid_omit:
         return structure.copy()
-    species = [structure[i].specie for i in keep]
-    coords = [structure[i].frac_coords for i in keep]
-    return Structure(structure.lattice, species, coords)
+    out = structure.copy()
+    for idx in sorted(valid_omit, reverse=True):
+        out.remove_sites([idx])
+    return out
