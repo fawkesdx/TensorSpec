@@ -15,7 +15,7 @@ import numpy as np
 from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 
 _DEFAULT_CPK = {
-    "H": "#ffffff",
+    "H": "#f0f0f0",
     "C": "#909090",
     "N": "#3050f8",
     "O": "#ff0d0d",
@@ -46,7 +46,7 @@ _CELL_EDGES = (
 
 
 def _atom_color(element: str, colors: dict[str, str] | None) -> str:
-    palette = colors if colors is not None else _DEFAULT_CPK
+    palette = {**_DEFAULT_CPK, **(colors or {})}
     return palette.get(element, _FALLBACK)
 
 
@@ -118,7 +118,18 @@ def export_crystal_figure(
     camera: dict | None = None,
     dpi: int = 200,
 ) -> bytes:
-    """Render atoms, bonds, and optional cell to PNG/SVG/PDF bytes."""
+    """Render atoms, bonds, and optional cell to PNG/SVG/PDF bytes.
+
+    Coordinate frame contract
+    -------------------------
+    ``atoms[*]["position"]`` and ``cell`` must share the same Cartesian frame
+    (Å). Cell edges are drawn from the origin ``[0, 0, 0]`` using the three
+    lattice vectors in ``cell`` as given — this function does not recenter or
+    translate either input. Callers must pass atom positions and the cell in
+    that shared frame. Task 2 / the router should pass ``geo.atoms[].position``
+    and ``geo.cell`` as returned from geometry helpers without translating only
+    one of them.
+    """
     fig = plt.figure(figsize=(6.4, 5.6))
     ax = fig.add_subplot(111, projection="3d")
 
@@ -127,7 +138,16 @@ def export_crystal_figure(
         xs, ys, zs = positions.T
         atom_colors = [_atom_color(atom["element"], colors) for atom in atoms]
         sizes = [_marker_size(float(atom["radius"]), atom_scale) for atom in atoms]
-        ax.scatter(xs, ys, zs, s=sizes, c=atom_colors, depthshade=True, edgecolors="none")
+        ax.scatter(
+            xs,
+            ys,
+            zs,
+            s=sizes,
+            c=atom_colors,
+            depthshade=True,
+            edgecolors="#333333",
+            linewidths=0.3,
+        )
     else:
         positions = np.empty((0, 3))
 
