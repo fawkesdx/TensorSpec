@@ -608,6 +608,33 @@ class CrystalCifRequest(BaseModel):
         return self.nx * self.ny * self.nz
 
 
+class CrystalFigureCamera(BaseModel):
+    position: list[float] = Field(min_length=3, max_length=3)
+    target: list[float] = Field(min_length=3, max_length=3)
+    up: list[float] = Field(default_factory=lambda: [0.0, 1.0, 0.0], min_length=3, max_length=3)
+
+
+class CrystalFigureExportRequest(BaseModel):
+    omit_atom_indices: list[int] = []
+    nx: int = Field(default=1, ge=1, le=20)
+    ny: int = Field(default=1, ge=1, le=20)
+    nz: int = Field(default=1, ge=1, le=20)
+    basis: Literal["conventional", "primitive"] = "conventional"
+    bond_threshold: float = Field(default=1.15, ge=0.5, le=3.0)
+    show_bonds: bool = True
+    show_polyhedra: bool = False
+    show_cell: bool = True
+    atom_scale: float = Field(default=0.5, ge=0.1, le=3.0)
+    fmt: Literal["png", "svg", "pdf"] = "png"
+    title: str = Field(default="", max_length=128)
+    use_current_view: bool = False
+    camera: CrystalFigureCamera | None = None
+
+    @property
+    def cell_count(self) -> int:
+        return self.nx * self.ny * self.nz
+
+
 class SceneExportRequest(BaseModel):
     """Geometry knobs + which scene parts to include in a DCC script export."""
 
