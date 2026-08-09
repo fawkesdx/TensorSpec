@@ -99,6 +99,8 @@ if [[ "$HAS_CIF" -eq 1 && "$HAS_JSON" -eq 1 ]]; then
 fi
 
 JOB_ID="$(date +%Y%m%d-%H%M%S)-$(basename "$JOB_DIR")"
+# Sanitize for safe embedding in ssh single-quoted remote paths (reject shell metacharacters).
+JOB_ID="$(printf '%s' "$JOB_ID" | sed 's/[^A-Za-z0-9._-]/_/g')"
 LOCAL_LOG="$JOB_DIR/remote_arpes_me.log"
 : >"$LOCAL_LOG"
 

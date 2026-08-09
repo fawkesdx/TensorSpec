@@ -175,6 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         _log(job_dir, f"error: {e}")
         return 2
+    except (KeyError, TypeError) as e:
+        _log(job_dir, f"error: invalid request: {e}")
+        return 2
     except Exception as e:
         _log(job_dir, f"error: simulation failed: {e}")
         _log(job_dir, traceback.format_exc())
