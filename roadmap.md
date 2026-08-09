@@ -10,7 +10,7 @@ note says otherwise. Deferred items stay unchecked.
 - [x] Phase 1 — Static shell: `web/templates/main_browser.html` (ribbon, workspace tree, inspector)
 - [x] Phase 2 — Static suite pages: one HTML shell per suite
 - [x] Phase 3 — Vertical slices: HTML → FastAPI → `core/` for Crystal, ARPES, and DFT
-      (PEEM / XAS / Transport / ML suites remain shells only — see Grand App below).
+      (PEEM load+view is live; XAS / Transport / ML suites remain shells only — see Grand App below).
     - [x] Slice 1 — Session backbone: FastAPI app, per-session workspace, live variable tree
     - [x] Slice 2a — Crystal Suite Tab 1: CIF load, geometry as JSON, three.js viewport
 	- [x] Slice 2b — Crystal Suite Tabs 2-4: CDW modulator, stack & twist, Brillouin zone
@@ -140,16 +140,18 @@ Grand App
 	- Analysis: EDC/MDC Lorentzian/Voigt peakfit → `/analysis/*_peakfit`; QP curves (δE–E, k_F, m*, v_F, FL/MFL) → `/analysis/qp_results`; Dynes SC/CDW gap → `/analysis/gap_fit`; DFT bands + sim intensity overlay on cuts
 	- Volume: BZ-prism 3D cutout (rectangle or hexagon from crystal/data); indent sectors to reveal interior walls; horizontal E-plane (Fermi surface)
 	- Simulator: matrix-element Option A + B1 (job queue + log stream)
-	- Deferred (not started): other beamline loaders; sim B2/B3; PEEM / XAS / Transport (see Grand App vision below)
+	- Deferred (not started): other beamline loaders; sim B2/B3; PEEM analysis; XAS / Transport (see Grand App vision below)
 
-- [ ] PEEM Suite — deferred (vision; first slice = load + view)
-	- [ ] loader of tif file stacks
-	- [ ] loader of sequences of series of tif files from a folder
-	- [ ] accompanying beamline CSV metadata (I0 / beam current and other beamline params) for later CP vs CM sum-rule normalization
-		- [ ] when user points at a folder (or stack path’s parent), auto-search that folder for a companion CSV first
-		- [ ] if none found, prompt user for CSV path / upload
-		- [ ] if user has no CSV, still load TIF data; leave I0/etc. missing and allow attaching / updating CSV (or similar metadata) later
-		- [ ] load+view slice: attach on load + “update metadata” path; apply I0 in sum-rule slice
+- [ ] PEEM Suite — load + view shipped; analysis remains deferred
+	- [x] loader of tif file stacks
+	- [x] loader of sequences of series of tif files from a folder
+	- [x] accompanying beamline CSV metadata (I0 / beam current and other beamline params), stored for later CP vs CM sum-rule normalization
+		- [x] when user points at a folder (or stack path’s parent), auto-search that folder for a companion CSV first
+		- [x] if none found, prompt user for CSV path / upload
+		- [x] if user has no CSV, still load TIF data; leave I0/etc. missing and allow attaching / updating CSV (or similar metadata) later
+		- [x] load+view slice: attach on load + “update metadata” path
+		- [ ] apply I0 in sum-rule slice
+	- [x] load+view UI: upload or server path, metadata summary, frame canvas, frame slider, and contrast limits
 	- [ ] stack the CP and CM together or LH and LV together depending on the files
 	- [ ] once stacked, build drift-correction options
 	- [ ] separate those CP and CM or LH and LV
