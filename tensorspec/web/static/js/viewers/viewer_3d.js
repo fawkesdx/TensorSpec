@@ -149,10 +149,16 @@ export class CrystalViewer {
     this._tooltip.style.cssText = "position:absolute;pointer-events:none;display:none;padding:4px 8px;background:#111;color:#eee;font:12px/1.3 sans-serif;border-radius:4px;z-index:5;";
     container.style.position = container.style.position || "relative";
     container.appendChild(this._tooltip);
-    this.renderer.domElement.addEventListener("pointermove", (e) => this._onPointerMove(e));
+    this._onPointerDown = this._onPointerDown.bind(this);
+    this._onPointerMove = this._onPointerMove.bind(this);
+    this.renderer.domElement.addEventListener("pointerdown", this._onPointerDown);
+    this.renderer.domElement.addEventListener("pointermove", this._onPointerMove);
 
     this._atomIndexByMesh = new WeakMap();
     this.geometry = null;
+
+    this.eraserEnabled = false;
+    this._erasedAtomIndices = new Set();
 
     this._cut = { h: 0, k: 0, l: 1, depthFrac: 0, color: "#00ffff", visible: false };
     this._cutMesh = null;
@@ -362,10 +368,37 @@ export class CrystalViewer {
     ));
   }
 
+  setEraserEnabled(on) {
+    this.eraserEnabled = Boolean(on);
+    this.controls.enabled = !this.eraserEnabled;
+    if (!this.eraserEnabled) this._tooltip.style.display = "none";
+  }
+
+  getOmittedAtomIndices() {
+    return [...this._erasedAtomIndices].sort((a, b) => a - b);
+  }
+
+  clearErasedAtoms() {
+    if (this._erasedAtomIndices.size === 0) return;
+    this._erasedAtomIndices.clear();
+    if (this.geometry) {
+      this.render(this.geometry, { ...(this._lastOptions || {}), frame: false });
+    }
+  }
+
+  omitAtom(index) {
+    if (this._erasedAtomIndices.has(index)) return;
+    this._erasedAtomIndices.add(index);
+    if (this.geometry) {
+      this.render(this.geometry, { ...(this._lastOptions || {}), frame: false });
+    }
+  }
+
   /* One InstancedMesh per element keeps thousands of atoms at one draw call each. */
   _drawAtoms(geometry, center) {
     const byElement = new Map();
     geometry.atoms.forEach((atom, index) => {
+      if (this._erasedAtomIndices.has(index)) return;
       if (!byElement.has(atom.element)) byElement.set(atom.element, []);
       byElement.get(atom.element).push({ atom, index });
     });
@@ -394,8 +427,8 @@ export class CrystalViewer {
     }
   }
 
-  _onPointerMove(event) {
-    if (!this.geometry) { this._tooltip.style.display = "none"; return; }
+  _raycastAtomIndex(event) {
+    if (!this.geometry) return null;
     const rect = this.renderer.domElement.getBoundingClientRect();
     this._pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this._pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -403,11 +436,33 @@ export class CrystalViewer {
     const meshes = [];
     this.content.traverse((o) => { if (o.isInstancedMesh && this._atomIndexByMesh.has(o)) meshes.push(o); });
     const hits = this._raycaster.intersectObjects(meshes, false);
-    if (!hits.length) { this._tooltip.style.display = "none"; return; }
+    if (!hits.length) return null;
     const hit = hits[0];
     const indices = this._atomIndexByMesh.get(hit.object);
-    const atom = this.geometry.atoms[indices[hit.instanceId]];
+    return indices[hit.instanceId];
+  }
+
+  _onPointerDown(event) {
+    if (!this.eraserEnabled) return;
+    const index = this._raycastAtomIndex(event);
+    if (index !== null) this.omitAtom(index);
+  }
+
+  _onPointerMove(event) {
+    if (!this.geometry) { this._tooltip.style.display = "none"; return; }
+    if (this.eraserEnabled) {
+      this._tooltip.style.display = "none";
+      if (event.buttons > 0) {
+        const index = this._raycastAtomIndex(event);
+        if (index !== null) this.omitAtom(index);
+      }
+      return;
+    }
+    const index = this._raycastAtomIndex(event);
+    if (index === null) { this._tooltip.style.display = "none"; return; }
+    const atom = this.geometry.atoms[index];
     if (!atom) { this._tooltip.style.display = "none"; return; }
+    const rect = this.renderer.domElement.getBoundingClientRect();
     this._tooltip.textContent = `${atom.label} (${atom.element})`;
     this._tooltip.style.display = "block";
     this._tooltip.style.left = `${event.clientX - rect.left + 12}px`;
@@ -416,14 +471,17 @@ export class CrystalViewer {
 
   /* Unit cylinders on +Y, oriented per bond, so all bonds share one geometry. */
   _drawBonds(geometry, center) {
-    if (!geometry.bonds.length) return;
+    const bonds = geometry.bonds.filter(
+      (bond) => !this._erasedAtomIndices.has(bond.i) && !this._erasedAtomIndices.has(bond.j),
+    );
+    if (!bonds.length) return;
 
     const cylinder = new THREE.CylinderGeometry(this.bondRadius, this.bondRadius, 1, 8);
     const material = new THREE.MeshStandardMaterial({
       color: BOND_COLOR,
       ...pbrMaterialParams(this.pbrShiny, "bond"),
     });
-    const mesh = new THREE.InstancedMesh(cylinder, material, geometry.bonds.length);
+    const mesh = new THREE.InstancedMesh(cylinder, material, bonds.length);
 
     const dummy = new THREE.Object3D();
     const up = new THREE.Vector3(0, 1, 0);
@@ -431,7 +489,7 @@ export class CrystalViewer {
     const end = new THREE.Vector3();
     const direction = new THREE.Vector3();
 
-    geometry.bonds.forEach((bond, slot) => {
+    bonds.forEach((bond, slot) => {
       start.set(...geometry.atoms[bond.i].position).sub(center);
       end.set(...geometry.atoms[bond.j].position).sub(center);
       direction.subVectors(end, start);
