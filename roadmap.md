@@ -140,15 +140,34 @@ Grand App
 	- Analysis: EDC/MDC Lorentzian/Voigt peakfit → `/analysis/*_peakfit`; QP curves (δE–E, k_F, m*, v_F, FL/MFL) → `/analysis/qp_results`; Dynes SC/CDW gap → `/analysis/gap_fit`; DFT bands + sim intensity overlay on cuts
 	- Volume: BZ-prism 3D cutout (rectangle or hexagon from crystal/data); indent sectors to reveal interior walls; horizontal E-plane (Fermi surface)
 	- Simulator: matrix-element Option A + B1 (job queue + log stream)
-	- Deferred (not started): other beamline loaders; sim B2/B3; PEEM / XAS / Transport suites
+	- Deferred (not started): other beamline loaders; sim B2/B3; PEEM / XAS / Transport (see Grand App vision below)
 
-- [ ] PEEM Suite — deferred
+- [ ] PEEM Suite — deferred (vision; first slice = load + view)
 	- [ ] loader of tif file stacks
 	- [ ] loader of sequences of series of tif files from a folder
 	- [ ] stack the CP and CM together or LH and LV together depending on the files
-	- [ ] once stacked, built a drift correction options
+	- [ ] once stacked, build drift-correction options
 	- [ ] separate those CP and CM or LH and LV
 	- [ ] make the background subtraction button to be applied to all
+		- [ ] for background, make it clear to the user what functions we use; refer to Co₃Sn₂S₂ laser ARPES paper as a starter. Other backgrounds can be suggested in later iterations.
+		- [ ] UI: plot spectra, toggle background overlay, toggle bg-subtracted spectra separately.
+		- [ ] several spectra and their background-related toggles can be plotted together
 	- [ ] perform sum rule analysis if it is CP and CM data
-- [ ] XAS Suite — deferred
+	- [ ] analysis of spectra / sum rule switchable: picture-wide | user ROI | pixel-to-pixel (noisy / slower)
+		- [ ] ROI shapes: rectangle, ellipse, or custom polygon (straight segments or curved/interpolated from clicked points)
+	- [ ] ALWAYS include statistical analysis for background / sum rule (uncertainty often dominated by BG choice): vary plausible backgrounds and report sum-rule spread
+	- [ ] real-space PEEM ↔ momentum-microscope data at a given XY: decide how to store / link in metadata
+	- [ ] tools to analyze magnetic domain wall size
+	- [ ] correlate azimuthal datasets: intensity at same sample position → estimate magnetic moment magnitude and direction
+		- [ ] rotate azimuth pictures onto a reference (e.g. azimuth 0); map features with possible non-homogeneous rescale (prefer defect landmarks; magnetic contrast is azimuth-dependent)
+	- [ ] tools for % up vs down domain area; temperature series of the same field of view to track domain evolution
+	- [ ] other common magnetic-domain shape analyses — iterate in discussion
+- [ ] XAS Suite — deferred (thin front-end; shared core with PEEM)
+	- [ ] Treat XAS analysis as a 1D sibling of PEEM BG / sum-rule tools (often TEY, not photoemission images). Keep a separate ribbon entry; share `core/` engines (BG, sum rule, stats). Possibly rename later if a better umbrella name emerges.
 - [ ] Transport Suite — deferred
+	- [ ] Loader for typical Quantum Design PPMS / MPMS files and metadata (extend when other vendors appear)
+	- [ ] Support group-specific breakout-box column layouts: parse and assign variables accordingly
+	- [ ] Plots: line / combined line; also image-like plots reusing generalized ARPES-style plotters where possible
+	- [ ] Axes: keep proper column names when known, generic when not; rename when identified; plot by dimension name (A vs B, multi-column overlays)
+	- [ ] Typical transport analyses (gradient, known equations) — survey + suggested analysis toggles + “analyze selected”
+		- [ ] also low-level lego blocks: gradient / 2nd derivative / gap / diode / superconducting transition (finite R vs →0), etc., so experts can compose custom pipelines
