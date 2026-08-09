@@ -396,6 +396,7 @@ async function renderStack() {
             })),
             store_as: storeAs,
             show_bonds: connectionMode().show_bonds,
+            show_polyhedra: connectionMode().show_polyhedra,
         });
         activeCrystal = geometry.name;
         const view = ensureViewer();
@@ -746,6 +747,7 @@ async function relaxActiveStack() {
             relax_cell: !!dom.stRelaxCell?.checked,
             store_as: storeAs,
             show_bonds: connectionMode().show_bonds,
+            show_polyhedra: connectionMode().show_polyhedra,
         });
         activeCrystal = result.stored_as;
         if (dom.stStore) dom.stStore.value = result.stored_as;
