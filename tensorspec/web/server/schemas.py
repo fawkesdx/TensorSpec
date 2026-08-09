@@ -585,9 +585,24 @@ class BZRequest(BaseModel):
     l: int = Field(default=1, ge=-10, le=10)
 
 
+class CrystalCifRequest(BaseModel):
+    """Knobs for filtered CIF export (supercell + omit) matching the Draw panel."""
+
+    omit_atom_indices: list[int] = []
+    nx: int = Field(default=1, ge=1, le=20)
+    ny: int = Field(default=1, ge=1, le=20)
+    nz: int = Field(default=1, ge=1, le=20)
+    basis: Literal["conventional", "primitive"] = "conventional"
+
+    @property
+    def cell_count(self) -> int:
+        return self.nx * self.ny * self.nz
+
+
 class SceneExportRequest(BaseModel):
     """Geometry knobs + which scene parts to include in a DCC script export."""
 
+    omit_atom_indices: list[int] = []
     nx: int = Field(default=1, ge=1, le=20)
     ny: int = Field(default=1, ge=1, le=20)
     nz: int = Field(default=1, ge=1, le=20)
@@ -670,6 +685,15 @@ class PushCrystalRequest(BaseModel):
     """Copy/rename the active structure under a new workspace name (for DFT)."""
 
     store_as: str = Field(min_length=1, max_length=64)
+    omit_atom_indices: list[int] = []
+    nx: int = Field(default=1, ge=1, le=20)
+    ny: int = Field(default=1, ge=1, le=20)
+    nz: int = Field(default=1, ge=1, le=20)
+    basis: Literal["conventional", "primitive"] = "conventional"
+
+    @property
+    def cell_count(self) -> int:
+        return self.nx * self.ny * self.nz
 
 
 class MoireRequest(BaseModel):

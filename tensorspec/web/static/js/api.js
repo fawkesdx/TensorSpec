@@ -100,12 +100,36 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
-        crystalPush: (name, storeAs) =>
+        crystalPush: (name, payload) =>
             request(`/api/crystal/${encodeURIComponent(name)}/push`, {
                 method: "POST",
-                body: JSON.stringify({ store_as: storeAs }),
+                body: JSON.stringify(
+                    typeof payload === "string" ? { store_as: payload } : payload
+                ),
             }),
         crystalCifUrl: (name) => `/api/crystal/${encodeURIComponent(name)}/cif`,
+        crystalCifPost: async (name, payload = {}) => {
+            const response = await fetch(
+                `/api/crystal/${encodeURIComponent(name)}/cif`,
+                {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                }
+            );
+            if (!response.ok) {
+                let detail = `${response.status} ${response.statusText}`;
+                try {
+                    const body = await response.json();
+                    if (body.detail) detail = body.detail;
+                } catch (err) {
+                    /* ignore */
+                }
+                throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+            }
+            return response.blob();
+        },
         crystalExportScene: async (name, fmt, payload) => {
             const response = await fetch(
                 `/api/crystal/${encodeURIComponent(name)}/export/${fmt}`,
