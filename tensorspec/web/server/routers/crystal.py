@@ -166,7 +166,6 @@ def _filter_geometry_by_omit(geo: CrystalGeometry, omit: set[int]) -> CrystalGeo
             "elements": sorted({a.element for a in filtered_atoms}),
         }
     )
-    raise HTTPException(status_code=422, detail=f"Unknown basis: {basis}")
 
 
 def _safe_label(name: str, fallback: str) -> str:
