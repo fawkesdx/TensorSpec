@@ -68,6 +68,14 @@
                                             <option value="B1">Option B1: One-Step Model (Chinook TB)</option>
                                         </select>
                                     </div>
+                                    <div class="form-row">
+                                        <label for="ar-backend">Queue backend:</label>
+                                        <select class="field" id="ar-backend">
+                                            <option value="local">Local</option>
+                                            <option value="einstein_ssh">Einstein (SSH)</option>
+                                        </select>
+                                    </div>
+                                    <p class="hint">Einstein (SSH) runs Option A on Einstein via remote_arpes_me.sh (needs working <code>ssh einstein</code> from this Mac). Option B1 on Einstein is not available yet.</p>
                                 </fieldset>
 
                                 <fieldset class="fieldset">
