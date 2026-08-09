@@ -6,6 +6,7 @@
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/OrbitControls.js";
+import { pbrMaterialParams } from "./pbr_params.js";
 
 const CPK_COLORS = {
   H:"#FFFFFF", He:"#D9FFFF", Li:"#CC80FF", Be:"#C2FF00", B:"#FFB5B5",
@@ -136,6 +137,7 @@ export class CrystalViewer {
 
     this.atomScale = 0.5;
     this.bondRadius = 0.1;
+    this.pbrShiny = false;
     this.showAxes = true;
     this._axes = new THREE.AxesHelper(5);
     this.scene.add(this._axes);
@@ -374,8 +376,7 @@ export class CrystalViewer {
     for (const [element, entries] of byElement) {
       const material = new THREE.MeshStandardMaterial({
         color: elementColor(element),
-        roughness: 0.45,
-        metalness: 0.1,
+        ...pbrMaterialParams(this.pbrShiny, "atom"),
       });
       const mesh = new THREE.InstancedMesh(sphere, material, entries.length);
 
@@ -420,8 +421,7 @@ export class CrystalViewer {
     const cylinder = new THREE.CylinderGeometry(this.bondRadius, this.bondRadius, 1, 8);
     const material = new THREE.MeshStandardMaterial({
       color: BOND_COLOR,
-      roughness: 0.5,
-      metalness: 0.1,
+      ...pbrMaterialParams(this.pbrShiny, "bond"),
     });
     const mesh = new THREE.InstancedMesh(cylinder, material, geometry.bonds.length);
 
@@ -523,6 +523,13 @@ export class CrystalViewer {
   setBondRadius(r) {
     this.bondRadius = r;
     if (this.geometry) this.render(this.geometry, { ...(this._lastOptions || {}), frame: false });
+  }
+
+  setPbrShiny(on) {
+    this.pbrShiny = Boolean(on);
+    if (this.geometry) {
+      this.render(this.geometry, { ...(this._lastOptions || {}), frame: false });
+    }
   }
 
   setShowAxes(on) {
