@@ -92,6 +92,16 @@ class TestPeemApi(unittest.TestCase):
 
             self.assertEqual(ctx.exception.status_code, 413)
 
+    def test_float64_bytes_for_shape_avoids_int64_overflow(self):
+        # np.prod of these dims wraps int64 to a negative / tiny value;
+        # math.prod stays large and correctly trips the size limit.
+        huge = (2**32 - 1, 2**32 - 1)
+        wrapped = int(np.prod(huge)) * 8
+        safe = peem_router._float64_bytes_for_shape(huge)
+        self.assertGreater(safe, peem_router.MAX_PEEM_BYTES)
+        self.assertNotEqual(safe, wrapped)
+        self.assertLessEqual(wrapped, peem_router.MAX_PEEM_BYTES)
+
     def test_server_folder_with_spaces_gets_safe_fallback_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = self._session(tmp)

@@ -1,6 +1,7 @@
 """PEEM TIF load, metadata, frame, and deferred beamline-CSV endpoints."""
 from __future__ import annotations
 
+import math
 import re
 import zipfile
 from collections import Counter
@@ -85,6 +86,14 @@ def _tif_paths(source_path: Path) -> list[Path]:
     )
 
 
+def _float64_bytes_for_shape(shape: tuple[int, ...] | list[int]) -> int:
+    """Byte count for float64 expansion; use math.prod to avoid int64 overflow."""
+    dims = [int(size) for size in shape]
+    if any(size < 0 for size in dims):
+        raise ValueError(f"Invalid TIF shape {shape}")
+    return math.prod(dims) * 8
+
+
 def _enforce_peem_size(source_path: Path) -> None:
     paths = _tif_paths(source_path)
     if sum(path.stat().st_size for path in paths) > MAX_PEEM_BYTES:
@@ -100,11 +109,11 @@ def _enforce_peem_size(source_path: Path) -> None:
                 if len(tif.pages) == 1:
                     shape = tuple(int(size) for size in tif.pages[0].shape)
                     n_frames += shape[0] if len(shape) == 3 else 1
-                    float64_bytes += int(np.prod(shape)) * 8
+                    float64_bytes += _float64_bytes_for_shape(shape)
                 else:
                     n_frames += len(tif.pages)
                     float64_bytes += sum(
-                        int(np.prod(page.shape)) * 8 for page in tif.pages
+                        _float64_bytes_for_shape(page.shape) for page in tif.pages
                     )
     except Exception as exc:
         raise HTTPException(
