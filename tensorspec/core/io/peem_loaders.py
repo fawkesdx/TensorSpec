@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import tifffile
+
+from tensorspec.core.data_models import TensorData
+
+I0_COLUMN_ALIASES = ("I0", "I_0", "i0", "beam_current", "BeamCurrent", "current", "I0_nA")
+
+_POL_TAGS = ("CP", "CM", "LH", "LV")
+
+
+def _json_val(value: Any) -> Any:
+    if isinstance(value, (np.integer, np.floating)):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if pd.isna(value):
+        return None
+    return value
+
+
+def _jsonify_series(series: dict[str, list]) -> dict[str, list]:
+    return {key: [_json_val(v) for v in vals] for key, vals in series.items()}
+
+
+def _match_i0_column(columns: list[str]) -> str | None:
+    alias_fold = {alias.casefold(): alias for alias in I0_COLUMN_ALIASES}
+    for col in columns:
+        if col.casefold() in alias_fold:
+            return col
+    return None
+
+
+def infer_pol_from_name(name: str) -> str:
+    """Return 'CP'|'CM'|'LH'|'LV'|'unknown' via case-insensitive substring."""
+    folded = name.casefold()
+    for tag in _POL_TAGS:
+        if tag.casefold() in folded:
+            return tag
+    return "unknown"
+
+
+def find_beamline_csv(directory: Path, preferred_stem: str | None = None) -> list[Path]:
+    """
+    Return candidate *.csv paths in directory (non-recursive).
+    If preferred_stem set, sort stem-matching paths first.
+    Empty list if none.
+    """
+    directory = Path(directory)
+    candidates = sorted(directory.glob("*.csv"))
+    if not preferred_stem:
+        return candidates
+
+    preferred_fold = preferred_stem.casefold()
+    matching = [
+        path
+        for path in candidates
+        if path.stem.casefold() == preferred_fold or preferred_fold in path.stem.casefold()
+    ]
+    non_matching = [path for path in candidates if path not in matching]
+    return matching + non_matching
+
+
+def load_beamline_csv(path: Path | str) -> dict[str, Any]:
+    """
+    Parse CSV with pandas. Return JSON-serializable dict:
+      columns: list[str]
+      rows: list[dict]  # optional if huge — prefer columnar:
+      series: dict[str, list]  # column -> values
+      I0: float | list[float] | None  # first matching alias; scalar if len==1 else list
+      beam_current: same as I0 when alias matches current*
+    """
+    path = Path(path)
+    df = pd.read_csv(path)
+    columns = [str(col) for col in df.columns]
+    series = _jsonify_series({col: df[col].tolist() for col in columns})
+    rows = [{str(k): _json_val(v) for k, v in row.items()} for row in df.to_dict(orient="records")]
+
+    i0_col = _match_i0_column(columns)
+    i0_value: float | list[float] | None = None
+    beam_current: float | list[float] | None = None
+    if i0_col is not None:
+        raw_vals = series[i0_col]
+        if len(raw_vals) == 1:
+            i0_value = raw_vals[0]
+        else:
+            i0_value = raw_vals
+        if "current" in i0_col.casefold():
+            beam_current = i0_value
+
+    return {
+        "columns": columns,
+        "rows": rows,
+        "series": series,
+        "I0": i0_value,
+        "beam_current": beam_current,
+    }
+
+
+def package_stack(
+    frames: np.ndarray,
+    frame_names: list[str],
+    *,
+    source: str,
+    loader: str,
+    csv_meta: dict[str, Any] | None = None,
+) -> TensorData:
+    """Shared builder: axes, labels, pol tags, merge csv_meta into metadata."""
+    frames = np.asarray(frames, dtype=np.float64)
+    if frames.ndim == 2:
+        frames = frames[np.newaxis, ...]
+    if frames.ndim != 3:
+        raise ValueError(f"Expected stack shape (n, y, x), got {frames.shape}")
+
+    n_frames, ny, nx = frames.shape
+    pol = [infer_pol_from_name(name) for name in frame_names]
+
+    metadata: dict[str, Any] = {
+        "frame_names": frame_names,
+        "pol": pol,
+        "pair_id": None,
+        "source": source,
+        "loader": loader,
+    }
+
+    if csv_meta is not None:
+        metadata["csv_attached"] = True
+        metadata["beamline_csv"] = csv_meta.get("beamline_csv", csv_meta.get("source"))
+        metadata["I0"] = csv_meta.get("I0")
+        if csv_meta.get("beam_current") is not None:
+            metadata["beam_current"] = csv_meta["beam_current"]
+        metadata["beamline_table"] = {
+            "columns": csv_meta.get("columns"),
+            "series": csv_meta.get("series"),
+        }
+    else:
+        metadata["csv_attached"] = False
+        metadata["I0"] = None
+
+    return TensorData(
+        value=frames,
+        axes=[np.arange(n_frames), np.arange(ny), np.arange(nx)],
+        labels=["frame", "y", "x"],
+        units=["", "px", "px"],
+        data_type="Experimental PEEM",
+        metadata=metadata,
+    )
+
+
+def _read_tif_frames(path: Path) -> np.ndarray:
+    data = tifffile.imread(path)
+    if data.ndim == 2:
+        return data[np.newaxis, ...]
+    if data.ndim == 3:
+        return data
+    raise ValueError(f"Unexpected TIF shape {data.shape} in {path}")
+
+
+def load_tif_stack(path: Path | str, *, csv_path: Path | str | None = None) -> TensorData:
+    """Multipage TIF → TensorData shape (n_frames, ny, nx), float64."""
+    path = Path(path)
+    frames = _read_tif_frames(path)
+    n_frames = frames.shape[0]
+    frame_names = [f"frame_{i}" for i in range(n_frames)]
+
+    csv_meta: dict[str, Any] | None = None
+    if csv_path is not None:
+        csv_meta = load_beamline_csv(csv_path)
+        csv_meta["beamline_csv"] = str(Path(csv_path))
+    else:
+        found = find_beamline_csv(path.parent, preferred_stem=path.stem)
+        if found:
+            csv_meta = load_beamline_csv(found[0])
+            csv_meta["beamline_csv"] = str(found[0])
+
+    return package_stack(
+        frames,
+        frame_names,
+        source=str(path),
+        loader="tif_stack",
+        csv_meta=csv_meta,
+    )
+
+
+def load_tif_sequence(directory: Path | str, *, csv_path: Path | str | None = None) -> TensorData:
+    """Sorted *.tif/*.tiff in directory → TensorData (n_frames, ny, nx)."""
+    directory = Path(directory)
+    tif_paths = sorted(directory.glob("*.tif")) + sorted(directory.glob("*.tiff"))
+
+    seen: set[str] = set()
+    unique_paths: list[Path] = []
+    for candidate in tif_paths:
+        key = candidate.name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_paths.append(candidate)
+
+    if not unique_paths:
+        raise ValueError(f"No TIF files found in {directory}")
+
+    frames_list: list[np.ndarray] = []
+    frame_names: list[str] = []
+    ref_shape: tuple[int, ...] | None = None
+    for tif_path in unique_paths:
+        frame = tifffile.imread(tif_path)
+        if frame.ndim != 2:
+            raise ValueError(f"Expected 2D frame in {tif_path.name}, got shape {frame.shape}")
+        if ref_shape is None:
+            ref_shape = frame.shape
+        elif frame.shape != ref_shape:
+            raise ValueError(f"TIFF pages differ in {directory}: {tif_path.name} {frame.shape} vs {ref_shape}")
+        frames_list.append(frame)
+        frame_names.append(tif_path.stem)
+
+    frames = np.stack(frames_list, axis=0)
+
+    csv_meta: dict[str, Any] | None = None
+    if csv_path is not None:
+        csv_meta = load_beamline_csv(csv_path)
+        csv_meta["beamline_csv"] = str(Path(csv_path))
+
+    return package_stack(
+        frames,
+        frame_names,
+        source=str(directory),
+        loader="tif_sequence",
+        csv_meta=csv_meta,
+    )
