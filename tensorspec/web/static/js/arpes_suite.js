@@ -916,16 +916,7 @@ async function refreshCrystals() {
 }
 
 function syncArpesBackendUi() {
-    const einstein = el("ar-backend")?.value === "einstein_ssh";
-    const model = el("ar-model");
-    if (!model) return;
-    [...model.options].forEach((opt) => {
-        if (opt.value === "B1") {
-            opt.disabled = einstein;
-            opt.hidden = einstein;
-        }
-    });
-    if (einstein && model.value === "B1") model.value = "A";
+    // B1 allowed on Einstein when chinook is installed remotely.
 }
 
 function simPayload() {

@@ -88,13 +88,6 @@ def _einstein_arpes_argv(run_dir: Path, host: str) -> list[str]:
     ]
 
 
-def _refuse_b1_on_einstein(request: ArpesSimRequest) -> None:
-    if request.backend == "einstein_ssh" and request.model != "A":
-        raise HTTPException(
-            status_code=422,
-            detail="Einstein (SSH) supports Option A only until chinook is installed on Einstein.",
-        )
-
 
 def _require_remote_arpes_script() -> Path:
     script = _remote_arpes_me_script_path()
@@ -104,9 +97,7 @@ def _require_remote_arpes_script() -> Path:
 
 
 def _request_json_for_remote(request: ArpesSimRequest) -> dict:
-    data = request.model_dump()
-    data["model"] = "A"
-    return data
+    return request.model_dump()
 
 
 def _build_einstein_sim_worker(session_id: str, request: ArpesSimRequest):
@@ -166,7 +157,7 @@ def _build_einstein_sim_worker(session_id: str, request: ArpesSimRequest):
         job.result = {
             "store_as": request.store_as,
             "crystal_name": request.crystal_name,
-            "model": "A",
+            "model": request.model,
             "intensity": cube,
             "axes": {
                 "E": np.asarray(data["E"], dtype=float),
@@ -1176,7 +1167,6 @@ def queue_simulation(
             detail=f"Detector grid is {voxels} voxels; reduce steps (cap {MAX_SIM_VOXELS}).",
         )
 
-    _refuse_b1_on_einstein(request)
     if request.backend == "einstein_ssh":
         _require_remote_arpes_script()
         worker = _build_einstein_sim_worker(session.session_id, request)
