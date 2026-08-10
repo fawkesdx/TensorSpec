@@ -18,7 +18,7 @@ def roi_to_mask(ny: int, nx: int, roi: dict) -> np.ndarray:
         raise ValueError("roi must be a dict")
 
     kind = roi.get("kind")
-    if kind not in _VALID_KINDS:
+    if not _kind_is_valid(kind):
         raise ValueError(f"unsupported ROI kind: {kind!r}")
 
     if kind == "rect":
@@ -31,6 +31,13 @@ def roi_to_mask(ny: int, nx: int, roi: dict) -> np.ndarray:
     if not mask.any():
         raise ValueError("empty ROI mask")
     return mask
+
+
+def _kind_is_valid(kind: object) -> bool:
+    try:
+        return kind in _VALID_KINDS
+    except TypeError:
+        return False
 
 
 def _coerce_float(value: object, field: str) -> float:

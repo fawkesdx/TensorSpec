@@ -52,3 +52,7 @@ class TestPeemRoi(unittest.TestCase):
     def test_non_positive_rx_raises(self):
         with self.assertRaises(ValueError):
             roi_to_mask(7, 7, {"kind": "ellipse", "cx": 3, "cy": 3, "rx": 0, "ry": 1})
+
+    def test_unhashable_kind_raises(self):
+        with self.assertRaises(ValueError):
+            roi_to_mask(5, 5, {"kind": []})
