@@ -135,8 +135,8 @@ function renderFrame() {
     context.putImageData(image, 0, 0);
 }
 
-async function showFrame(index) {
-    if (!state.name) return;
+async function showFrame(index, expectedName = state.name) {
+    if (!expectedName || state.name !== expectedName) return;
     const requestId = ++state.requestId;
     const count = state.node === "processed" ? state.nPairs : state.nFrames;
     if (!count) return;
@@ -144,11 +144,11 @@ async function showFrame(index) {
     const itemName = state.node === "processed" ? "pair" : "frame";
     dom.frameMeta.textContent = `Loading ${itemName} ${clamped + 1}…`;
     try {
-        const frame = await TensorSpecAPI.peemFrame(state.name, clamped, {
+        const frame = await TensorSpecAPI.peemFrame(expectedName, clamped, {
             node: state.node,
             channel: state.channel,
         });
-        if (requestId !== state.requestId) return;
+        if (requestId !== state.requestId || state.name !== expectedName) return;
         if (state.node === "processed") {
             state.pairIndex = clamped;
             dom.pair.value = String(clamped);
@@ -175,7 +175,7 @@ async function showFrame(index) {
         dom.frameMeta.textContent = details.filter(Boolean).join(" · ");
         renderFrame();
     } catch (error) {
-        if (requestId === state.requestId) {
+        if (requestId === state.requestId && state.name === expectedName) {
             dom.frameMeta.textContent = `Frame error: ${error.message}`;
         }
     }
@@ -258,7 +258,7 @@ async function stackPairs() {
             : `${result.unpaired_count} unpaired frames`;
         dom.status.textContent = `Stacked ${result.n_pairs} pair(s) · ${unpaired}`;
         dom.footerStatus.textContent = `${state.name} · ${result.n_pairs} pair(s)`;
-        await showFrame(0);
+        await showFrame(0, pairedName);
     } catch (error) {
         if (state.name !== pairedName) return;
         dom.status.textContent = `Pairing error: ${error.message}`;
