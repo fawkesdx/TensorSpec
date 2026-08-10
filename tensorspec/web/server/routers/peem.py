@@ -523,6 +523,7 @@ def get_meta(
     processed = _processed_tensor(session, name)
     processed_metadata = (processed.metadata or {}) if processed is not None else {}
     processed_is_pair = processed is not None and processed.value.ndim == 4
+    processed_is_frame = processed is not None and processed.value.ndim == 3
     return PeemMeta(
         name=name,
         shape=[int(size) for size in tensor.value.shape],
@@ -534,6 +535,13 @@ def get_meta(
         I0_present=metadata.get("I0") is not None,
         I0=metadata.get("I0"),
         has_processed=processed is not None,
+        processed_shape=(
+            [int(size) for size in processed.value.shape] if processed is not None else None
+        ),
+        processed_is_paired=processed_is_pair,
+        n_processed_frames=(
+            int(processed.value.shape[0]) if processed_is_frame else None
+        ),
         pair_mode=(
             str(processed_metadata.get("pair_mode"))
             if processed_metadata.get("pair_mode") is not None
