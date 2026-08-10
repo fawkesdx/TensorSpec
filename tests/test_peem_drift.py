@@ -50,6 +50,27 @@ ROI = {"kind": "rect", "x0": 7, "y0": 7, "x1": 25, "y1": 25}
 
 
 class TestDriftCorrect(unittest.TestCase):
+    def test_stationary_frame_prefers_zero_when_ncc_scores_tie(self):
+        yy, xx = np.mgrid[0:32, 0:32]
+        repeated_pattern = ((xx + yy) % 2).astype(float)
+        tensor = TensorData(
+            value=np.stack([repeated_pattern, repeated_pattern]),
+            axes=[np.arange(2), np.arange(32), np.arange(32)],
+            labels=["frame", "y", "x"],
+            units=["", "px", "px"],
+            data_type="Experimental PEEM",
+            metadata={"pol": ["unknown", "unknown"]},
+        )
+
+        out = drift_correct(
+            tensor,
+            ref_index=0,
+            roi={"kind": "rect", "x0": 4, "y0": 4, "x1": 27, "y1": 27},
+            search_radius=2,
+        )
+
+        self.assertEqual(out.metadata["drift_shifts"][1], {"index": 1, "dx": 0, "dy": 0})
+
     def test_recovers_known_integer_shifts_and_metadata(self):
         out = drift_correct(
             _raw_stack(),

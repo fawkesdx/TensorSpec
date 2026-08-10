@@ -60,8 +60,22 @@ def _ncc_best_shift(
                 np.dot(template_centered, candidate_centered)
                 / (template_norm * candidate_norm)
             )
-            if score > best_score:
+            shift_rank = (dx * dx + dy * dy, abs(dx), abs(dy))
+            best_rank = (
+                None
+                if best_shift is None
+                else (
+                    best_shift[0] * best_shift[0] + best_shift[1] * best_shift[1],
+                    abs(best_shift[0]),
+                    abs(best_shift[1]),
+                )
+            )
+            scores_tie = np.isclose(score, best_score, rtol=1e-12, atol=1e-12)
+            if score > best_score and not scores_tie:
                 best_score = score
+                best_shift = (dx, dy)
+            elif scores_tie and (best_rank is None or shift_rank < best_rank):
+                best_score = max(best_score, score)
                 best_shift = (dx, dy)
 
     if best_shift is None:
