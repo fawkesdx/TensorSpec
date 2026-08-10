@@ -18,8 +18,10 @@ from tensorspec.core.io.peem_loaders import (
     load_tif_sequence,
     load_tif_stack,
 )
-from tensorspec.core.peem_engine import pair_stack
+from tensorspec.core.peem_engine import drift_correct, pair_stack
 from tensorspec.web.server.schemas import (
+    PeemDriftRequest,
+    PeemDriftSummary,
     PeemFrame,
     PeemLoadSummary,
     PeemMeta,
@@ -231,12 +233,19 @@ def _require_tensor(session: Session, name: str):
     return tensor
 
 
-def _processed_pair_tensor(session: Session, name: str):
+def _processed_tensor(session: Session, name: str):
     tensor = session.workspace.pull_tensor_data(name, "processed")
     if tensor is None:
         return None
     shape = tuple(int(size) for size in tensor.value.shape)
-    valid = (
+    valid_raw = (
+        tensor.data_type == "Experimental PEEM"
+        and tensor.labels == ["frame", "y", "x"]
+        and tensor.value.ndim == 3
+        and len(shape) == 3
+        and all(size > 0 for size in shape)
+    )
+    valid_pair = (
         tensor.data_type == "Experimental PEEM (paired)"
         and tensor.labels == ["pair", "channel", "y", "x"]
         and tensor.value.ndim == 4
@@ -244,7 +253,20 @@ def _processed_pair_tensor(session: Session, name: str):
         and shape[1] == 2
         and all(size > 0 for size in shape)
     )
-    if not valid:
+    if not (valid_raw or valid_pair):
+        raise HTTPException(
+            status_code=422,
+            detail="Processed PEEM data must be a non-empty (frame, y, x) "
+            "cube or (pair, channel=2, y, x) paired cube.",
+        )
+    return tensor
+
+
+def _processed_pair_tensor(session: Session, name: str):
+    tensor = _processed_tensor(session, name)
+    if tensor is None:
+        return None
+    if tensor.value.ndim != 4:
         raise HTTPException(
             status_code=422,
             detail="Processed PEEM data must be a non-empty "
@@ -450,6 +472,47 @@ def pair_peem(
     )
 
 
+@router.post("/{name}/drift", response_model=PeemDriftSummary)
+def drift_peem(
+    name: str,
+    request: PeemDriftRequest,
+    session: Session = Depends(current_session),
+) -> PeemDriftSummary:
+    """Drift-correct raw or processed PEEM data into /processed."""
+    if request.source == "raw":
+        tensor = _require_tensor(session, name)
+    else:
+        tensor = _processed_tensor(session, name)
+        if tensor is None:
+            raise HTTPException(
+                status_code=404, detail=f"PEEM data '{name}' has no processed data."
+            )
+    try:
+        corrected = drift_correct(
+            tensor,
+            ref_index=request.ref_index,
+            roi=request.roi.model_dump(exclude_none=True),
+            search_radius=request.search_radius,
+            track_channel=request.track_channel,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not session.workspace.write_processed_data(name, corrected):
+        raise HTTPException(status_code=404, detail=f"PEEM data '{name}' not found.")
+
+    shifts = corrected.metadata.get("drift_shifts", [])
+    return PeemDriftSummary(
+        name=name,
+        source=request.source,
+        n_planes=int(corrected.value.shape[0]),
+        ref_index=request.ref_index,
+        search_radius=request.search_radius,
+        max_abs_dx=max((abs(int(item["dx"])) for item in shifts), default=0),
+        max_abs_dy=max((abs(int(item["dy"])) for item in shifts), default=0),
+        shape=[int(size) for size in corrected.value.shape],
+    )
+
+
 @router.get("/{name}/meta", response_model=PeemMeta)
 def get_meta(
     name: str,
@@ -457,8 +520,9 @@ def get_meta(
 ) -> PeemMeta:
     tensor = _require_tensor(session, name)
     metadata = tensor.metadata or {}
-    processed = _processed_pair_tensor(session, name)
+    processed = _processed_tensor(session, name)
     processed_metadata = (processed.metadata or {}) if processed is not None else {}
+    processed_is_pair = processed is not None and processed.value.ndim == 4
     return PeemMeta(
         name=name,
         shape=[int(size) for size in tensor.value.shape],
@@ -475,11 +539,17 @@ def get_meta(
             if processed_metadata.get("pair_mode") is not None
             else None
         ),
-        n_pairs=int(processed.value.shape[0]) if processed is not None else None,
+        n_pairs=int(processed.value.shape[0]) if processed_is_pair else None,
         channel_tags=[
             str(value) for value in processed_metadata.get("channel_tags", [])
         ],
         unpaired_count=len(processed_metadata.get("unpaired", [])),
+        has_drift=processed_metadata.get("drift_method") is not None,
+        drift_method=(
+            str(processed_metadata["drift_method"])
+            if processed_metadata.get("drift_method") is not None
+            else None
+        ),
     )
 
 
@@ -498,18 +568,24 @@ def get_frame(
             raise HTTPException(status_code=404, detail=f"Frame index {i} is out of range.")
         frame = np.asarray(tensor.value[i], dtype=float)
     elif node == "processed":
-        tensor = _processed_pair_tensor(session, name)
+        tensor = _processed_tensor(session, name)
         if tensor is None:
             raise HTTPException(
-                status_code=404, detail=f"PEEM data '{name}' has no processed pairs."
+                status_code=404, detail=f"PEEM data '{name}' has no processed data."
             )
         if not 0 <= i < tensor.value.shape[0]:
-            raise HTTPException(status_code=404, detail=f"Pair index {i} is out of range.")
-        if not 0 <= channel < tensor.value.shape[1]:
+            kind = "Pair" if tensor.value.ndim == 4 else "Frame"
             raise HTTPException(
-                status_code=404, detail=f"Channel index {channel} is out of range."
+                status_code=404, detail=f"{kind} index {i} is out of range."
             )
-        frame = np.asarray(tensor.value[i, channel], dtype=float)
+        if tensor.value.ndim == 4:
+            if not 0 <= channel < tensor.value.shape[1]:
+                raise HTTPException(
+                    status_code=404, detail=f"Channel index {channel} is out of range."
+                )
+            frame = np.asarray(tensor.value[i, channel], dtype=float)
+        else:
+            frame = np.asarray(tensor.value[i], dtype=float)
     else:
         raise HTTPException(status_code=422, detail="node must be 'raw' or 'processed'.")
 
@@ -524,22 +600,23 @@ def get_frame(
     pol = metadata.get("pol", [])
     frame_names = metadata.get("frame_names", [])
     channel_tags = metadata.get("channel_tags", [])
+    is_pair = node == "processed" and tensor.value.ndim == 4
     return PeemFrame(
         index=i,
         shape=[int(size) for size in frame.shape],
         intensity=frame.tolist(),
         vmin=float(vmin),
         vmax=float(vmax),
-        pol=str(pol[i]) if node == "raw" and i < len(pol) else None,
+        pol=str(pol[i]) if not is_pair and i < len(pol) else None,
         frame_name=(
-            str(frame_names[i]) if node == "raw" and i < len(frame_names) else None
+            str(frame_names[i]) if not is_pair and i < len(frame_names) else None
         ),
         node=node,
-        pair=i if node == "processed" else None,
-        channel=channel if node == "processed" else None,
+        pair=i if is_pair else None,
+        channel=channel if is_pair else None,
         channel_tag=(
             str(channel_tags[channel])
-            if node == "processed" and channel < len(channel_tags)
+            if is_pair and channel < len(channel_tags)
             else None
         ),
     )

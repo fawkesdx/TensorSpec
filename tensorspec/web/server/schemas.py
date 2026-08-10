@@ -324,6 +324,46 @@ class PeemPairSummary(BaseModel):
     shape: list[int]
 
 
+class PeemRoi(BaseModel):
+    """Region used to track a PEEM feature during drift correction."""
+
+    kind: Literal["rect", "ellipse", "polygon"]
+    x0: float | None = None
+    y0: float | None = None
+    x1: float | None = None
+    y1: float | None = None
+    cx: float | None = None
+    cy: float | None = None
+    rx: float | None = None
+    ry: float | None = None
+    points: list[list[float]] | None = None
+
+
+class PeemDriftRequest(BaseModel):
+    """Drift-correction settings for raw or processed PEEM data."""
+
+    source: Literal["raw", "processed"] = "raw"
+    ref_index: int = Field(ge=0, le=100_000)
+    search_radius: int = Field(default=20, ge=1, le=200)
+    track_channel: int = Field(default=0, ge=0, le=1)
+    roi: PeemRoi
+
+
+class PeemDriftSummary(BaseModel):
+    """Summary of a drift-corrected cube written to /processed."""
+
+    name: str
+    source: str
+    n_planes: int
+    ref_index: int
+    search_radius: int
+    has_processed: bool = True
+    has_drift: bool = True
+    max_abs_dx: int
+    max_abs_dy: int
+    shape: list[int]
+
+
 class PeemMeta(BaseModel):
     """PEEM stack metadata needed by the frame viewer."""
 
@@ -341,6 +381,8 @@ class PeemMeta(BaseModel):
     n_pairs: int | None = None
     channel_tags: list[str] = Field(default_factory=list)
     unpaired_count: int = 0
+    has_drift: bool = False
+    drift_method: str | None = None
 
 
 class PeemFrame(BaseModel):
