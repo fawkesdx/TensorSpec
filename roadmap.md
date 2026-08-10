@@ -153,7 +153,8 @@ Grand App
 		- [ ] apply I0 in sum-rule slice
 	- [x] load+view UI: upload or server path, metadata summary, frame canvas, frame slider, and contrast limits
 	- [x] stack the CP and CM together or LH and LV together depending on the files
-	- [ ] once stacked, build drift-correction options
+	- [x] once stacked, build drift-correction options
+		- [x] ROI NCC drift → `/processed` (POST `/api/peem/{name}/drift`)
 	- [ ] separate those CP and CM or LH and LV
 	- [ ] make the background subtraction button to be applied to all
 		- [ ] for background, make it clear to the user what functions we use; refer to Co₃Sn₂S₂ laser ARPES paper as a starter. Other backgrounds can be suggested in later iterations.
