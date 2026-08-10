@@ -238,6 +238,11 @@ const TensorSpecAPI = (() => {
             if (csvPath) form.append("csv_path", csvPath);
             return upload(`/api/peem/${encodeURIComponent(name)}/attach-csv`, form);
         },
+        peemDrift: (name, payload) =>
+            request(`/api/peem/${encodeURIComponent(name)}/drift`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
         processRoles: (name) =>
             request(`/api/arpes/process/${encodeURIComponent(name)}/roles`),
         processSuggestCenter: (name, payload) =>

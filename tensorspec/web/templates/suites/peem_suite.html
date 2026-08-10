@@ -87,14 +87,14 @@
                         <button type="button" class="btn btn--block" disabled>&#9878; Separate Pairs</button>
                     </fieldset>
 
-                    <fieldset class="fieldset" disabled>
+                    <fieldset class="fieldset">
                         <legend>3. Drift Correction</legend>
                         <div class="form-row">
                             <label for="peem-algo">Algorithm:</label>
                             <select class="field" id="peem-algo">
-                                <option>Cross-correlation</option>
-                                <option>Phase correlation</option>
-                                <option>Manual offset</option>
+                                <option value="ncc_roi">NCC (ROI)</option>
+                                <option disabled>Phase correlation</option>
+                                <option disabled>Manual offset</option>
                             </select>
                         </div>
                         <div class="form-row">
@@ -105,7 +105,14 @@
                             <label for="peem-search">Search Radius (px):</label>
                             <input class="field" id="peem-search" type="number" min="1" max="200" value="20">
                         </div>
-                        <button type="button" class="btn btn--block" disabled>&#127919; Apply Drift Correction</button>
+                        <div class="form-row" id="peem-track-channel-row" hidden>
+                            <label for="peem-track-channel">Track channel:</label>
+                            <select class="field" id="peem-track-channel">
+                                <option value="0">0</option>
+                                <option value="1">1</option>
+                            </select>
+                        </div>
+                        <button type="button" class="btn btn--block" id="peem-apply-drift">&#127919; Apply Drift Correction</button>
                     </fieldset>
 
                     <fieldset class="fieldset" disabled>
@@ -125,9 +132,17 @@
                     <h2 class="panel__title">Image Stack Viewer</h2>
                 </div>
                 <div class="panel__body" style="padding:12px; display:flex; flex-direction:column; gap:12px">
+                    <div class="inline" style="margin-bottom:8px;flex-wrap:wrap;gap:4px">
+                        <button type="button" class="btn" id="peem-roi-rect">Rect</button>
+                        <button type="button" class="btn" id="peem-roi-ellipse">Ellipse</button>
+                        <button type="button" class="btn" id="peem-roi-polygon">Polygon</button>
+                        <button type="button" class="btn" id="peem-roi-close" hidden>Close polygon</button>
+                        <button type="button" class="btn" id="peem-roi-clear">Clear ROI</button>
+                        <span class="hint" id="peem-roi-status">No ROI</span>
+                    </div>
                     <div class="canvas" style="flex:1 1 auto;min-height:360px;padding:0;overflow:auto">
                         <canvas id="peem-canvas" width="1" height="1"
-                            style="display:block;width:100%;height:auto;image-rendering:pixelated"
+                            style="display:block;width:100%;height:auto;image-rendering:pixelated;cursor:crosshair"
                             aria-label="PEEM intensity frame"></canvas>
                     </div>
                     <div>
