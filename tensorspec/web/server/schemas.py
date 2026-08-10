@@ -377,6 +377,9 @@ class PeemMeta(BaseModel):
     I0_present: bool
     I0: float | list[float | None] | None = None
     has_processed: bool = False
+    processed_shape: list[int] | None = None
+    processed_is_paired: bool = False
+    n_processed_frames: int | None = None
     pair_mode: str | None = None
     n_pairs: int | None = None
     channel_tags: list[str] = Field(default_factory=list)

@@ -51,6 +51,8 @@ const state = {
     frameIndex: 0,
     node: "raw",
     hasProcessed: false,
+    processedIsPaired: false,
+    nProcessedFrames: 0,
     nPairs: 0,
     pairIndex: 0,
     channel: 0,
@@ -69,6 +71,38 @@ const state = {
     isDrawing: false,
 };
 
+function isProcessedPaired(summary) {
+    if (summary.processed_is_paired === true) return true;
+    const nPairs = Number(summary.n_pairs);
+    if (nPairs > 0) return true;
+    const tags = summary.channel_tags || [];
+    if (tags.length >= 2) return true;
+    const shape = summary.processed_shape || [];
+    return shape.length === 4;
+}
+
+function processedFrameCount(summary) {
+    const fromMeta = Number(summary.n_processed_frames);
+    if (fromMeta > 0) return fromMeta;
+    const shape = summary.processed_shape || [];
+    if (shape.length === 3) return Number(shape[0]) || 0;
+    return 0;
+}
+
+function viewerUsesFrameNav(node = state.node) {
+    return node === "raw" || (node === "processed" && !state.processedIsPaired);
+}
+
+function viewerFrameCount(node = state.node) {
+    if (node === "raw") return state.nFrames;
+    return state.processedIsPaired ? state.nPairs : state.nProcessedFrames;
+}
+
+function viewerFrameIndex(node = state.node) {
+    if (node === "raw") return state.frameIndex;
+    return state.processedIsPaired ? state.pairIndex : state.frameIndex;
+}
+
 function setBusy(busy, message = "") {
     dom.tif.disabled = busy;
     dom.zip.disabled = busy;
@@ -81,7 +115,7 @@ function setBusy(busy, message = "") {
 }
 
 function updateDriftControls() {
-    const showTrack = state.hasProcessed && state.channelTags.length >= 2;
+    const showTrack = state.hasProcessed && state.processedIsPaired;
     dom.trackChannelRow.hidden = !showTrack;
     dom.roiClose.hidden = state.roiMode !== "polygon";
 }
@@ -236,26 +270,39 @@ function configureViewer(summary) {
     state.nFrames = Number(summary.n_frames) || 0;
     state.hasProcessed = Boolean(summary.has_processed);
     state.hasDrift = Boolean(summary.has_drift);
-    state.nPairs = Number(summary.n_pairs) || 0;
-    state.channelTags = summary.channel_tags || [];
+    state.processedIsPaired = state.hasProcessed && isProcessedPaired(summary);
+    state.nProcessedFrames = state.hasProcessed ? processedFrameCount(summary) : 0;
+    state.nPairs = state.processedIsPaired ? Number(summary.n_pairs) || 0 : 0;
+    state.channelTags = state.processedIsPaired ? (summary.channel_tags || []) : [];
 
     if (!state.hasProcessed && state.node === "processed") state.node = "raw";
     state.frameIndex = Math.min(state.frameIndex, Math.max(0, state.nFrames - 1));
     state.pairIndex = Math.min(state.pairIndex, Math.max(0, state.nPairs - 1));
+    if (state.node === "processed" && !state.processedIsPaired) {
+        state.frameIndex = Math.min(
+            state.frameIndex,
+            Math.max(0, state.nProcessedFrames - 1),
+        );
+    }
     state.channel = Math.min(state.channel, Math.max(0, state.channelTags.length - 1));
+
+    const frameCount = viewerFrameCount();
+    const frameIndex = viewerFrameIndex();
+    const useFrameNav = viewerUsesFrameNav();
+    const usePairNav = state.node === "processed" && state.processedIsPaired;
 
     dom.processedNode.disabled = !state.hasProcessed;
     dom.rawNode.checked = state.node === "raw";
     dom.processedNode.checked = state.node === "processed";
-    dom.rawControls.hidden = state.node !== "raw";
-    dom.processedControls.hidden = state.node !== "processed";
+    dom.rawControls.hidden = !useFrameNav;
+    dom.processedControls.hidden = !usePairNav;
 
     dom.frame.min = "0";
-    dom.frame.max = String(Math.max(0, state.nFrames - 1));
-    dom.frame.value = String(state.frameIndex);
-    dom.frame.disabled = state.nFrames < 2;
-    dom.frameLabel.textContent = state.nFrames
-        ? `${state.frameIndex + 1} / ${state.nFrames}`
+    dom.frame.max = String(Math.max(0, frameCount - 1));
+    dom.frame.value = String(frameIndex);
+    dom.frame.disabled = frameCount < 2;
+    dom.frameLabel.textContent = frameCount
+        ? `${frameIndex + 1} / ${frameCount}`
         : "0 / 0";
 
     dom.pair.min = "0";
@@ -274,7 +321,7 @@ function configureViewer(summary) {
         dom.channel.append(option);
     });
     dom.channel.value = String(state.channel);
-    dom.channel.disabled = !state.hasProcessed || state.channelTags.length < 2;
+    dom.channel.disabled = !usePairNav || state.channelTags.length < 2;
     updateDriftControls();
 }
 
@@ -311,10 +358,11 @@ function renderFrame() {
 async function showFrame(index, expectedName = state.name) {
     if (!expectedName || state.name !== expectedName) return;
     const requestId = ++state.requestId;
-    const count = state.node === "processed" ? state.nPairs : state.nFrames;
+    const count = viewerFrameCount();
     if (!count) return;
     const clamped = Math.max(0, Math.min(count - 1, Number(index) || 0));
-    const itemName = state.node === "processed" ? "pair" : "frame";
+    const usePairNav = state.node === "processed" && state.processedIsPaired;
+    const itemName = usePairNav ? "pair" : "frame";
     dom.frameMeta.textContent = `Loading ${itemName} ${clamped + 1}…`;
     try {
         const frame = await TensorSpecAPI.peemFrame(expectedName, clamped, {
@@ -322,14 +370,14 @@ async function showFrame(index, expectedName = state.name) {
             channel: state.channel,
         });
         if (requestId !== state.requestId || state.name !== expectedName) return;
-        if (state.node === "processed") {
+        if (usePairNav) {
             state.pairIndex = clamped;
             dom.pair.value = String(clamped);
             dom.pairLabel.textContent = `${clamped + 1} / ${state.nPairs}`;
         } else {
             state.frameIndex = clamped;
             dom.frame.value = String(clamped);
-            dom.frameLabel.textContent = `${clamped + 1} / ${state.nFrames}`;
+            dom.frameLabel.textContent = `${clamped + 1} / ${count}`;
         }
         state.frameData = frame;
         if (!state.climCustomized) {
@@ -338,7 +386,7 @@ async function showFrame(index, expectedName = state.name) {
             dom.vmin.value = String(frame.vmin);
             dom.vmax.value = String(frame.vmax);
         }
-        const details = state.node === "processed"
+        const details = usePairNav
             ? [
                 `Pair ${clamped + 1}`,
                 frame.channel_tag,
@@ -387,6 +435,8 @@ async function acceptLoad(summary) {
     state.frameIndex = 0;
     state.node = "raw";
     state.hasProcessed = false;
+    state.processedIsPaired = false;
+    state.nProcessedFrames = 0;
     state.nPairs = 0;
     state.pairIndex = 0;
     state.channel = 0;
@@ -424,6 +474,7 @@ async function stackPairs() {
         const summary = await TensorSpecAPI.peemMeta(pairedName);
         if (state.name !== pairedName) return;
         state.node = "processed";
+        state.frameIndex = 0;
         state.pairIndex = 0;
         state.channel = 0;
         state.frameData = null;
@@ -481,6 +532,7 @@ async function applyDrift() {
         const summary = await TensorSpecAPI.peemMeta(driftName);
         if (state.name !== driftName) return;
         state.node = "processed";
+        state.frameIndex = 0;
         state.pairIndex = 0;
         state.channel = 0;
         state.frameData = null;
@@ -580,8 +632,9 @@ dom.continueWithout.addEventListener("click", () => {
 });
 
 dom.frame.addEventListener("input", () => {
-    const index = Math.max(0, Math.min(state.nFrames - 1, Number(dom.frame.value) || 0));
-    dom.frameLabel.textContent = `${index + 1} / ${state.nFrames}`;
+    const count = viewerFrameCount();
+    const index = Math.max(0, Math.min(count - 1, Number(dom.frame.value) || 0));
+    dom.frameLabel.textContent = `${index + 1} / ${count}`;
     state.requestId += 1;
     clearTimeout(state.frameTimer);
     state.frameTimer = setTimeout(() => showFrame(index), 125);
@@ -606,10 +659,12 @@ for (const input of [dom.rawNode, dom.processedNode]) {
             n_frames: state.nFrames,
             has_processed: state.hasProcessed,
             has_drift: state.hasDrift,
+            processed_is_paired: state.processedIsPaired,
+            n_processed_frames: state.nProcessedFrames,
             n_pairs: state.nPairs,
             channel_tags: state.channelTags,
         });
-        showFrame(state.node === "processed" ? state.pairIndex : state.frameIndex);
+        showFrame(viewerFrameIndex());
     });
 }
 
