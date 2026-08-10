@@ -13,13 +13,128 @@ from tensorspec.core.data_models import TensorData
 from tensorspec.core.workspace import WorkspaceManager
 from tensorspec.web.server.app import create_app
 from tensorspec.web.server.routers import peem as peem_router
-from tensorspec.web.server.schemas import PeemPairRequest
+from tensorspec.web.server.schemas import PeemDriftRequest, PeemPairRequest, PeemRoi
 from tensorspec.web.server.session import Session, current_session
 
 
 class TestPeemApi(unittest.TestCase):
     def _session(self, tmp: str) -> Session:
         return Session(session_id="t", workspace=WorkspaceManager(project_dir=Path(tmp)))
+
+    def test_drift_raw_writes_processed_3d(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            base = np.zeros((32, 32), dtype=np.uint16)
+            base[10:15, 11:17] = 20
+            shifted = np.zeros_like(base)
+            shifted[:, 3:] = base[:, :-3]
+            tifffile.imwrite(root / "a.tif", base)
+            tifffile.imwrite(root / "b.tif", shifted)
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="drift_raw",
+                session=session,
+            )
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            request = PeemDriftRequest(
+                source="raw",
+                ref_index=0,
+                search_radius=6,
+                roi=PeemRoi(kind="rect", x0=7, y0=7, x1=24, y1=22),
+            )
+
+            response = client.post(
+                "/api/peem/drift_raw/drift", json=request.model_dump()
+            )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["shape"], [2, 32, 32])
+            self.assertTrue(response.json()["has_drift"])
+            meta = client.get("/api/peem/drift_raw/meta")
+            self.assertEqual(meta.status_code, 200, meta.text)
+            self.assertTrue(meta.json()["has_drift"])
+            self.assertEqual(meta.json()["drift_method"], "ncc_roi")
+            frame = client.get("/api/peem/drift_raw/frame/0?node=processed")
+            self.assertEqual(frame.status_code, 200, frame.text)
+            self.assertEqual(frame.json()["shape"], [32, 32])
+            self.assertIsNone(frame.json()["pair"])
+            self.assertIsNone(frame.json()["channel"])
+
+    def test_drift_paired_keeps_4d_and_same_channel_shift(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            base = np.zeros((32, 32), dtype=np.uint16)
+            base[10:15, 11:17] = 20
+            other = base + 5
+            shifted_base = np.zeros_like(base)
+            shifted_other = np.zeros_like(other)
+            shifted_base[2:, :] = base[:-2, :]
+            shifted_other[2:, :] = other[:-2, :]
+            for filename, plane in (
+                ("a_CP.tif", base),
+                ("b_CM.tif", other),
+                ("c_CP.tif", shifted_base),
+                ("d_CM.tif", shifted_other),
+            ):
+                tifffile.imwrite(root / filename, plane)
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="drift_pair",
+                session=session,
+            )
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            pair = client.post(
+                "/api/peem/drift_pair/pair",
+                json=PeemPairRequest(mode="CP_CM").model_dump(),
+            )
+            self.assertEqual(pair.status_code, 200, pair.text)
+
+            response = client.post(
+                "/api/peem/drift_pair/drift",
+                json={
+                    "source": "processed",
+                    "ref_index": 0,
+                    "search_radius": 5,
+                    "track_channel": 0,
+                    "roi": {
+                        "kind": "rect",
+                        "x0": 7,
+                        "y0": 7,
+                        "x1": 24,
+                        "y1": 22,
+                    },
+                },
+            )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["shape"], [2, 2, 32, 32])
+            processed = session.workspace.pull_tensor_data("drift_pair", "processed")
+            self.assertEqual(processed.value.shape, (2, 2, 32, 32))
+            self.assertEqual(processed.metadata["drift_shifts"][1]["dy"], -2)
+            np.testing.assert_array_equal(
+                processed.value[1, 1, :-2], processed.value[0, 1, :-2]
+            )
+            meta = client.get("/api/peem/drift_pair/meta")
+            self.assertTrue(meta.json()["has_drift"])
+            frame = client.get(
+                "/api/peem/drift_pair/frame/1?node=processed&channel=1"
+            )
+            self.assertEqual(frame.status_code, 200, frame.text)
+            self.assertEqual(frame.json()["channel_tag"], "CM")
 
     def test_pair_writes_processed_and_frame(self):
         with tempfile.TemporaryDirectory() as tmp:
