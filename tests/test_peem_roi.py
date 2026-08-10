@@ -32,3 +32,23 @@ class TestPeemRoi(unittest.TestCase):
     def test_empty_raises(self):
         with self.assertRaises(ValueError):
             roi_to_mask(4, 4, {"kind": "rect", "x0": 10, "y0": 10, "x1": 12, "y1": 12})
+
+    def test_non_dict_roi_raises(self):
+        with self.assertRaises(ValueError):
+            roi_to_mask(5, 5, "rect")
+
+    def test_missing_rect_fields_raises(self):
+        with self.assertRaises(ValueError):
+            roi_to_mask(5, 5, {"kind": "rect", "x0": 1, "y0": 1})
+
+    def test_non_numeric_rect_raises(self):
+        with self.assertRaises(ValueError):
+            roi_to_mask(
+                5,
+                5,
+                {"kind": "rect", "x0": "a", "y0": 1, "x1": 2, "y1": 2},
+            )
+
+    def test_non_positive_rx_raises(self):
+        with self.assertRaises(ValueError):
+            roi_to_mask(7, 7, {"kind": "ellipse", "cx": 3, "cy": 3, "rx": 0, "ry": 1})
