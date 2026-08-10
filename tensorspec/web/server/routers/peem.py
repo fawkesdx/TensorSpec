@@ -231,6 +231,28 @@ def _require_tensor(session: Session, name: str):
     return tensor
 
 
+def _processed_pair_tensor(session: Session, name: str):
+    tensor = session.workspace.pull_tensor_data(name, "processed")
+    if tensor is None:
+        return None
+    shape = tuple(int(size) for size in tensor.value.shape)
+    valid = (
+        tensor.data_type == "Experimental PEEM (paired)"
+        and tensor.labels == ["pair", "channel", "y", "x"]
+        and tensor.value.ndim == 4
+        and len(shape) == 4
+        and shape[1] == 2
+        and all(size > 0 for size in shape)
+    )
+    if not valid:
+        raise HTTPException(
+            status_code=422,
+            detail="Processed PEEM data must be a non-empty "
+            "(pair, channel=2, y, x) paired cube.",
+        )
+    return tensor
+
+
 def _summary(
     name: str,
     tensor,
@@ -435,7 +457,7 @@ def get_meta(
 ) -> PeemMeta:
     tensor = _require_tensor(session, name)
     metadata = tensor.metadata or {}
-    processed = session.workspace.pull_tensor_data(name, "processed")
+    processed = _processed_pair_tensor(session, name)
     processed_metadata = (processed.metadata or {}) if processed is not None else {}
     return PeemMeta(
         name=name,
@@ -469,13 +491,14 @@ def get_frame(
     channel: int = 0,
     session: Session = Depends(current_session),
 ) -> PeemFrame:
+    raw_tensor = _require_tensor(session, name)
     if node == "raw":
-        tensor = _require_tensor(session, name)
+        tensor = raw_tensor
         if not 0 <= i < tensor.value.shape[0]:
             raise HTTPException(status_code=404, detail=f"Frame index {i} is out of range.")
         frame = np.asarray(tensor.value[i], dtype=float)
     elif node == "processed":
-        tensor = session.workspace.pull_tensor_data(name, "processed")
+        tensor = _processed_pair_tensor(session, name)
         if tensor is None:
             raise HTTPException(
                 status_code=404, detail=f"PEEM data '{name}' has no processed pairs."
