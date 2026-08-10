@@ -17,6 +17,18 @@ const dom = {
     continueWithout: el("peem-continue"),
     mode: el("peem-mode"),
     stackPairs: el("peem-stack-pairs"),
+    algo: el("peem-algo"),
+    ref: el("peem-ref"),
+    search: el("peem-search"),
+    trackChannelRow: el("peem-track-channel-row"),
+    trackChannel: el("peem-track-channel"),
+    applyDrift: el("peem-apply-drift"),
+    roiRect: el("peem-roi-rect"),
+    roiEllipse: el("peem-roi-ellipse"),
+    roiPolygon: el("peem-roi-polygon"),
+    roiClose: el("peem-roi-close"),
+    roiClear: el("peem-roi-clear"),
+    roiStatus: el("peem-roi-status"),
     canvas: el("peem-canvas"),
     rawNode: el("peem-node-raw"),
     processedNode: el("peem-node-processed"),
@@ -49,6 +61,12 @@ const state = {
     requestId: 0,
     climCustomized: false,
     frameTimer: null,
+    hasDrift: false,
+    roi: null,
+    roiMode: null,
+    roiDraft: null,
+    polygonPoints: [],
+    isDrawing: false,
 };
 
 function setBusy(busy, message = "") {
@@ -62,9 +80,162 @@ function setBusy(busy, message = "") {
     }
 }
 
+function updateDriftControls() {
+    const showTrack = state.hasProcessed && state.channelTags.length >= 2;
+    dom.trackChannelRow.hidden = !showTrack;
+    dom.roiClose.hidden = state.roiMode !== "polygon";
+}
+
+function resetRoi() {
+    state.roi = null;
+    state.roiDraft = null;
+    state.polygonPoints = [];
+    state.isDrawing = false;
+    updateRoiStatus();
+    renderFrame();
+}
+
+function updateRoiStatus() {
+    if (state.roiMode === "polygon" && state.polygonPoints.length) {
+        dom.roiStatus.textContent = `Polygon: ${state.polygonPoints.length} point(s)`;
+        return;
+    }
+    if (state.roi) {
+        dom.roiStatus.textContent = `${state.roi.kind} ROI set`;
+        return;
+    }
+    dom.roiStatus.textContent = state.roiMode
+        ? `Draw ${state.roiMode} on canvas`
+        : "No ROI";
+}
+
+function setRoiMode(mode) {
+    state.roiMode = mode;
+    state.roiDraft = null;
+    state.polygonPoints = [];
+    state.isDrawing = false;
+    for (const [key, button] of [
+        ["rect", dom.roiRect],
+        ["ellipse", dom.roiEllipse],
+        ["polygon", dom.roiPolygon],
+    ]) {
+        button.classList.toggle("btn--primary", mode === key);
+    }
+    dom.roiClose.hidden = mode !== "polygon";
+    updateRoiStatus();
+    renderFrame();
+}
+
+function canvasPixelFromEvent(event) {
+    const rect = dom.canvas.getBoundingClientRect();
+    const scaleX = dom.canvas.width / rect.width;
+    const scaleY = dom.canvas.height / rect.height;
+    const x = Math.floor((event.clientX - rect.left) * scaleX);
+    const y = Math.floor((event.clientY - rect.top) * scaleY);
+    return {
+        x: Math.max(0, Math.min(dom.canvas.width - 1, x)),
+        y: Math.max(0, Math.min(dom.canvas.height - 1, y)),
+    };
+}
+
+function drawRoiOverlay(context) {
+    context.save();
+    context.strokeStyle = "#00ff88";
+    context.fillStyle = "rgba(0, 255, 136, 0.12)";
+    context.lineWidth = 1;
+
+    const drawRect = (x0, y0, x1, y1, fill = false) => {
+        const left = Math.min(x0, x1);
+        const top = Math.min(y0, y1);
+        const width = Math.abs(x1 - x0);
+        const height = Math.abs(y1 - y0);
+        if (width < 1 || height < 1) return;
+        if (fill) context.fillRect(left + 0.5, top + 0.5, width, height);
+        context.strokeRect(left + 0.5, top + 0.5, width, height);
+    };
+
+    const drawEllipse = (cx, cy, rx, ry, fill = false) => {
+        if (rx < 0.5 || ry < 0.5) return;
+        context.beginPath();
+        context.ellipse(cx + 0.5, cy + 0.5, rx, ry, 0, 0, Math.PI * 2);
+        if (fill) context.fill();
+        context.stroke();
+    };
+
+    const drawPolygon = (points, closed = false) => {
+        if (points.length < 2) return;
+        context.beginPath();
+        context.moveTo(points[0][0] + 0.5, points[0][1] + 0.5);
+        for (let i = 1; i < points.length; i += 1) {
+            context.lineTo(points[i][0] + 0.5, points[i][1] + 0.5);
+        }
+        if (closed && points.length >= 3) {
+            context.closePath();
+            context.fill();
+        }
+        context.stroke();
+    };
+
+    const target = state.roiDraft || state.roi;
+    if (target) {
+        if (target.kind === "rect") {
+            drawRect(target.x0, target.y0, target.x1, target.y1, !state.roiDraft);
+        } else if (target.kind === "ellipse") {
+            if (state.roiDraft) {
+                const cx = (target.x0 + target.x1) / 2;
+                const cy = (target.y0 + target.y1) / 2;
+                const rx = Math.abs(target.x1 - target.x0) / 2;
+                const ry = Math.abs(target.y1 - target.y0) / 2;
+                drawEllipse(cx, cy, rx, ry, false);
+            } else {
+                drawEllipse(target.cx, target.cy, target.rx, target.ry, true);
+            }
+        } else if (target.kind === "polygon" && target.points?.length) {
+            drawPolygon(target.points, true);
+        }
+    } else if (state.roiMode === "polygon" && state.polygonPoints.length) {
+        drawPolygon(state.polygonPoints, false);
+    }
+
+    context.restore();
+}
+
+function finalizeRectDraft(draft) {
+    const x0 = Math.min(draft.x0, draft.x1);
+    const y0 = Math.min(draft.y0, draft.y1);
+    const x1 = Math.max(draft.x0, draft.x1);
+    const y1 = Math.max(draft.y0, draft.y1);
+    if (x1 - x0 < 2 || y1 - y0 < 2) return null;
+    return { kind: "rect", x0, y0, x1, y1 };
+}
+
+function finalizeEllipseDraft(draft) {
+    const cx = (draft.x0 + draft.x1) / 2;
+    const cy = (draft.y0 + draft.y1) / 2;
+    const rx = Math.abs(draft.x1 - draft.x0) / 2;
+    const ry = Math.abs(draft.y1 - draft.y0) / 2;
+    if (rx < 1 || ry < 1) return null;
+    return { kind: "ellipse", cx, cy, rx, ry };
+}
+
+function closePolygon() {
+    if (state.polygonPoints.length < 3) {
+        dom.roiStatus.textContent = "Polygon needs at least 3 points";
+        return;
+    }
+    state.roi = {
+        kind: "polygon",
+        points: state.polygonPoints.map(([x, y]) => [x, y]),
+    };
+    state.polygonPoints = [];
+    updateRoiStatus();
+    renderFrame();
+}
+
 function configureViewer(summary) {
     state.nFrames = Number(summary.n_frames) || 0;
     state.hasProcessed = Boolean(summary.has_processed);
+    state.hasDrift = Boolean(summary.has_drift);
     state.nPairs = Number(summary.n_pairs) || 0;
     state.channelTags = summary.channel_tags || [];
 
@@ -104,6 +275,7 @@ function configureViewer(summary) {
     });
     dom.channel.value = String(state.channel);
     dom.channel.disabled = !state.hasProcessed || state.channelTags.length < 2;
+    updateDriftControls();
 }
 
 function renderFrame() {
@@ -133,6 +305,7 @@ function renderFrame() {
         }
     }
     context.putImageData(image, 0, 0);
+    drawRoiOverlay(context);
 }
 
 async function showFrame(index, expectedName = state.name) {
@@ -220,6 +393,9 @@ async function acceptLoad(summary) {
     state.channelTags = [];
     state.frameData = null;
     state.climCustomized = false;
+    state.hasDrift = false;
+    resetRoi();
+    setRoiMode(null);
     clearTimeout(state.frameTimer);
     dom.name.value = summary.name;
     configureViewer(summary);
@@ -266,6 +442,66 @@ async function stackPairs() {
     } finally {
         dom.stackPairs.disabled = false;
         dom.mode.disabled = false;
+    }
+}
+
+async function applyDrift() {
+    if (!state.name) {
+        dom.status.textContent = "Load a PEEM stack before drift correction.";
+        return;
+    }
+    if (!state.roi) {
+        dom.status.textContent = "Draw an ROI on the canvas first.";
+        dom.roiStatus.textContent = "ROI required";
+        return;
+    }
+
+    const driftName = state.name;
+    const source = state.hasProcessed ? "processed" : "raw";
+    const refIndex = Math.max(0, Number(dom.ref.value) || 0);
+    const searchRadius = Math.max(1, Math.min(200, Number(dom.search.value) || 20));
+    const trackChannel = Number(dom.trackChannel.value) || 0;
+    const payload = {
+        source,
+        ref_index: refIndex,
+        search_radius: searchRadius,
+        track_channel: trackChannel,
+        roi: state.roi,
+    };
+
+    dom.applyDrift.disabled = true;
+    dom.ref.disabled = true;
+    dom.search.disabled = true;
+    dom.trackChannel.disabled = true;
+    dom.status.textContent = "Applying drift correction…";
+    dom.footerStatus.textContent = "Applying drift correction…";
+    try {
+        const result = await TensorSpecAPI.peemDrift(driftName, payload);
+        if (state.name !== driftName) return;
+        const summary = await TensorSpecAPI.peemMeta(driftName);
+        if (state.name !== driftName) return;
+        state.node = "processed";
+        state.pairIndex = 0;
+        state.channel = 0;
+        state.frameData = null;
+        state.climCustomized = false;
+        state.hasDrift = true;
+        configureViewer(summary);
+        dom.status.textContent =
+            `Drift applied · max |dx|=${result.max_abs_dx} · max |dy|=${result.max_abs_dy}`;
+        dom.footerStatus.textContent = `${state.name} · drift corrected`;
+        await showFrame(0, driftName);
+    } catch (error) {
+        if (state.name !== driftName) return;
+        dom.status.textContent = `Drift error: ${error.message}`;
+        dom.footerStatus.textContent = "Drift correction failed";
+    } finally {
+        if (state.name === driftName) {
+            dom.applyDrift.disabled = false;
+            dom.ref.disabled = false;
+            dom.search.disabled = false;
+            dom.trackChannel.disabled = false;
+        }
     }
 }
 
@@ -329,6 +565,15 @@ dom.serverPath.addEventListener("keydown", (event) => {
 
 dom.attachCsv.addEventListener("click", attachCsv);
 dom.stackPairs.addEventListener("click", stackPairs);
+dom.applyDrift.addEventListener("click", applyDrift);
+dom.roiRect.addEventListener("click", () => setRoiMode("rect"));
+dom.roiEllipse.addEventListener("click", () => setRoiMode("ellipse"));
+dom.roiPolygon.addEventListener("click", () => setRoiMode("polygon"));
+dom.roiClose.addEventListener("click", closePolygon);
+dom.roiClear.addEventListener("click", () => {
+    resetRoi();
+    setRoiMode(null);
+});
 dom.continueWithout.addEventListener("click", () => {
     dom.csvPrompt.hidden = true;
     dom.csvStatus.textContent = "Continuing without beamline CSV";
@@ -360,6 +605,7 @@ for (const input of [dom.rawNode, dom.processedNode]) {
         configureViewer({
             n_frames: state.nFrames,
             has_processed: state.hasProcessed,
+            has_drift: state.hasDrift,
             n_pairs: state.nPairs,
             channel_tags: state.channelTags,
         });
@@ -384,3 +630,57 @@ for (const input of [dom.vmin, dom.vmax]) {
         renderFrame();
     });
 }
+
+dom.canvas.addEventListener("mousedown", (event) => {
+    if (!state.frameData || !state.roiMode) return;
+    event.preventDefault();
+    const { x, y } = canvasPixelFromEvent(event);
+    if (state.roiMode === "polygon") {
+        state.polygonPoints.push([x, y]);
+        updateRoiStatus();
+        renderFrame();
+        return;
+    }
+    state.roiDraft = {
+        kind: state.roiMode,
+        x0: x,
+        y0: y,
+        x1: x,
+        y1: y,
+    };
+    state.isDrawing = true;
+    renderFrame();
+});
+
+dom.canvas.addEventListener("mousemove", (event) => {
+    if (!state.isDrawing || !state.roiDraft) return;
+    const { x, y } = canvasPixelFromEvent(event);
+    state.roiDraft.x1 = x;
+    state.roiDraft.y1 = y;
+    renderFrame();
+});
+
+dom.canvas.addEventListener("mouseup", () => {
+    if (!state.isDrawing || !state.roiDraft) return;
+    const finalized = state.roiDraft.kind === "ellipse"
+        ? finalizeEllipseDraft(state.roiDraft)
+        : finalizeRectDraft(state.roiDraft);
+    state.roiDraft = null;
+    state.isDrawing = false;
+    if (finalized) {
+        state.roi = finalized;
+    }
+    updateRoiStatus();
+    renderFrame();
+});
+
+dom.canvas.addEventListener("mouseleave", () => {
+    if (!state.isDrawing) return;
+    dom.canvas.dispatchEvent(new Event("mouseup"));
+});
+
+dom.canvas.addEventListener("dblclick", (event) => {
+    if (state.roiMode !== "polygon") return;
+    event.preventDefault();
+    closePolygon();
+});
