@@ -152,7 +152,7 @@ Grand App
 		- [x] load+view slice: attach on load + “update metadata” path
 		- [ ] apply I0 in sum-rule slice
 	- [x] load+view UI: upload or server path, metadata summary, frame canvas, frame slider, and contrast limits
-	- [ ] stack the CP and CM together or LH and LV together depending on the files
+	- [x] stack the CP and CM together or LH and LV together depending on the files
 	- [ ] once stacked, build drift-correction options
 	- [ ] separate those CP and CM or LH and LV
 	- [ ] make the background subtraction button to be applied to all
