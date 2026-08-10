@@ -12,12 +12,74 @@ from fastapi.testclient import TestClient
 from tensorspec.core.workspace import WorkspaceManager
 from tensorspec.web.server.app import create_app
 from tensorspec.web.server.routers import peem as peem_router
+from tensorspec.web.server.schemas import PeemPairRequest
 from tensorspec.web.server.session import Session, current_session
 
 
 class TestPeemApi(unittest.TestCase):
     def _session(self, tmp: str) -> Session:
         return Session(session_id="t", workspace=WorkspaceManager(project_dir=Path(tmp)))
+
+    def test_pair_writes_processed_and_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a_CP.tif", np.ones((4, 4), dtype=np.uint16))
+            tifffile.imwrite(root / "b_CM.tif", np.full((4, 4), 2, dtype=np.uint16))
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="pair_me",
+                session=session,
+            )
+
+            summary = peem_router.pair_peem(
+                "pair_me", PeemPairRequest(mode="CP_CM"), session=session
+            )
+
+            self.assertEqual(summary.n_pairs, 1)
+            self.assertTrue(summary.has_processed)
+            self.assertEqual(summary.shape, [1, 2, 4, 4])
+            meta = peem_router.get_meta("pair_me", session=session)
+            self.assertTrue(meta.has_processed)
+            self.assertEqual(meta.n_pairs, 1)
+            frame = peem_router.get_frame(
+                "pair_me", 0, node="processed", channel=1, session=session
+            )
+            self.assertEqual(frame.shape, [4, 4])
+            self.assertEqual(frame.channel_tag, "CM")
+            self.assertEqual(frame.node, "processed")
+            self.assertEqual(frame.pair, 0)
+
+    def test_pair_reports_unequal_unpaired_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a_CP.tif", np.ones((3, 3), dtype=np.uint16))
+            tifffile.imwrite(root / "b_CP.tif", np.full((3, 3), 2, dtype=np.uint16))
+            tifffile.imwrite(root / "c_CM.tif", np.full((3, 3), 3, dtype=np.uint16))
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="unequal",
+                session=session,
+            )
+
+            summary = peem_router.pair_peem(
+                "unequal", PeemPairRequest(mode="CP_CM"), session=session
+            )
+
+            self.assertEqual(summary.n_pairs, 1)
+            self.assertEqual(summary.unpaired_count, 1)
+            self.assertEqual(
+                peem_router.get_meta("unequal", session=session).unpaired_count, 1
+            )
 
     def test_load_server_path_with_csv(self):
         with tempfile.TemporaryDirectory() as tmp:
