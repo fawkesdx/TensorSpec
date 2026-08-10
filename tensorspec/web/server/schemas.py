@@ -306,6 +306,24 @@ class PeemLoadSummary(BaseModel):
     csv_candidates: list[str] = Field(default_factory=list)
 
 
+class PeemPairRequest(BaseModel):
+    """Pair polarization-tagged raw PEEM frames."""
+
+    mode: Literal["auto", "CP_CM", "LH_LV"] = "auto"
+
+
+class PeemPairSummary(BaseModel):
+    """Summary of a paired PEEM cube written to /processed."""
+
+    name: str
+    n_pairs: int
+    channel_tags: list[str]
+    unpaired_count: int
+    mode: str
+    has_processed: bool = True
+    shape: list[int]
+
+
 class PeemMeta(BaseModel):
     """PEEM stack metadata needed by the frame viewer."""
 
@@ -318,6 +336,11 @@ class PeemMeta(BaseModel):
     csv_attached: bool
     I0_present: bool
     I0: float | list[float | None] | None = None
+    has_processed: bool = False
+    pair_mode: str | None = None
+    n_pairs: int | None = None
+    channel_tags: list[str] = Field(default_factory=list)
+    unpaired_count: int = 0
 
 
 class PeemFrame(BaseModel):
@@ -330,6 +353,10 @@ class PeemFrame(BaseModel):
     vmax: float
     pol: str | None = None
     frame_name: str | None = None
+    node: str = "raw"
+    pair: int | None = None
+    channel: int | None = None
+    channel_tag: str | None = None
 
 
 class InplaneConvertRequest(BaseModel):

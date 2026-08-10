@@ -18,7 +18,14 @@ from tensorspec.core.io.peem_loaders import (
     load_tif_sequence,
     load_tif_stack,
 )
-from tensorspec.web.server.schemas import PeemFrame, PeemLoadSummary, PeemMeta
+from tensorspec.core.peem_engine import pair_stack
+from tensorspec.web.server.schemas import (
+    PeemFrame,
+    PeemLoadSummary,
+    PeemMeta,
+    PeemPairRequest,
+    PeemPairSummary,
+)
 from tensorspec.web.server.session import Session, current_session
 
 router = APIRouter(prefix="/api/peem", tags=["peem"])
@@ -213,7 +220,7 @@ def _auto_csv_choice(
 
 
 def _require_tensor(session: Session, name: str):
-    tensor = session.workspace.pull_tensor_data(name)
+    tensor = session.workspace.pull_tensor_data(name, "raw")
     if tensor is None:
         raise HTTPException(
             status_code=404,
@@ -395,6 +402,32 @@ def attach_csv(
     return _summary(name, _require_tensor(session, name))
 
 
+@router.post("/{name}/pair", response_model=PeemPairSummary)
+def pair_peem(
+    name: str,
+    request: PeemPairRequest,
+    session: Session = Depends(current_session),
+) -> PeemPairSummary:
+    """Pair tagged raw frames and replace the workspace /processed cube."""
+    tensor = _require_tensor(session, name)
+    try:
+        paired = pair_stack(tensor, request.mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not session.workspace.write_processed_data(name, paired):
+        raise HTTPException(status_code=404, detail=f"PEEM data '{name}' not found.")
+
+    metadata = paired.metadata or {}
+    return PeemPairSummary(
+        name=name,
+        n_pairs=int(paired.value.shape[0]),
+        channel_tags=[str(value) for value in metadata.get("channel_tags", [])],
+        unpaired_count=len(metadata.get("unpaired", [])),
+        mode=str(metadata.get("pair_mode", request.mode)),
+        shape=[int(size) for size in paired.value.shape],
+    )
+
+
 @router.get("/{name}/meta", response_model=PeemMeta)
 def get_meta(
     name: str,
@@ -402,6 +435,8 @@ def get_meta(
 ) -> PeemMeta:
     tensor = _require_tensor(session, name)
     metadata = tensor.metadata or {}
+    processed = session.workspace.pull_tensor_data(name, "processed")
+    processed_metadata = (processed.metadata or {}) if processed is not None else {}
     return PeemMeta(
         name=name,
         shape=[int(size) for size in tensor.value.shape],
@@ -412,6 +447,17 @@ def get_meta(
         csv_attached=bool(metadata.get("csv_attached", False)),
         I0_present=metadata.get("I0") is not None,
         I0=metadata.get("I0"),
+        has_processed=processed is not None,
+        pair_mode=(
+            str(processed_metadata.get("pair_mode"))
+            if processed_metadata.get("pair_mode") is not None
+            else None
+        ),
+        n_pairs=int(processed.value.shape[0]) if processed is not None else None,
+        channel_tags=[
+            str(value) for value in processed_metadata.get("channel_tags", [])
+        ],
+        unpaired_count=len(processed_metadata.get("unpaired", [])),
     )
 
 
@@ -419,12 +465,31 @@ def get_meta(
 def get_frame(
     name: str,
     i: int,
+    node: str = "raw",
+    channel: int = 0,
     session: Session = Depends(current_session),
 ) -> PeemFrame:
-    tensor = _require_tensor(session, name)
-    if not 0 <= i < tensor.value.shape[0]:
-        raise HTTPException(status_code=404, detail=f"Frame index {i} is out of range.")
-    frame = np.asarray(tensor.value[i], dtype=float)
+    if node == "raw":
+        tensor = _require_tensor(session, name)
+        if not 0 <= i < tensor.value.shape[0]:
+            raise HTTPException(status_code=404, detail=f"Frame index {i} is out of range.")
+        frame = np.asarray(tensor.value[i], dtype=float)
+    elif node == "processed":
+        tensor = session.workspace.pull_tensor_data(name, "processed")
+        if tensor is None:
+            raise HTTPException(
+                status_code=404, detail=f"PEEM data '{name}' has no processed pairs."
+            )
+        if not 0 <= i < tensor.value.shape[0]:
+            raise HTTPException(status_code=404, detail=f"Pair index {i} is out of range.")
+        if not 0 <= channel < tensor.value.shape[1]:
+            raise HTTPException(
+                status_code=404, detail=f"Channel index {channel} is out of range."
+            )
+        frame = np.asarray(tensor.value[i, channel], dtype=float)
+    else:
+        raise HTTPException(status_code=422, detail="node must be 'raw' or 'processed'.")
+
     finite = frame[np.isfinite(frame)]
     if finite.size:
         vmin, vmax = np.percentile(finite, [1, 99])
@@ -435,12 +500,23 @@ def get_frame(
     metadata = tensor.metadata or {}
     pol = metadata.get("pol", [])
     frame_names = metadata.get("frame_names", [])
+    channel_tags = metadata.get("channel_tags", [])
     return PeemFrame(
         index=i,
         shape=[int(size) for size in frame.shape],
         intensity=frame.tolist(),
         vmin=float(vmin),
         vmax=float(vmax),
-        pol=str(pol[i]) if i < len(pol) else None,
-        frame_name=str(frame_names[i]) if i < len(frame_names) else None,
+        pol=str(pol[i]) if node == "raw" and i < len(pol) else None,
+        frame_name=(
+            str(frame_names[i]) if node == "raw" and i < len(frame_names) else None
+        ),
+        node=node,
+        pair=i if node == "processed" else None,
+        channel=channel if node == "processed" else None,
+        channel_tag=(
+            str(channel_tags[channel])
+            if node == "processed" and channel < len(channel_tags)
+            else None
+        ),
     )
