@@ -9,6 +9,7 @@ import tifffile
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from tensorspec.core.data_models import TensorData
 from tensorspec.core.workspace import WorkspaceManager
 from tensorspec.web.server.app import create_app
 from tensorspec.web.server.routers import peem as peem_router
@@ -80,6 +81,68 @@ class TestPeemApi(unittest.TestCase):
             self.assertEqual(
                 peem_router.get_meta("unequal", session=session).unpaired_count, 1
             )
+
+    def test_meta_rejects_non_pair_processed_cube(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a_CP.tif", np.ones((2, 2), dtype=np.uint16))
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="invalid_processed",
+                session=session,
+            )
+            arbitrary = TensorData(
+                value=np.ones((1, 2, 2, 2)),
+                axes=[np.arange(1), np.arange(2), np.arange(2), np.arange(2)],
+                labels=["scan", "spin", "y", "x"],
+                units=["", "", "px", "px"],
+                data_type="Arbitrary processed data",
+                metadata={},
+            )
+            session.workspace.write_processed_data("invalid_processed", arbitrary)
+
+            with self.assertRaises(HTTPException) as ctx:
+                peem_router.get_meta("invalid_processed", session=session)
+
+            self.assertEqual(ctx.exception.status_code, 422)
+
+    def test_processed_frame_route_rejects_invalid_channel_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a_CP.tif", np.ones((2, 2), dtype=np.uint16))
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="invalid_shape",
+                session=session,
+            )
+            malformed = TensorData(
+                value=np.ones((1, 3, 2, 2)),
+                axes=[np.arange(1), np.arange(3), np.arange(2), np.arange(2)],
+                labels=["pair", "channel", "y", "x"],
+                units=["", "", "px", "px"],
+                data_type="Experimental PEEM (paired)",
+                metadata={"channel_tags": ["CP", "CM", "extra"]},
+            )
+            session.workspace.write_processed_data("invalid_shape", malformed)
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+
+            response = client.get(
+                "/api/peem/invalid_shape/frame/0?node=processed&channel=0"
+            )
+
+            self.assertEqual(response.status_code, 422, response.text)
 
     def test_load_server_path_with_csv(self):
         with tempfile.TemporaryDirectory() as tmp:
