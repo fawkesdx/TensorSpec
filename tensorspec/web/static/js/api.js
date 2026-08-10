@@ -220,8 +220,18 @@ const TensorSpecAPI = (() => {
         },
         peemMeta: (name) =>
             request(`/api/peem/${encodeURIComponent(name)}/meta`),
-        peemFrame: (name, i) =>
-            request(`/api/peem/${encodeURIComponent(name)}/frame/${i}`),
+        peemPair: (name, mode = "auto") =>
+            request(`/api/peem/${encodeURIComponent(name)}/pair`, {
+                method: "POST",
+                body: JSON.stringify({ mode }),
+            }),
+        peemFrame: (name, i, { node = "raw", channel = 0 } = {}) => {
+            const query = new URLSearchParams({ node });
+            if (node === "processed") query.set("channel", String(channel));
+            return request(
+                `/api/peem/${encodeURIComponent(name)}/frame/${i}?${query}`
+            );
+        },
         peemAttachCsv: (name, { csvFile, csvPath } = {}) => {
             const form = new FormData();
             if (csvFile) form.append("csv", csvFile);

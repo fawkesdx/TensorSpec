@@ -73,17 +73,17 @@
                         <button type="button" class="btn btn--block" id="peem-continue">Continue without</button>
                     </fieldset>
 
-                    <fieldset class="fieldset" disabled>
+                    <fieldset class="fieldset">
                         <legend>2. Contrast Pairing</legend>
                         <div class="form-row">
                             <label for="peem-mode">Pair Mode:</label>
                             <select class="field" id="peem-mode">
-                                <option>Auto-detect from filenames</option>
-                                <option>CP / CM (circular)</option>
-                                <option>LH / LV (linear)</option>
+                                <option value="auto">Auto-detect from filenames</option>
+                                <option value="CP_CM">CP / CM (circular)</option>
+                                <option value="LH_LV">LH / LV (linear)</option>
                             </select>
                         </div>
-                        <button type="button" class="btn btn--block" disabled>&#129521; Stack Pairs Together</button>
+                        <button type="button" class="btn btn--block" id="peem-stack-pairs">&#129521; Stack Pairs Together</button>
                         <button type="button" class="btn btn--block" disabled>&#9878; Separate Pairs</button>
                     </fieldset>
 
@@ -131,8 +131,31 @@
                             aria-label="PEEM intensity frame"></canvas>
                     </div>
                     <div>
-                        <label for="peem-frame">Frame <span id="peem-frame-label">0 / 0</span></label>
-                        <input id="peem-frame" type="range" min="0" max="0" value="0" disabled style="width:100%">
+                        <fieldset class="fieldset">
+                            <legend>View</legend>
+                            <div class="inline">
+                                <label class="check">
+                                    <input type="radio" name="peem-node" id="peem-node-raw" value="raw" checked>
+                                    Raw
+                                </label>
+                                <label class="check">
+                                    <input type="radio" name="peem-node" id="peem-node-processed" value="processed" disabled>
+                                    Processed
+                                </label>
+                            </div>
+                        </fieldset>
+                        <div id="peem-raw-controls">
+                            <label for="peem-frame">Frame <span id="peem-frame-label">0 / 0</span></label>
+                            <input id="peem-frame" type="range" min="0" max="0" value="0" disabled style="width:100%">
+                        </div>
+                        <div id="peem-processed-controls" hidden>
+                            <label for="peem-pair">Pair <span id="peem-pair-label">0 / 0</span></label>
+                            <input id="peem-pair" type="range" min="0" max="0" value="0" disabled style="width:100%">
+                            <div class="form-row" style="margin-top:8px">
+                                <label for="peem-channel">Channel:</label>
+                                <select class="field" id="peem-channel" disabled></select>
+                            </div>
+                        </div>
                         <div class="inline" style="margin-top:8px">
                             <label for="peem-vmin">Min:</label>
                             <input class="field field--num" id="peem-vmin" type="number" step="any" disabled>

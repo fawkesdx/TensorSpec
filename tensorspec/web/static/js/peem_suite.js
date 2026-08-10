@@ -15,9 +15,18 @@ const dom = {
     csvPrompt: el("peem-csv-prompt"),
     csvCandidates: el("peem-csv-candidates"),
     continueWithout: el("peem-continue"),
+    mode: el("peem-mode"),
+    stackPairs: el("peem-stack-pairs"),
     canvas: el("peem-canvas"),
+    rawNode: el("peem-node-raw"),
+    processedNode: el("peem-node-processed"),
+    rawControls: el("peem-raw-controls"),
+    processedControls: el("peem-processed-controls"),
     frame: el("peem-frame"),
     frameLabel: el("peem-frame-label"),
+    pair: el("peem-pair"),
+    pairLabel: el("peem-pair-label"),
+    channel: el("peem-channel"),
     frameMeta: el("peem-frame-meta"),
     vmin: el("peem-vmin"),
     vmax: el("peem-vmax"),
@@ -28,6 +37,12 @@ const state = {
     name: "",
     nFrames: 0,
     frameIndex: 0,
+    node: "raw",
+    hasProcessed: false,
+    nPairs: 0,
+    pairIndex: 0,
+    channel: 0,
+    channelTags: [],
     vmin: 0,
     vmax: 1,
     frameData: null,
@@ -45,6 +60,50 @@ function setBusy(busy, message = "") {
         dom.status.textContent = message;
         dom.footerStatus.textContent = message;
     }
+}
+
+function configureViewer(summary) {
+    state.nFrames = Number(summary.n_frames) || 0;
+    state.hasProcessed = Boolean(summary.has_processed);
+    state.nPairs = Number(summary.n_pairs) || 0;
+    state.channelTags = summary.channel_tags || [];
+
+    if (!state.hasProcessed && state.node === "processed") state.node = "raw";
+    state.frameIndex = Math.min(state.frameIndex, Math.max(0, state.nFrames - 1));
+    state.pairIndex = Math.min(state.pairIndex, Math.max(0, state.nPairs - 1));
+    state.channel = Math.min(state.channel, Math.max(0, state.channelTags.length - 1));
+
+    dom.processedNode.disabled = !state.hasProcessed;
+    dom.rawNode.checked = state.node === "raw";
+    dom.processedNode.checked = state.node === "processed";
+    dom.rawControls.hidden = state.node !== "raw";
+    dom.processedControls.hidden = state.node !== "processed";
+
+    dom.frame.min = "0";
+    dom.frame.max = String(Math.max(0, state.nFrames - 1));
+    dom.frame.value = String(state.frameIndex);
+    dom.frame.disabled = state.nFrames < 2;
+    dom.frameLabel.textContent = state.nFrames
+        ? `${state.frameIndex + 1} / ${state.nFrames}`
+        : "0 / 0";
+
+    dom.pair.min = "0";
+    dom.pair.max = String(Math.max(0, state.nPairs - 1));
+    dom.pair.value = String(state.pairIndex);
+    dom.pair.disabled = state.nPairs < 2;
+    dom.pairLabel.textContent = state.nPairs
+        ? `${state.pairIndex + 1} / ${state.nPairs}`
+        : "0 / 0";
+
+    dom.channel.replaceChildren();
+    state.channelTags.forEach((tag, index) => {
+        const option = document.createElement("option");
+        option.value = String(index);
+        option.textContent = tag;
+        dom.channel.append(option);
+    });
+    dom.channel.value = String(state.channel);
+    dom.channel.disabled = !state.hasProcessed || state.channelTags.length < 2;
 }
 
 function renderFrame() {
@@ -79,24 +138,41 @@ function renderFrame() {
 async function showFrame(index) {
     if (!state.name) return;
     const requestId = ++state.requestId;
-    const clamped = Math.max(0, Math.min(state.nFrames - 1, Number(index) || 0));
-    dom.frameMeta.textContent = `Loading frame ${clamped + 1}…`;
+    const count = state.node === "processed" ? state.nPairs : state.nFrames;
+    if (!count) return;
+    const clamped = Math.max(0, Math.min(count - 1, Number(index) || 0));
+    const itemName = state.node === "processed" ? "pair" : "frame";
+    dom.frameMeta.textContent = `Loading ${itemName} ${clamped + 1}…`;
     try {
-        const frame = await TensorSpecAPI.peemFrame(state.name, clamped);
+        const frame = await TensorSpecAPI.peemFrame(state.name, clamped, {
+            node: state.node,
+            channel: state.channel,
+        });
         if (requestId !== state.requestId) return;
-        state.frameIndex = clamped;
+        if (state.node === "processed") {
+            state.pairIndex = clamped;
+            dom.pair.value = String(clamped);
+            dom.pairLabel.textContent = `${clamped + 1} / ${state.nPairs}`;
+        } else {
+            state.frameIndex = clamped;
+            dom.frame.value = String(clamped);
+            dom.frameLabel.textContent = `${clamped + 1} / ${state.nFrames}`;
+        }
         state.frameData = frame;
-        dom.frame.value = String(clamped);
-        dom.frameLabel.textContent = `${clamped + 1} / ${state.nFrames}`;
         if (!state.climCustomized) {
             state.vmin = frame.vmin;
             state.vmax = frame.vmax;
             dom.vmin.value = String(frame.vmin);
             dom.vmax.value = String(frame.vmax);
         }
-        const details = [frame.frame_name, frame.pol, `${frame.shape[1]} × ${frame.shape[0]}`]
-            .filter(Boolean);
-        dom.frameMeta.textContent = details.join(" · ");
+        const details = state.node === "processed"
+            ? [
+                `Pair ${clamped + 1}`,
+                frame.channel_tag,
+                `${frame.shape[1]} × ${frame.shape[0]}`,
+            ]
+            : [frame.frame_name, frame.pol, `${frame.shape[1]} × ${frame.shape[0]}`];
+        dom.frameMeta.textContent = details.filter(Boolean).join(" · ");
         renderFrame();
     } catch (error) {
         if (requestId === state.requestId) {
@@ -135,22 +211,58 @@ function showCsvState(summary) {
 
 async function acceptLoad(summary) {
     state.name = summary.name;
-    state.nFrames = summary.n_frames;
     state.frameIndex = 0;
+    state.node = "raw";
+    state.hasProcessed = false;
+    state.nPairs = 0;
+    state.pairIndex = 0;
+    state.channel = 0;
+    state.channelTags = [];
     state.frameData = null;
     state.climCustomized = false;
     clearTimeout(state.frameTimer);
     dom.name.value = summary.name;
-    dom.frame.min = "0";
-    dom.frame.max = String(Math.max(0, summary.n_frames - 1));
-    dom.frame.value = "0";
-    dom.frame.disabled = summary.n_frames < 2;
+    configureViewer(summary);
     dom.vmin.disabled = false;
     dom.vmax.disabled = false;
     dom.status.textContent = `Loaded ${summary.name}: ${summary.n_frames} frame(s)`;
     dom.footerStatus.textContent = `${summary.name} · ${summary.n_frames} frame(s)`;
     showCsvState(summary);
     await showFrame(0);
+}
+
+async function stackPairs() {
+    if (!state.name) {
+        dom.status.textContent = "Load a PEEM stack before pairing.";
+        return;
+    }
+
+    dom.stackPairs.disabled = true;
+    dom.mode.disabled = true;
+    dom.status.textContent = "Stacking contrast pairs…";
+    dom.footerStatus.textContent = "Stacking contrast pairs…";
+    try {
+        const result = await TensorSpecAPI.peemPair(state.name, dom.mode.value);
+        const summary = await TensorSpecAPI.peemMeta(state.name);
+        state.node = "processed";
+        state.pairIndex = 0;
+        state.channel = 0;
+        state.frameData = null;
+        state.climCustomized = false;
+        configureViewer(summary);
+        const unpaired = result.unpaired_count === 1
+            ? "1 unpaired frame"
+            : `${result.unpaired_count} unpaired frames`;
+        dom.status.textContent = `Stacked ${result.n_pairs} pair(s) · ${unpaired}`;
+        dom.footerStatus.textContent = `${state.name} · ${result.n_pairs} pair(s)`;
+        await showFrame(0);
+    } catch (error) {
+        dom.status.textContent = `Pairing error: ${error.message}`;
+        dom.footerStatus.textContent = "Pairing failed";
+    } finally {
+        dom.stackPairs.disabled = false;
+        dom.mode.disabled = false;
+    }
 }
 
 async function loadPeem(source) {
@@ -212,6 +324,7 @@ dom.serverPath.addEventListener("keydown", (event) => {
 });
 
 dom.attachCsv.addEventListener("click", attachCsv);
+dom.stackPairs.addEventListener("click", stackPairs);
 dom.continueWithout.addEventListener("click", () => {
     dom.csvPrompt.hidden = true;
     dom.csvStatus.textContent = "Continuing without beamline CSV";
@@ -223,6 +336,37 @@ dom.frame.addEventListener("input", () => {
     state.requestId += 1;
     clearTimeout(state.frameTimer);
     state.frameTimer = setTimeout(() => showFrame(index), 125);
+});
+
+dom.pair.addEventListener("input", () => {
+    const index = Math.max(0, Math.min(state.nPairs - 1, Number(dom.pair.value) || 0));
+    dom.pairLabel.textContent = `${index + 1} / ${state.nPairs}`;
+    state.requestId += 1;
+    clearTimeout(state.frameTimer);
+    state.frameTimer = setTimeout(() => showFrame(index), 125);
+});
+
+for (const input of [dom.rawNode, dom.processedNode]) {
+    input.addEventListener("change", () => {
+        if (!input.checked) return;
+        state.requestId += 1;
+        clearTimeout(state.frameTimer);
+        state.node = input.value;
+        state.climCustomized = false;
+        configureViewer({
+            n_frames: state.nFrames,
+            has_processed: state.hasProcessed,
+            n_pairs: state.nPairs,
+            channel_tags: state.channelTags,
+        });
+        showFrame(state.node === "processed" ? state.pairIndex : state.frameIndex);
+    });
+}
+
+dom.channel.addEventListener("change", () => {
+    state.channel = Number(dom.channel.value) || 0;
+    state.climCustomized = false;
+    showFrame(state.pairIndex);
 });
 
 for (const input of [dom.vmin, dom.vmax]) {
