@@ -8,6 +8,8 @@ from tensorspec.core.data_models import TensorData
 
 PairMode = Literal["auto", "CP_CM", "LH_LV"]
 
+_VALID_MODES = frozenset({"auto", "CP_CM", "LH_LV"})
+
 _PASSTHROUGH_KEYS = (
     "csv_attached",
     "I0",
@@ -24,6 +26,9 @@ def resolve_pair_mode(pol: list[str], mode: PairMode) -> tuple[str, list[str]]:
     auto: CP/CM-only → ("CP_CM", ["CP","CM"]); LH/LV-only → ("LH_LV", ["LH","LV"]);
     mixed or none → ValueError.
     """
+    if mode not in _VALID_MODES:
+        raise ValueError(f"Unsupported pair mode: {mode!r}")
+
     if mode == "CP_CM":
         return "CP_CM", ["CP", "CM"]
     if mode == "LH_LV":

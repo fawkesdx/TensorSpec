@@ -54,3 +54,7 @@ class TestPairStack(unittest.TestCase):
     def test_zero_pairs_fails(self):
         with self.assertRaises(ValueError):
             eng.pair_stack(_raw(["CP", "CP"]), "CP_CM")
+
+    def test_invalid_mode_fails(self):
+        with self.assertRaises(ValueError):
+            eng.pair_stack(_raw(["CP", "CM"]), "bogus")
