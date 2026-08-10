@@ -237,13 +237,16 @@ async function stackPairs() {
         return;
     }
 
+    const pairedName = state.name;
     dom.stackPairs.disabled = true;
     dom.mode.disabled = true;
     dom.status.textContent = "Stacking contrast pairs…";
     dom.footerStatus.textContent = "Stacking contrast pairs…";
     try {
-        const result = await TensorSpecAPI.peemPair(state.name, dom.mode.value);
-        const summary = await TensorSpecAPI.peemMeta(state.name);
+        const result = await TensorSpecAPI.peemPair(pairedName, dom.mode.value);
+        if (state.name !== pairedName) return;
+        const summary = await TensorSpecAPI.peemMeta(pairedName);
+        if (state.name !== pairedName) return;
         state.node = "processed";
         state.pairIndex = 0;
         state.channel = 0;
@@ -257,6 +260,7 @@ async function stackPairs() {
         dom.footerStatus.textContent = `${state.name} · ${result.n_pairs} pair(s)`;
         await showFrame(0);
     } catch (error) {
+        if (state.name !== pairedName) return;
         dom.status.textContent = `Pairing error: ${error.message}`;
         dom.footerStatus.textContent = "Pairing failed";
     } finally {
