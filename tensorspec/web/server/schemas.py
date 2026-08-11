@@ -444,6 +444,7 @@ class PeemMeta(BaseModel):
     has_processed_bg: bool = False
     energy_source: str | None = None
     processed_bg_node: str | None = None
+    n_bg_frames: int | None = None
 
 
 class PeemFrame(BaseModel):

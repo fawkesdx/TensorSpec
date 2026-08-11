@@ -799,6 +799,7 @@ class TestPeemApi(unittest.TestCase):
             self.assertTrue(meta_body["has_processed_bg"])
             self.assertEqual(meta_body["energy_source"], "index")
             self.assertEqual(meta_body["processed_bg_node"], "processed/bg")
+            self.assertEqual(meta_body["n_bg_frames"], 5)
             self.assertIn("bg", meta_body["separated_channels"])
 
             frame = client.get(

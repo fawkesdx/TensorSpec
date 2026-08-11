@@ -507,6 +507,7 @@ def _bg_meta_fields(session: Session, name: str) -> dict:
             "has_processed_bg": False,
             "energy_source": None,
             "processed_bg_node": None,
+            "n_bg_frames": None,
         }
     attrs = analysis.attrs or {}
     energy_source = attrs.get("energy_source")
@@ -517,11 +518,18 @@ def _bg_meta_fields(session: Session, name: str) -> dict:
         child = "bg"
     processed_bg_node = f"processed/{child}"
     children = session.workspace.list_processed_children(name)
+    has_processed_bg = child in children
+    n_bg_frames: int | None = None
+    if has_processed_bg:
+        bg_tensor = session.workspace.pull_tensor_data(name, processed_bg_node)
+        if bg_tensor is not None and bg_tensor.value.ndim >= 1:
+            n_bg_frames = int(bg_tensor.value.shape[0])
     return {
         "has_background": True,
-        "has_processed_bg": child in children,
+        "has_processed_bg": has_processed_bg,
         "energy_source": str(energy_source) if energy_source is not None else None,
         "processed_bg_node": processed_bg_node,
+        "n_bg_frames": n_bg_frames,
     }
 
 
@@ -920,6 +928,7 @@ def get_meta(
         has_processed_bg=bg_meta["has_processed_bg"],
         energy_source=bg_meta["energy_source"],
         processed_bg_node=bg_meta["processed_bg_node"],
+        n_bg_frames=bg_meta["n_bg_frames"],
     )
 
 
