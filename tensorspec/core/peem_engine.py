@@ -328,3 +328,52 @@ def pair_stack(tensor: TensorData, mode: PairMode) -> TensorData:
         data_type="Experimental PEEM (paired)",
         metadata=metadata,
     )
+
+
+_SEPARATE_PASSTHROUGH_KEYS = _PASSTHROUGH_KEYS + (
+    "pair_mode",
+    "drift_method",
+    "drift_shifts",
+)
+
+
+def separate_pairs(tensor: TensorData) -> dict[str, TensorData]:
+    if (
+        tensor.data_type != "Experimental PEEM (paired)"
+        or list(tensor.labels) != ["pair", "channel", "y", "x"]
+        or tensor.value.ndim != 4
+        or tensor.value.shape[1] != 2
+    ):
+        raise ValueError(
+            "separate_pairs requires a (pair, channel=2, y, x) paired PEEM cube"
+        )
+    tags = list(tensor.metadata.get("channel_tags") or [])
+    if len(tags) != 2 or any(not str(t).strip() or "/" in str(t) for t in tags):
+        raise ValueError("channel_tags must be two single-segment names")
+    tags = [str(t).strip() for t in tags]
+    if tags[0] == tags[1]:
+        raise ValueError("channel_tags must be distinct")
+
+    n_pairs, _, y_size, x_size = tensor.value.shape
+    out: dict[str, TensorData] = {}
+    for ch, tag in enumerate(tags):
+        meta: dict[str, Any] = {
+            "channel_tag": tag,
+            "separated_from": "paired",
+        }
+        for key in _SEPARATE_PASSTHROUGH_KEYS:
+            if key in tensor.metadata:
+                meta[key] = tensor.metadata[key]
+        out[tag] = TensorData(
+            value=np.asarray(tensor.value[:, ch], dtype=float),
+            axes=[
+                np.arange(n_pairs),
+                np.asarray(tensor.axes[2]),
+                np.asarray(tensor.axes[3]),
+            ],
+            labels=["frame", "y", "x"],
+            units=["", tensor.units[2], tensor.units[3]],
+            data_type=f"Experimental PEEM ({tag})",
+            metadata=meta,
+        )
+    return out
