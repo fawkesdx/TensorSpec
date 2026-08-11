@@ -88,6 +88,16 @@ class DataTreeBuilder:
         return ds
 
     @staticmethod
+    def _append_history(tree: DataTree, message: str) -> None:
+        history_node = tree["history"]
+        history = history_node.to_dataset() if hasattr(history_node, "to_dataset") else history_node.ds
+        log = list(history.attrs.get("log") or [])
+        log.append(message)
+        history = history.copy()
+        history.attrs["log"] = log
+        tree["history"] = history
+
+    @staticmethod
     def merge_raw_attrs(tree: DataTree, attrs: dict) -> DataTree:
         """Merge metadata into ``/raw`` without rebuilding its intensity cube."""
         tree["raw"].ds.attrs.update(attrs)
@@ -98,16 +108,10 @@ class DataTreeBuilder:
         """Replace /processed on an existing tree and append a history line."""
         ds = DataTreeBuilder.dataset_from_tensor(tensor_data)
         tree["processed"] = ds
-
-        history_node = tree["history"]
-        history = history_node.to_dataset() if hasattr(history_node, "to_dataset") else history_node.ds
-        log = list(history.attrs.get("log") or [])
-        log.append(
-            f"[{datetime.datetime.now().time()}] Wrote /processed ({tensor_data.data_type})"
+        DataTreeBuilder._append_history(
+            tree,
+            f"[{datetime.datetime.now().time()}] Wrote /processed ({tensor_data.data_type})",
         )
-        history = history.copy()
-        history.attrs["log"] = log
-        tree["history"] = history
         return tree
 
     @staticmethod
@@ -120,16 +124,10 @@ class DataTreeBuilder:
             raise ValueError("Processed child name must be a single path segment.")
         ds = DataTreeBuilder.dataset_from_tensor(tensor_data)
         tree[f"processed/{safe}"] = ds
-
-        history_node = tree["history"]
-        history = history_node.to_dataset() if hasattr(history_node, "to_dataset") else history_node.ds
-        log = list(history.attrs.get("log") or [])
-        log.append(
-            f"[{datetime.datetime.now().time()}] Wrote /processed/{safe} ({tensor_data.data_type})"
+        DataTreeBuilder._append_history(
+            tree,
+            f"[{datetime.datetime.now().time()}] Wrote /processed/{safe} ({tensor_data.data_type})",
         )
-        history = history.copy()
-        history.attrs["log"] = log
-        tree["history"] = history
         return tree
 
     @staticmethod
@@ -137,7 +135,7 @@ class DataTreeBuilder:
         """Return child names under /processed that contain a 'data' variable."""
         try:
             processed = tree["processed"]
-        except Exception:
+        except KeyError:
             return []
         names: list[str] = []
         for name, child in processed.children.items():
@@ -153,12 +151,8 @@ class DataTreeBuilder:
         if not safe or "/" in safe:
             raise ValueError("Analysis node name must be a single path segment.")
         tree[f"analysis/{safe}"] = dataset
-
-        history_node = tree["history"]
-        history = history_node.to_dataset() if hasattr(history_node, "to_dataset") else history_node.ds
-        log = list(history.attrs.get("log") or [])
-        log.append(f"[{datetime.datetime.now().time()}] Wrote /analysis/{safe}")
-        history = history.copy()
-        history.attrs["log"] = log
-        tree["history"] = history
+        DataTreeBuilder._append_history(
+            tree,
+            f"[{datetime.datetime.now().time()}] Wrote /analysis/{safe}",
+        )
         return tree
