@@ -245,6 +245,18 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
+        peemBgPreview: (name, payload) =>
+            request(`/api/peem/${encodeURIComponent(name)}/bg/preview`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        peemBgApply: (name, payload) =>
+            request(`/api/peem/${encodeURIComponent(name)}/bg/apply`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        peemBgSpectrum: (name) =>
+            request(`/api/peem/${encodeURIComponent(name)}/bg/spectrum`),
         processRoles: (name) =>
             request(`/api/arpes/process/${encodeURIComponent(name)}/roles`),
         processSuggestCenter: (name, payload) =>

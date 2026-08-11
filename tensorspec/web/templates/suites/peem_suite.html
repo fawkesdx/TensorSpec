@@ -115,10 +115,43 @@
                         <button type="button" class="btn btn--block" id="peem-apply-drift">&#127919; Apply Drift Correction</button>
                     </fieldset>
 
-                    <fieldset class="fieldset" disabled>
+                    <fieldset class="fieldset" id="peem-bg-controls" disabled>
                         <legend>4. Background &amp; Analysis</legend>
-                        <label class="check"><input type="checkbox" checked> Apply background subtraction to all frames</label>
-                        <button type="button" class="btn btn--block" disabled>&#9660; Subtract Background</button>
+                        <label class="check">
+                            <input type="checkbox" id="peem-bg-use-roi">
+                            Use ROI for spectrum (picture-wide if unchecked)
+                        </label>
+                        <div class="form-row">
+                            <label for="peem-bg-e0">Pre-edge e0:</label>
+                            <input class="field field--num" id="peem-bg-e0" type="number" step="any" value="0">
+                        </div>
+                        <div class="form-row">
+                            <label for="peem-bg-e1">Pre-edge e1:</label>
+                            <input class="field field--num" id="peem-bg-e1" type="number" step="any" value="1">
+                        </div>
+                        <details class="hint" style="margin:8px 0">
+                            <summary>Ensemble (optional)</summary>
+                            <div class="form-row" style="margin-top:8px">
+                                <label for="peem-bg-ensemble-delta">Window delta:</label>
+                                <input class="field field--num" id="peem-bg-ensemble-delta" type="number" step="any" placeholder="Auto (5% span)">
+                            </div>
+                            <div class="form-row">
+                                <label for="peem-bg-ensemble-n">Ensemble n:</label>
+                                <input class="field field--num" id="peem-bg-ensemble-n" type="number" min="1" max="101" value="21">
+                            </div>
+                        </details>
+                        <div class="inline" style="flex-wrap:wrap;gap:8px;margin:8px 0">
+                            <label class="check"><input type="checkbox" id="peem-bg-show-raw" checked> Raw</label>
+                            <label class="check"><input type="checkbox" id="peem-bg-show-bg" checked> BG</label>
+                            <label class="check"><input type="checkbox" id="peem-bg-show-band" checked> BG ± std</label>
+                            <label class="check"><input type="checkbox" id="peem-bg-show-sub" checked> Subtracted</label>
+                        </div>
+                        <canvas id="peem-bg-plot" width="400" height="180"
+                            style="width:100%;height:auto;display:block;background:#111;cursor:crosshair"
+                            aria-label="Mean spectrum and background fit"></canvas>
+                        <p class="hint" id="peem-bg-status">Load a stack to preview background.</p>
+                        <button type="button" class="btn btn--block" id="peem-bg-preview">Preview Background</button>
+                        <button type="button" class="btn btn--block" id="peem-bg-apply">Apply to All Frames</button>
                         <button type="button" class="btn btn--block" disabled>&#931; Run Sum Rule Analysis (CP/CM)</button>
                         <p class="hint">Sum rule analysis requires a paired CP/CM stack.</p>
                     </fieldset>
