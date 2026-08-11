@@ -24,6 +24,20 @@ const dom = {
     trackChannelRow: el("peem-track-channel-row"),
     trackChannel: el("peem-track-channel"),
     applyDrift: el("peem-apply-drift"),
+    bgControls: el("peem-bg-controls"),
+    bgUseRoi: el("peem-bg-use-roi"),
+    bgE0: el("peem-bg-e0"),
+    bgE1: el("peem-bg-e1"),
+    bgEnsembleDelta: el("peem-bg-ensemble-delta"),
+    bgEnsembleN: el("peem-bg-ensemble-n"),
+    bgShowRaw: el("peem-bg-show-raw"),
+    bgShowBg: el("peem-bg-show-bg"),
+    bgShowBand: el("peem-bg-show-band"),
+    bgShowSub: el("peem-bg-show-sub"),
+    bgPlot: el("peem-bg-plot"),
+    bgStatus: el("peem-bg-status"),
+    bgPreview: el("peem-bg-preview"),
+    bgApply: el("peem-bg-apply"),
     roiRect: el("peem-roi-rect"),
     roiEllipse: el("peem-roi-ellipse"),
     roiPolygon: el("peem-roi-polygon"),
@@ -61,6 +75,13 @@ const state = {
     channelTags: [],
     separatedChannels: [],
     separating: false,
+    bgBusy: false,
+    bgPreviewData: null,
+    hasBackground: false,
+    processedBgNode: null,
+    energySource: null,
+    bgDrag: null,
+    bgPreviewTimer: null,
     vmin: 0,
     vmax: 1,
     frameData: null,
@@ -173,6 +194,332 @@ function setBusy(busy, message = "") {
     if (message) {
         dom.status.textContent = message;
         dom.footerStatus.textContent = message;
+    }
+}
+
+function defaultBgWindow(energyOrCount) {
+    if (Array.isArray(energyOrCount) && energyOrCount.length > 1) {
+        const eMin = energyOrCount[0];
+        const eMax = energyOrCount[energyOrCount.length - 1];
+        const span = eMax - eMin;
+        return { e0: eMin, e1: eMin + 0.2 * span };
+    }
+    const n = Math.max(2, Number(energyOrCount) || state.nFrames || 2);
+    return { e0: 0, e1: 0.2 * (n - 1) };
+}
+
+function setDefaultBgWindow(energyOrCount) {
+    const { e0, e1 } = defaultBgWindow(energyOrCount);
+    dom.bgE0.value = String(e0);
+    dom.bgE1.value = String(e1);
+}
+
+function buildBgPayload() {
+    const deltaRaw = dom.bgEnsembleDelta.value.trim();
+    const payload = {
+        node: state.node,
+        channel: state.channel,
+        use_roi: dom.bgUseRoi.checked,
+        e0: Number(dom.bgE0.value),
+        e1: Number(dom.bgE1.value),
+        ensemble_n: Math.max(1, Math.min(101, Number(dom.bgEnsembleN.value) || 21)),
+    };
+    if (deltaRaw) payload.ensemble_delta = Number(deltaRaw);
+    if (payload.use_roi) payload.roi = state.roi;
+    return payload;
+}
+
+function bgPlotLayout() {
+    const width = dom.bgPlot.width;
+    const height = dom.bgPlot.height;
+    const pad = { left: 48, right: 12, top: 12, bottom: 28 };
+    return {
+        width,
+        height,
+        pad,
+        plotW: width - pad.left - pad.right,
+        plotH: height - pad.top - pad.bottom,
+    };
+}
+
+function energyAtPlotX(xPx, energy) {
+    const { pad, plotW } = bgPlotLayout();
+    const frac = Math.max(0, Math.min(1, (xPx - pad.left) / plotW));
+    const idx = frac * (energy.length - 1);
+    const i0 = Math.floor(idx);
+    const i1 = Math.min(energy.length - 1, i0 + 1);
+    const t = idx - i0;
+    return energy[i0] * (1 - t) + energy[i1] * t;
+}
+
+function plotXForEnergy(e, energy) {
+    const { pad, plotW } = bgPlotLayout();
+    let idx = 0;
+    for (let i = 1; i < energy.length; i += 1) {
+        if (energy[i] >= e) break;
+        idx = i;
+    }
+    if (idx >= energy.length - 1) return pad.left + plotW;
+    const e0 = energy[idx];
+    const e1 = energy[idx + 1];
+    const t = e1 === e0 ? 0 : (e - e0) / (e1 - e0);
+    const frac = (idx + t) / (energy.length - 1);
+    return pad.left + frac * plotW;
+}
+
+function drawBgPlot() {
+    const ctx = dom.bgPlot.getContext("2d");
+    const layout = bgPlotLayout();
+    const { width, height, pad, plotW, plotH } = layout;
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, width, height);
+
+    const data = state.bgPreviewData;
+    if (!data?.energy?.length) {
+        ctx.fillStyle = "#888";
+        ctx.font = "12px sans-serif";
+        ctx.fillText("Preview to show spectrum", pad.left, pad.top + plotH / 2);
+        return;
+    }
+
+    const { energy, spectrum, bg, bg_std: bgStd, subtracted } = data;
+    const series = [];
+    if (dom.bgShowRaw.checked) series.push(...spectrum);
+    if (dom.bgShowBg.checked) series.push(...bg);
+    if (dom.bgShowBand.checked) {
+        for (let i = 0; i < bg.length; i += 1) {
+            series.push(bg[i] + bgStd[i], bg[i] - bgStd[i]);
+        }
+    }
+    if (dom.bgShowSub.checked) series.push(...subtracted);
+
+    let yMin = Infinity;
+    let yMax = -Infinity;
+    for (const v of series) {
+        if (Number.isFinite(v)) {
+            yMin = Math.min(yMin, v);
+            yMax = Math.max(yMax, v);
+        }
+    }
+    if (!Number.isFinite(yMin) || yMin === yMax) {
+        yMin = 0;
+        yMax = 1;
+    }
+    const yPad = 0.05 * (yMax - yMin || 1);
+    yMin -= yPad;
+    yMax += yPad;
+
+    const xOf = (i) => pad.left + (i / (energy.length - 1)) * plotW;
+    const yOf = (v) => pad.top + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+
+    ctx.strokeStyle = "#444";
+    ctx.beginPath();
+    ctx.moveTo(pad.left, pad.top + plotH);
+    ctx.lineTo(pad.left + plotW, pad.top + plotH);
+    ctx.stroke();
+
+    if (dom.bgShowBand.checked && bgStd?.length) {
+        ctx.fillStyle = "rgba(255, 140, 0, 0.2)";
+        ctx.beginPath();
+        for (let i = 0; i < energy.length; i += 1) {
+            const x = xOf(i);
+            const y = yOf(bg[i] + bgStd[i]);
+            if (i === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+        }
+        for (let i = energy.length - 1; i >= 0; i -= 1) {
+            ctx.lineTo(xOf(i), yOf(bg[i] - bgStd[i]));
+        }
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    const drawLine = (values, color) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < values.length; i += 1) {
+            const v = values[i];
+            if (!Number.isFinite(v)) continue;
+            const x = xOf(i);
+            const y = yOf(v);
+            if (!started) {
+                ctx.moveTo(x, y);
+                started = true;
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+    };
+
+    if (dom.bgShowRaw.checked) drawLine(spectrum, "#ddd");
+    if (dom.bgShowBg.checked) drawLine(bg, "#ff8c00");
+    if (dom.bgShowSub.checked) drawLine(subtracted, "#4dd0e1");
+
+    const e0 = Number(dom.bgE0.value);
+    const e1 = Number(dom.bgE1.value);
+    for (const [e, label] of [[e0, "e0"], [e1, "e1"]]) {
+        if (!Number.isFinite(e)) continue;
+        const x = plotXForEnergy(e, energy);
+        ctx.strokeStyle = "#ffeb3b";
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, pad.top);
+        ctx.lineTo(x, pad.top + plotH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = "#ffeb3b";
+        ctx.font = "10px sans-serif";
+        ctx.fillText(label, x + 2, pad.top + 10);
+    }
+
+    ctx.fillStyle = "rgba(255, 235, 59, 0.12)";
+    const x0 = plotXForEnergy(Math.min(e0, e1), energy);
+    const x1 = plotXForEnergy(Math.max(e0, e1), energy);
+    ctx.fillRect(x0, pad.top, x1 - x0, plotH);
+
+    ctx.fillStyle = "#888";
+    ctx.font = "10px sans-serif";
+    const xLabel = state.energySource === "csv" ? "Energy (eV)" : "Frame index";
+    ctx.fillText(xLabel, pad.left, height - 8);
+}
+
+function nearestBgHandle(xPx, energy) {
+    const e0 = Number(dom.bgE0.value);
+    const e1 = Number(dom.bgE1.value);
+    if (!Number.isFinite(e0) || !Number.isFinite(e1)) return null;
+    const x0 = plotXForEnergy(e0, energy);
+    const x1 = plotXForEnergy(e1, energy);
+    const threshold = 8;
+    if (Math.abs(xPx - x0) <= threshold) return "e0";
+    if (Math.abs(xPx - x1) <= threshold) return "e1";
+    const lo = Math.min(x0, x1);
+    const hi = Math.max(x0, x1);
+    if (xPx >= lo && xPx <= hi) return "window";
+    return null;
+}
+
+function scheduleBgPreview() {
+    clearTimeout(state.bgPreviewTimer);
+    state.bgPreviewTimer = setTimeout(() => {
+        if (!state.bgBusy && state.name) previewBg();
+    }, 300);
+}
+
+function updateBgControls(summary) {
+    const enabled = (Number(summary?.n_frames) || state.nFrames) > 0;
+    dom.bgControls.disabled = !enabled;
+    dom.bgPreview.disabled = !enabled || state.bgBusy;
+    dom.bgApply.disabled = !enabled || state.bgBusy;
+    state.hasBackground = Boolean(summary?.has_background);
+    state.processedBgNode = summary?.processed_bg_node || null;
+    state.energySource = summary?.energy_source || null;
+}
+
+async function loadStoredBgSpectrum(name) {
+    if (!state.hasBackground) return;
+    try {
+        const data = await TensorSpecAPI.peemBgSpectrum(name);
+        if (state.name !== name) return;
+        state.bgPreviewData = data;
+        dom.bgE0.value = String(data.e0);
+        dom.bgE1.value = String(data.e1);
+        state.energySource = data.energy_source;
+        drawBgPlot();
+        dom.bgStatus.textContent = `Stored background (${data.energy_source})`;
+    } catch (_) {
+        /* no stored analysis yet */
+    }
+}
+
+async function previewBg() {
+    if (!state.name) {
+        dom.bgStatus.textContent = "Load a PEEM stack before preview.";
+        return;
+    }
+    if (dom.bgUseRoi.checked && !state.roi) {
+        dom.bgStatus.textContent = "Draw an ROI or uncheck Use ROI.";
+        return;
+    }
+
+    const previewName = state.name;
+    state.bgBusy = true;
+    dom.bgPreview.disabled = true;
+    dom.bgApply.disabled = true;
+    dom.bgStatus.textContent = "Previewing background…";
+    try {
+        const payload = buildBgPayload();
+        const data = await TensorSpecAPI.peemBgPreview(previewName, payload);
+        if (state.name !== previewName) return;
+        state.bgPreviewData = data;
+        dom.bgE0.value = String(data.e0);
+        dom.bgE1.value = String(data.e1);
+        state.energySource = data.energy_source;
+        dom.bgStatus.textContent =
+            `Fit: slope=${data.slope.toExponential(3)}, intercept=${data.intercept.toFixed(3)} · ${data.energy_source}`;
+        drawBgPlot();
+    } catch (err) {
+        if (state.name !== previewName) return;
+        dom.bgStatus.textContent = String(err.message || err);
+    } finally {
+        if (state.name === previewName) {
+            state.bgBusy = false;
+            dom.bgPreview.disabled = false;
+            dom.bgApply.disabled = false;
+        }
+    }
+}
+
+async function applyBg() {
+    if (!state.name) {
+        dom.bgStatus.textContent = "Load a PEEM stack before apply.";
+        return;
+    }
+    if (dom.bgUseRoi.checked && !state.roi) {
+        dom.bgStatus.textContent = "Draw an ROI or uncheck Use ROI.";
+        return;
+    }
+
+    const applyName = state.name;
+    state.bgBusy = true;
+    dom.bgPreview.disabled = true;
+    dom.bgApply.disabled = true;
+    setBusy(true, "Applying background…");
+    dom.bgStatus.textContent = "Applying background to all frames…";
+    try {
+        const payload = buildBgPayload();
+        const summary = await TensorSpecAPI.peemBgApply(applyName, payload);
+        if (state.name !== applyName) return;
+        const meta = await TensorSpecAPI.peemMeta(applyName);
+        if (state.name !== applyName) return;
+        state.hasBackground = Boolean(meta.has_background);
+        state.processedBgNode = meta.processed_bg_node;
+        state.energySource = meta.energy_source;
+        configureViewer(meta);
+        if (summary.processed_bg_node) {
+            state.node = summary.processed_bg_node;
+            configureViewer(meta);
+        }
+        dom.status.textContent =
+            `Background applied → ${summary.processed_bg_node} (${summary.n_frames} frames)`;
+        dom.footerStatus.textContent = `${state.name} · background applied`;
+        dom.bgStatus.textContent = `Applied · ${summary.energy_source} · view ${summary.processed_bg_node}`;
+        await loadStoredBgSpectrum(applyName);
+        await showFrame(viewerFrameIndex(), applyName);
+    } catch (err) {
+        if (state.name !== applyName) return;
+        dom.bgStatus.textContent = String(err.message || err);
+        dom.footerStatus.textContent = "Background apply failed";
+    } finally {
+        if (state.name === applyName) {
+            state.bgBusy = false;
+            dom.bgPreview.disabled = false;
+            dom.bgApply.disabled = false;
+            setBusy(false);
+        }
     }
 }
 
@@ -395,6 +742,7 @@ function configureViewer(summary) {
     dom.channel.value = String(state.channel);
     dom.channel.disabled = !usePairNav || state.channelTags.length < 2;
     updateDriftControls();
+    updateBgControls(summary);
 }
 
 function renderFrame() {
@@ -528,6 +876,11 @@ async function acceptLoad(summary) {
     state.frameData = null;
     state.climCustomized = false;
     state.hasDrift = false;
+    state.bgPreviewData = null;
+    state.hasBackground = false;
+    state.processedBgNode = null;
+    state.energySource = null;
+    setDefaultBgWindow(summary.n_frames);
     resetRoi();
     setRoiMode(null);
     clearTimeout(state.frameTimer);
@@ -538,7 +891,9 @@ async function acceptLoad(summary) {
     dom.status.textContent = `Loaded ${summary.name}: ${summary.n_frames} frame(s)`;
     dom.footerStatus.textContent = `${summary.name} · ${summary.n_frames} frame(s)`;
     showCsvState(summary);
+    updateBgControls(summary);
     await showFrame(0);
+    await loadStoredBgSpectrum(summary.name);
 }
 
 async function separatePairs() {
@@ -742,6 +1097,69 @@ dom.attachCsv.addEventListener("click", attachCsv);
 dom.stackPairs.addEventListener("click", stackPairs);
 dom.separatePairs.addEventListener("click", separatePairs);
 dom.applyDrift.addEventListener("click", applyDrift);
+dom.bgPreview.addEventListener("click", previewBg);
+dom.bgApply.addEventListener("click", applyBg);
+for (const input of [dom.bgShowRaw, dom.bgShowBg, dom.bgShowBand, dom.bgShowSub]) {
+    input.addEventListener("change", drawBgPlot);
+}
+for (const input of [dom.bgE0, dom.bgE1]) {
+    input.addEventListener("change", () => {
+        drawBgPlot();
+        scheduleBgPreview();
+    });
+}
+dom.bgPlot.addEventListener("mousedown", (event) => {
+    const data = state.bgPreviewData;
+    if (!data?.energy?.length) return;
+    event.preventDefault();
+    const rect = dom.bgPlot.getBoundingClientRect();
+    const scaleX = dom.bgPlot.width / rect.width;
+    const xPx = (event.clientX - rect.left) * scaleX;
+    const handle = nearestBgHandle(xPx, data.energy);
+    if (handle) {
+        state.bgDrag = { handle, energy: data.energy, startE0: Number(dom.bgE0.value), startE1: Number(dom.bgE1.value), startX: xPx };
+        return;
+    }
+    const e = energyAtPlotX(xPx, data.energy);
+    const e0 = Number(dom.bgE0.value);
+    const e1 = Number(dom.bgE1.value);
+    if (!Number.isFinite(e0) || !Number.isFinite(e1) || Math.abs(e - e0) <= Math.abs(e - e1)) {
+        dom.bgE0.value = String(e);
+    } else {
+        dom.bgE1.value = String(e);
+    }
+    drawBgPlot();
+    scheduleBgPreview();
+});
+dom.bgPlot.addEventListener("mousemove", (event) => {
+    if (!state.bgDrag) return;
+    const rect = dom.bgPlot.getBoundingClientRect();
+    const scaleX = dom.bgPlot.width / rect.width;
+    const xPx = (event.clientX - rect.left) * scaleX;
+    const e = energyAtPlotX(xPx, state.bgDrag.energy);
+    const { handle, startE0, startE1, startX } = state.bgDrag;
+    if (handle === "e0") {
+        dom.bgE0.value = String(e);
+    } else if (handle === "e1") {
+        dom.bgE1.value = String(e);
+    } else {
+        const startE = energyAtPlotX(startX, state.bgDrag.energy);
+        const delta = e - startE;
+        dom.bgE0.value = String(startE0 + delta);
+        dom.bgE1.value = String(startE1 + delta);
+    }
+    drawBgPlot();
+});
+dom.bgPlot.addEventListener("mouseup", () => {
+    if (!state.bgDrag) return;
+    state.bgDrag = null;
+    scheduleBgPreview();
+});
+dom.bgPlot.addEventListener("mouseleave", () => {
+    if (!state.bgDrag) return;
+    state.bgDrag = null;
+    scheduleBgPreview();
+});
 dom.roiRect.addEventListener("click", () => setRoiMode("rect"));
 dom.roiEllipse.addEventListener("click", () => setRoiMode("ellipse"));
 dom.roiPolygon.addEventListener("click", () => setRoiMode("polygon"));
@@ -850,3 +1268,5 @@ dom.canvas.addEventListener("dblclick", (event) => {
     event.preventDefault();
     closePolygon();
 });
+
+drawBgPlot();
