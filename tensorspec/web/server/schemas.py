@@ -374,6 +374,49 @@ class PeemSeparateSummary(BaseModel):
     shape: list[int]  # per-channel (n_frames, y, x) — same for both
 
 
+class PeemBgRequest(BaseModel):
+    """Linear pre-edge background settings for preview or apply."""
+
+    node: str = "raw"
+    channel: int = Field(default=0, ge=0, le=1)
+    use_roi: bool = False
+    roi: PeemRoi | None = None
+    e0: float
+    e1: float
+    ensemble_delta: float | None = None
+    ensemble_n: int = Field(default=21, ge=1, le=101)
+    seed: int = 0
+
+
+class PeemBgPreviewResponse(BaseModel):
+    """Preview curves for linear pre-edge background (no tree write)."""
+
+    energy: list[float]
+    spectrum: list[float]
+    bg: list[float]
+    bg_std: list[float]
+    subtracted: list[float]
+    subtracted_std: list[float]
+    slope: float
+    intercept: float
+    energy_source: str
+    e0: float
+    e1: float
+    ensemble_n_valid: int
+
+
+class PeemBgApplySummary(BaseModel):
+    """Summary after writing analysis/background and processed BG child."""
+
+    name: str
+    analysis_node: str = "background"
+    processed_bg_node: str
+    n_frames: int
+    shape: list[int]
+    has_background: bool = True
+    energy_source: str
+
+
 class PeemMeta(BaseModel):
     """PEEM stack metadata needed by the frame viewer."""
 
@@ -397,6 +440,10 @@ class PeemMeta(BaseModel):
     has_drift: bool = False
     drift_method: str | None = None
     separated_channels: list[str] = Field(default_factory=list)
+    has_background: bool = False
+    has_processed_bg: bool = False
+    energy_source: str | None = None
+    processed_bg_node: str | None = None
 
 
 class PeemFrame(BaseModel):
