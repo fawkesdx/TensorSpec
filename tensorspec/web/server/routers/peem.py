@@ -6,6 +6,7 @@ import re
 import zipfile
 from collections import Counter
 from pathlib import Path
+from typing import NamedTuple
 from uuid import uuid4
 
 import numpy as np
@@ -367,10 +368,22 @@ def _bg_roi_mask(request: PeemBgRequest, ny: int, nx: int) -> np.ndarray | None:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-def _compute_bg_preview(
-    session: Session, name: str, request: PeemBgRequest
-) -> PeemBgPreviewResponse:
-    stack, _source, raw = _pull_bg_source(session, name, request.node, request.channel)
+class _BgFitResult(NamedTuple):
+    stack: np.ndarray
+    source_tensor: TensorData
+    energy: np.ndarray
+    energy_source: str
+    spectrum: np.ndarray
+    fit: dict
+    ensemble: dict
+    delta: float
+    roi_dict: dict | None
+
+
+def _run_bg_fit(session: Session, name: str, request: PeemBgRequest) -> _BgFitResult:
+    stack, source_tensor, raw = _pull_bg_source(
+        session, name, request.node, request.channel
+    )
     energy, energy_source = resolve_energy(stack.shape[0], raw.metadata or {})
     mask = _bg_roi_mask(request, stack.shape[1], stack.shape[2])
     try:
@@ -390,20 +403,41 @@ def _compute_bg_preview(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    return PeemBgPreviewResponse(
-        energy=[float(v) for v in energy],
-        spectrum=[float(v) for v in spectrum],
-        bg=[float(v) for v in ensemble["bg_mean"]],
-        bg_std=[float(v) for v in ensemble["bg_std"]],
-        subtracted=[float(v) for v in ensemble["subtracted_mean"]],
-        subtracted_std=[float(v) for v in ensemble["subtracted_std"]],
-        slope=float(fit["slope"]),
-        intercept=float(fit["intercept"]),
+    roi_dict = (
+        request.roi.model_dump(exclude_none=True)
+        if request.use_roi and request.roi
+        else None
+    )
+    return _BgFitResult(
+        stack=stack,
+        source_tensor=source_tensor,
+        energy=energy,
         energy_source=energy_source,
+        spectrum=spectrum,
+        fit=fit,
+        ensemble=ensemble,
+        delta=delta,
+        roi_dict=roi_dict,
+    )
+
+
+def _compute_bg_preview(
+    session: Session, name: str, request: PeemBgRequest
+) -> PeemBgPreviewResponse:
+    result = _run_bg_fit(session, name, request)
+    return PeemBgPreviewResponse(
+        energy=[float(v) for v in result.energy],
+        spectrum=[float(v) for v in result.spectrum],
+        bg=[float(v) for v in result.ensemble["bg_mean"]],
+        bg_std=[float(v) for v in result.ensemble["bg_std"]],
+        subtracted=[float(v) for v in result.ensemble["subtracted_mean"]],
+        subtracted_std=[float(v) for v in result.ensemble["subtracted_std"]],
+        slope=float(result.fit["slope"]),
+        intercept=float(result.fit["intercept"]),
+        energy_source=result.energy_source,
         e0=float(request.e0),
         e1=float(request.e1),
-        ensemble_n_valid=int(ensemble["n_valid"]),
+        ensemble_n_valid=int(result.ensemble["n_valid"]),
     )
 
 
@@ -777,46 +811,22 @@ def bg_apply_peem(
 ) -> PeemBgApplySummary:
     """Write /analysis/background and BG-subtracted /processed child."""
     _require_tensor(session, name)
-    stack, source_tensor, raw = _pull_bg_source(
-        session, name, request.node, request.channel
-    )
-    energy, energy_source = resolve_energy(stack.shape[0], raw.metadata or {})
-    mask = _bg_roi_mask(request, stack.shape[1], stack.shape[2])
-    try:
-        spectrum = extract_spectrum(stack, mask)
-        fit = fit_linear_preedge(energy, spectrum, request.e0, request.e1)
-        delta = request.ensemble_delta
-        if delta is None:
-            delta = _default_ensemble_delta(energy, energy_source)
-        ensemble = ensemble_preedge(
-            energy,
-            spectrum,
-            request.e0,
-            request.e1,
-            delta=delta,
-            n=request.ensemble_n,
-            seed=request.seed,
-        )
-        subtracted = apply_bg_to_stack(stack, ensemble["bg_mean"])
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result = _run_bg_fit(session, name, request)
+    subtracted = apply_bg_to_stack(result.stack, result.ensemble["bg_mean"])
 
-    roi_dict = (
-        request.roi.model_dump(exclude_none=True) if request.use_roi and request.roi else None
-    )
     ds = analysis_dataset(
-        energy,
-        spectrum,
-        fit,
-        ensemble,
+        result.energy,
+        result.spectrum,
+        result.fit,
+        result.ensemble,
         e0=request.e0,
         e1=request.e1,
-        energy_source=energy_source,
+        energy_source=result.energy_source,
         source_node=request.node,
         channel=request.channel,
         use_roi=request.use_roi,
-        roi=roi_dict,
-        ensemble_delta=delta,
+        roi=result.roi_dict,
+        ensemble_delta=result.delta,
         ensemble_n=request.ensemble_n,
         seed=request.seed,
     )
@@ -825,7 +835,7 @@ def bg_apply_peem(
 
     child = bg_child_name(request.node)
     bg_tensor = _bg_subtracted_tensor(
-        source_tensor,
+        result.source_tensor,
         subtracted,
         child_name=child,
         source_node=request.node,
@@ -840,7 +850,7 @@ def bg_apply_peem(
         processed_bg_node=f"processed/{child}",
         n_frames=shape[0],
         shape=shape,
-        energy_source=energy_source,
+        energy_source=result.energy_source,
     )
 
 
