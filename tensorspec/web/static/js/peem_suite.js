@@ -60,7 +60,6 @@ const state = {
     channel: 0,
     channelTags: [],
     separatedChannels: [],
-    separatedFrameCounts: {},
     vmin: 0,
     vmax: 1,
     frameData: null,
@@ -525,7 +524,6 @@ async function acceptLoad(summary) {
     state.channel = 0;
     state.channelTags = [];
     state.separatedChannels = [];
-    state.separatedFrameCounts = {};
     state.frameData = null;
     state.climCustomized = false;
     state.hasDrift = false;
@@ -540,6 +538,43 @@ async function acceptLoad(summary) {
     dom.footerStatus.textContent = `${summary.name} · ${summary.n_frames} frame(s)`;
     showCsvState(summary);
     await showFrame(0);
+}
+
+async function separatePairs() {
+    if (!state.name) {
+        dom.status.textContent = "Load a PEEM stack before separating.";
+        return;
+    }
+    if (!state.processedIsPaired) return;
+
+    const separateName = state.name;
+    dom.separatePairs.disabled = true;
+    setBusy(true, "Separating channels…");
+    try {
+        const summary = await TensorSpecAPI.peemSeparate(separateName);
+        if (state.name !== separateName) return;
+        const meta = await TensorSpecAPI.peemMeta(separateName);
+        if (state.name !== separateName) return;
+        configureViewer({ ...meta, n_frames: meta.n_frames });
+        dom.status.textContent =
+            `Separated ${summary.channels.join(", ")} (${summary.n_frames} frames)`;
+        dom.footerStatus.textContent =
+            `${state.name} · separated ${summary.channels.join(", ")}`;
+        if (summary.channels.length) {
+            state.node = `processed/${summary.channels[0]}`;
+            configureViewer(meta);
+        }
+        await showFrame(viewerFrameIndex(), separateName);
+    } catch (err) {
+        if (state.name !== separateName) return;
+        dom.status.textContent = String(err.message || err);
+        dom.footerStatus.textContent = "Separate failed";
+    } finally {
+        setBusy(false);
+        if (state.name === separateName) {
+            dom.separatePairs.disabled = !state.processedIsPaired;
+        }
+    }
 }
 
 async function stackPairs() {
@@ -704,29 +739,7 @@ dom.serverPath.addEventListener("keydown", (event) => {
 
 dom.attachCsv.addEventListener("click", attachCsv);
 dom.stackPairs.addEventListener("click", stackPairs);
-dom.separatePairs.addEventListener("click", async () => {
-    if (!state.name || !state.processedIsPaired) return;
-    setBusy(true, "Separating channels…");
-    try {
-        const summary = await TensorSpecAPI.peemSeparate(state.name);
-        const meta = await TensorSpecAPI.peemMeta(state.name);
-        configureViewer({ ...meta, n_frames: meta.n_frames });
-        dom.status.textContent =
-            `Separated ${summary.channels.join(", ")} (${summary.n_frames} frames)`;
-        dom.footerStatus.textContent =
-            `${state.name} · separated ${summary.channels.join(", ")}`;
-        if (summary.channels.length) {
-            state.node = `processed/${summary.channels[0]}`;
-            configureViewer(meta);
-        }
-        await showFrame(viewerFrameIndex());
-    } catch (err) {
-        dom.status.textContent = String(err.message || err);
-        dom.footerStatus.textContent = "Separate failed";
-    } finally {
-        setBusy(false);
-    }
-});
+dom.separatePairs.addEventListener("click", separatePairs);
 dom.applyDrift.addEventListener("click", applyDrift);
 dom.roiRect.addEventListener("click", () => setRoiMode("rect"));
 dom.roiEllipse.addEventListener("click", () => setRoiMode("ellipse"));
