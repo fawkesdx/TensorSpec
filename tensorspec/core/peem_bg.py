@@ -112,6 +112,8 @@ def ensemble_preedge(
 def apply_bg_to_stack(stack: np.ndarray, bg: np.ndarray) -> np.ndarray:
     """I'[..., i] = I[..., i] - bg[i]."""
     stack = np.asarray(stack, dtype=float)
+    if stack.ndim != 3:
+        raise ValueError("stack must have shape (n_frames, y, x)")
     bg = np.asarray(bg, dtype=float)
     if bg.shape != (stack.shape[0],):
         raise ValueError("bg length must match n_frames")

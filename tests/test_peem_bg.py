@@ -60,6 +60,12 @@ class TestApplyBgToStack(unittest.TestCase):
         out = bg.apply_bg_to_stack(stack, bg_curve)
         np.testing.assert_allclose(out, 0.0)
 
+    def test_rejects_2d_stack(self):
+        stack = np.ones((4, 4), dtype=float)
+        bg_curve = np.ones(4, dtype=float)
+        with self.assertRaises(ValueError):
+            bg.apply_bg_to_stack(stack, bg_curve)
+
 
 class TestResolveEnergy(unittest.TestCase):
     def test_csv_alias_match(self):
