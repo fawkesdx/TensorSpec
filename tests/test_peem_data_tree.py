@@ -59,3 +59,14 @@ class TestProcessedChildren(unittest.TestCase):
         ws.write_processed_child_data("peem", "CP", eng.separate_pairs(paired)["CP"])
         ws.write_processed_data("peem", paired)
         self.assertEqual(ws.list_processed_children("peem"), [])
+
+    def test_write_processed_child_rejects_invalid_name(self):
+        raw = _raw(["CP", "CM"])
+        tree = DataTreeBuilder.build_from_tensor("t", raw)
+        paired = eng.pair_stack(raw, "CP_CM")
+        tree = DataTreeBuilder.write_processed(tree, paired)
+        channel = eng.separate_pairs(paired)["CP"]
+        for bad in ("", "a/b"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    DataTreeBuilder.write_processed_child(tree, bad, channel)

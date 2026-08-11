@@ -219,7 +219,7 @@ class WorkspaceManager:
         node = node.strip("/")
         try:
             target = tree[node]
-        except Exception:
+        except KeyError:
             print(f"Error: Node '{node}' does not exist in dataset '{name}'.")
             return None
 
