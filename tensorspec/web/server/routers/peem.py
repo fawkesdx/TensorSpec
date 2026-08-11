@@ -18,8 +18,22 @@ from tensorspec.core.io.peem_loaders import (
     load_tif_sequence,
     load_tif_stack,
 )
+from tensorspec.core.data_models import TensorData
+from tensorspec.core.peem_bg import (
+    analysis_dataset,
+    apply_bg_to_stack,
+    bg_child_name,
+    ensemble_preedge,
+    extract_spectrum,
+    fit_linear_preedge,
+    resolve_energy,
+)
 from tensorspec.core.peem_engine import drift_correct, pair_stack, separate_pairs
+from tensorspec.core.peem_roi import roi_to_mask
 from tensorspec.web.server.schemas import (
+    PeemBgApplySummary,
+    PeemBgPreviewResponse,
+    PeemBgRequest,
     PeemDriftRequest,
     PeemDriftSummary,
     PeemFrame,
@@ -297,6 +311,186 @@ def _separated_tensor(session: Session, name: str, node: str):
     return tensor, tag
 
 
+def _default_ensemble_delta(energy: np.ndarray, energy_source: str) -> float:
+    if energy_source == "index":
+        return 1.0
+    span = float(np.max(energy) - np.min(energy))
+    return 0.05 * span if span > 0 else 1.0
+
+
+def _pull_bg_source(
+    session: Session, name: str, node: str, channel: int
+) -> tuple[np.ndarray, TensorData, TensorData]:
+    """Return (3D stack, source tensor, raw tensor for energy metadata)."""
+    raw = _require_tensor(session, name)
+    node = node.strip("/")
+    if node == "raw":
+        stack = np.asarray(raw.value, dtype=float)
+        if stack.ndim != 3:
+            raise HTTPException(status_code=422, detail="Raw PEEM data must be 3D.")
+        return stack, raw, raw
+    if node == "processed":
+        processed = _processed_tensor(session, name)
+        if processed is None:
+            raise HTTPException(
+                status_code=404, detail=f"PEEM data '{name}' has no processed data."
+            )
+        if processed.value.ndim == 4:
+            if not 0 <= channel < processed.value.shape[1]:
+                raise HTTPException(
+                    status_code=404, detail=f"Channel index {channel} is out of range."
+                )
+            stack = np.asarray(processed.value[:, channel], dtype=float)
+        elif processed.value.ndim == 3:
+            stack = np.asarray(processed.value, dtype=float)
+        else:
+            raise HTTPException(status_code=422, detail="Invalid processed PEEM shape.")
+        return stack, processed, raw
+    if node.startswith("processed/"):
+        tensor, _tag = _separated_tensor(session, name, node)
+        stack = np.asarray(tensor.value, dtype=float)
+        return stack, tensor, raw
+    raise HTTPException(
+        status_code=422,
+        detail="node must be 'raw', 'processed', or 'processed/<tag>'.",
+    )
+
+
+def _bg_roi_mask(request: PeemBgRequest, ny: int, nx: int) -> np.ndarray | None:
+    if not request.use_roi:
+        return None
+    if request.roi is None:
+        raise HTTPException(status_code=422, detail="roi required when use_roi is true.")
+    try:
+        return roi_to_mask(ny, nx, request.roi.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _compute_bg_preview(
+    session: Session, name: str, request: PeemBgRequest
+) -> PeemBgPreviewResponse:
+    stack, _source, raw = _pull_bg_source(session, name, request.node, request.channel)
+    energy, energy_source = resolve_energy(stack.shape[0], raw.metadata or {})
+    mask = _bg_roi_mask(request, stack.shape[1], stack.shape[2])
+    try:
+        spectrum = extract_spectrum(stack, mask)
+        fit = fit_linear_preedge(energy, spectrum, request.e0, request.e1)
+        delta = request.ensemble_delta
+        if delta is None:
+            delta = _default_ensemble_delta(energy, energy_source)
+        ensemble = ensemble_preedge(
+            energy,
+            spectrum,
+            request.e0,
+            request.e1,
+            delta=delta,
+            n=request.ensemble_n,
+            seed=request.seed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return PeemBgPreviewResponse(
+        energy=[float(v) for v in energy],
+        spectrum=[float(v) for v in spectrum],
+        bg=[float(v) for v in ensemble["bg_mean"]],
+        bg_std=[float(v) for v in ensemble["bg_std"]],
+        subtracted=[float(v) for v in ensemble["subtracted_mean"]],
+        subtracted_std=[float(v) for v in ensemble["subtracted_std"]],
+        slope=float(fit["slope"]),
+        intercept=float(fit["intercept"]),
+        energy_source=energy_source,
+        e0=float(request.e0),
+        e1=float(request.e1),
+        ensemble_n_valid=int(ensemble["n_valid"]),
+    )
+
+
+def _bg_subtracted_tensor(
+    source_tensor: TensorData,
+    subtracted: np.ndarray,
+    *,
+    child_name: str,
+    source_node: str,
+    channel: int,
+) -> TensorData:
+    n, _y, _x = subtracted.shape
+    if source_tensor.value.ndim == 4:
+        y_axis = np.asarray(source_tensor.axes[2])
+        x_axis = np.asarray(source_tensor.axes[3])
+        y_unit = source_tensor.units[2]
+        x_unit = source_tensor.units[3]
+    else:
+        y_axis = np.asarray(source_tensor.axes[1])
+        x_axis = np.asarray(source_tensor.axes[2])
+        y_unit = source_tensor.units[1]
+        x_unit = source_tensor.units[2]
+
+    meta = dict(source_tensor.metadata or {})
+    meta.update(
+        {
+            "bg_subtracted": True,
+            "bg_source_node": source_node,
+            "bg_channel": int(channel),
+            "analysis_node": "background",
+            "bg_child": child_name,
+        }
+    )
+    return TensorData(
+        value=subtracted,
+        axes=[np.arange(n), y_axis, x_axis],
+        labels=["frame", "y", "x"],
+        units=["", y_unit, x_unit],
+        data_type="Experimental PEEM (bg subtracted)",
+        metadata=meta,
+    )
+
+
+def _analysis_to_preview(ds) -> PeemBgPreviewResponse:
+    attrs = ds.attrs or {}
+    return PeemBgPreviewResponse(
+        energy=[float(v) for v in ds.coords["energy"].values],
+        spectrum=[float(v) for v in ds["raw_spectrum"].values],
+        bg=[float(v) for v in ds["bg"].values],
+        bg_std=[float(v) for v in ds["bg_std"].values],
+        subtracted=[float(v) for v in ds["subtracted"].values],
+        subtracted_std=[float(v) for v in ds["subtracted_std"].values],
+        slope=float(attrs["slope"]),
+        intercept=float(attrs["intercept"]),
+        energy_source=str(attrs["energy_source"]),
+        e0=float(attrs["e0"]),
+        e1=float(attrs["e1"]),
+        ensemble_n_valid=int(attrs["ensemble_n_valid"]),
+    )
+
+
+def _bg_meta_fields(session: Session, name: str) -> dict:
+    analysis = session.workspace.pull_analysis_data(name, "background")
+    if analysis is None:
+        return {
+            "has_background": False,
+            "has_processed_bg": False,
+            "energy_source": None,
+            "processed_bg_node": None,
+        }
+    attrs = analysis.attrs or {}
+    energy_source = attrs.get("energy_source")
+    source_node = str(attrs.get("source_node", "raw"))
+    try:
+        child = bg_child_name(source_node)
+    except ValueError:
+        child = "bg"
+    processed_bg_node = f"processed/{child}"
+    children = session.workspace.list_processed_children(name)
+    return {
+        "has_background": True,
+        "has_processed_bg": child in children,
+        "energy_source": str(energy_source) if energy_source is not None else None,
+        "processed_bg_node": processed_bg_node,
+    }
+
+
 def _summary(
     name: str,
     tensor,
@@ -564,6 +758,107 @@ def drift_peem(
     )
 
 
+@router.post("/{name}/bg/preview", response_model=PeemBgPreviewResponse)
+def bg_preview_peem(
+    name: str,
+    request: PeemBgRequest,
+    session: Session = Depends(current_session),
+) -> PeemBgPreviewResponse:
+    """Fit linear pre-edge background; return curves without writing the tree."""
+    _require_tensor(session, name)
+    return _compute_bg_preview(session, name, request)
+
+
+@router.post("/{name}/bg/apply", response_model=PeemBgApplySummary)
+def bg_apply_peem(
+    name: str,
+    request: PeemBgRequest,
+    session: Session = Depends(current_session),
+) -> PeemBgApplySummary:
+    """Write /analysis/background and BG-subtracted /processed child."""
+    _require_tensor(session, name)
+    stack, source_tensor, raw = _pull_bg_source(
+        session, name, request.node, request.channel
+    )
+    energy, energy_source = resolve_energy(stack.shape[0], raw.metadata or {})
+    mask = _bg_roi_mask(request, stack.shape[1], stack.shape[2])
+    try:
+        spectrum = extract_spectrum(stack, mask)
+        fit = fit_linear_preedge(energy, spectrum, request.e0, request.e1)
+        delta = request.ensemble_delta
+        if delta is None:
+            delta = _default_ensemble_delta(energy, energy_source)
+        ensemble = ensemble_preedge(
+            energy,
+            spectrum,
+            request.e0,
+            request.e1,
+            delta=delta,
+            n=request.ensemble_n,
+            seed=request.seed,
+        )
+        subtracted = apply_bg_to_stack(stack, ensemble["bg_mean"])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    roi_dict = (
+        request.roi.model_dump(exclude_none=True) if request.use_roi and request.roi else None
+    )
+    ds = analysis_dataset(
+        energy,
+        spectrum,
+        fit,
+        ensemble,
+        e0=request.e0,
+        e1=request.e1,
+        energy_source=energy_source,
+        source_node=request.node,
+        channel=request.channel,
+        use_roi=request.use_roi,
+        roi=roi_dict,
+        ensemble_delta=delta,
+        ensemble_n=request.ensemble_n,
+        seed=request.seed,
+    )
+    if not session.workspace.write_analysis_data(name, "background", ds):
+        raise HTTPException(status_code=404, detail=f"PEEM data '{name}' not found.")
+
+    child = bg_child_name(request.node)
+    bg_tensor = _bg_subtracted_tensor(
+        source_tensor,
+        subtracted,
+        child_name=child,
+        source_node=request.node,
+        channel=request.channel,
+    )
+    if not session.workspace.write_processed_child_data(name, child, bg_tensor):
+        raise HTTPException(status_code=404, detail=f"PEEM data '{name}' not found.")
+
+    shape = [int(s) for s in subtracted.shape]
+    return PeemBgApplySummary(
+        name=name,
+        processed_bg_node=f"processed/{child}",
+        n_frames=shape[0],
+        shape=shape,
+        energy_source=energy_source,
+    )
+
+
+@router.get("/{name}/bg/spectrum", response_model=PeemBgPreviewResponse)
+def bg_spectrum_peem(
+    name: str,
+    session: Session = Depends(current_session),
+) -> PeemBgPreviewResponse:
+    """Return stored /analysis/background curves."""
+    _require_tensor(session, name)
+    ds = session.workspace.pull_analysis_data(name, "background")
+    if ds is None:
+        raise HTTPException(
+            status_code=404, detail=f"PEEM data '{name}' has no background analysis."
+        )
+    return _analysis_to_preview(ds)
+
+
 @router.get("/{name}/meta", response_model=PeemMeta)
 def get_meta(
     name: str,
@@ -575,6 +870,7 @@ def get_meta(
     processed_metadata = (processed.metadata or {}) if processed is not None else {}
     processed_is_pair = processed is not None and processed.value.ndim == 4
     processed_is_frame = processed is not None and processed.value.ndim == 3
+    bg_meta = _bg_meta_fields(session, name)
     return PeemMeta(
         name=name,
         shape=[int(size) for size in tensor.value.shape],
@@ -610,6 +906,10 @@ def get_meta(
             else None
         ),
         separated_channels=session.workspace.list_processed_children(name),
+        has_background=bg_meta["has_background"],
+        has_processed_bg=bg_meta["has_processed_bg"],
+        energy_source=bg_meta["energy_source"],
+        processed_bg_node=bg_meta["processed_bg_node"],
     )
 
 

@@ -13,7 +13,12 @@ from tensorspec.core.data_models import TensorData
 from tensorspec.core.workspace import WorkspaceManager
 from tensorspec.web.server.app import create_app
 from tensorspec.web.server.routers import peem as peem_router
-from tensorspec.web.server.schemas import PeemDriftRequest, PeemPairRequest, PeemRoi
+from tensorspec.web.server.schemas import (
+    PeemBgRequest,
+    PeemDriftRequest,
+    PeemPairRequest,
+    PeemRoi,
+)
 from tensorspec.web.server.session import Session, current_session
 
 
@@ -742,6 +747,106 @@ class TestPeemApi(unittest.TestCase):
                 Path(session.workspace.pull_tensor_data("first").metadata["source"]),
                 Path(session.workspace.pull_tensor_data("second").metadata["source"]),
             )
+
+    def _load_ramp_stack(self, session, tmp, name="bg_ramp", n_frames=5):
+        root = Path(tmp) / "run"
+        root.mkdir()
+        for i in range(n_frames):
+            plane = np.full((8, 8), float(i + 1), dtype=np.uint16)
+            tifffile.imwrite(root / f"f{i:02d}.tif", plane)
+        peem_router.load_peem(
+            file=None,
+            server_path=str(root),
+            csv=None,
+            csv_path=None,
+            name=name,
+            session=session,
+        )
+
+    def test_bg_preview_apply_meta_and_frame(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            self._load_ramp_stack(session, tmp)
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            request = PeemBgRequest(e0=0.0, e1=2.0)
+
+            preview = client.post(
+                "/api/peem/bg_ramp/bg/preview", json=request.model_dump()
+            )
+            self.assertEqual(preview.status_code, 200, preview.text)
+            body = preview.json()
+            self.assertEqual(body["energy_source"], "index")
+            self.assertEqual(len(body["energy"]), 5)
+            self.assertGreaterEqual(body["ensemble_n_valid"], 1)
+            self.assertLessEqual(body["ensemble_n_valid"], 21)
+            self.assertIsNone(session.workspace.pull_analysis_data("bg_ramp", "background"))
+
+            apply = client.post(
+                "/api/peem/bg_ramp/bg/apply", json=request.model_dump()
+            )
+            self.assertEqual(apply.status_code, 200, apply.text)
+            summary = apply.json()
+            self.assertTrue(summary["has_background"])
+            self.assertEqual(summary["processed_bg_node"], "processed/bg")
+            self.assertEqual(summary["shape"], [5, 8, 8])
+
+            meta = client.get("/api/peem/bg_ramp/meta")
+            self.assertEqual(meta.status_code, 200, meta.text)
+            meta_body = meta.json()
+            self.assertTrue(meta_body["has_background"])
+            self.assertTrue(meta_body["has_processed_bg"])
+            self.assertEqual(meta_body["energy_source"], "index")
+            self.assertEqual(meta_body["processed_bg_node"], "processed/bg")
+            self.assertIn("bg", meta_body["separated_channels"])
+
+            frame = client.get(
+                "/api/peem/bg_ramp/frame/0", params={"node": "processed/bg"}
+            )
+            self.assertEqual(frame.status_code, 200, frame.text)
+            self.assertEqual(frame.json()["node"], "processed/bg")
+            self.assertEqual(frame.json()["shape"], [8, 8])
+
+            spectrum = client.get("/api/peem/bg_ramp/bg/spectrum")
+            self.assertEqual(spectrum.status_code, 200, spectrum.text)
+            self.assertEqual(len(spectrum.json()["energy"]), 5)
+
+    def test_bg_preview_roi_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            self._load_ramp_stack(session, tmp, name="bg_roi")
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            request = PeemBgRequest(
+                e0=0.0,
+                e1=2.0,
+                use_roi=True,
+                roi=PeemRoi(kind="rect", x0=0, y0=0, x1=3, y1=3),
+            )
+
+            response = client.post(
+                "/api/peem/bg_roi/bg/preview", json=request.model_dump()
+            )
+
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()["energy_source"], "index")
+
+    def test_bg_invalid_window_422(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            self._load_ramp_stack(session, tmp, name="bg_bad")
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            request = PeemBgRequest(e0=10.0, e1=10.0)
+
+            response = client.post(
+                "/api/peem/bg_bad/bg/preview", json=request.model_dump()
+            )
+
+            self.assertEqual(response.status_code, 422, response.text)
 
 
 if __name__ == "__main__":
