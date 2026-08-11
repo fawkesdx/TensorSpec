@@ -18,7 +18,7 @@ from tensorspec.core.io.peem_loaders import (
     load_tif_sequence,
     load_tif_stack,
 )
-from tensorspec.core.peem_engine import drift_correct, pair_stack
+from tensorspec.core.peem_engine import drift_correct, pair_stack, separate_pairs
 from tensorspec.web.server.schemas import (
     PeemDriftRequest,
     PeemDriftSummary,
@@ -27,6 +27,7 @@ from tensorspec.web.server.schemas import (
     PeemMeta,
     PeemPairRequest,
     PeemPairSummary,
+    PeemSeparateSummary,
 )
 from tensorspec.web.server.session import Session, current_session
 
@@ -275,6 +276,27 @@ def _processed_pair_tensor(session: Session, name: str):
     return tensor
 
 
+def _separated_tensor(session: Session, name: str, node: str):
+    """Pull processed/<tag> channel stack; validate 3D PEEM channel cube."""
+    rel = node.strip("/")
+    if not rel.startswith("processed/") or rel.count("/") != 1:
+        raise HTTPException(status_code=422, detail="Invalid separated node path.")
+    tensor = session.workspace.pull_tensor_data(name, rel)
+    if tensor is None:
+        raise HTTPException(status_code=404, detail=f"No data at '{rel}'.")
+    tag = rel.split("/", 1)[1]
+    ok = (
+        tensor.value.ndim == 3
+        and list(tensor.labels) == ["frame", "y", "x"]
+        and tensor.data_type.startswith("Experimental PEEM")
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=422, detail=f"Invalid channel stack at '{rel}'."
+        )
+    return tensor, tag
+
+
 def _summary(
     name: str,
     tensor,
@@ -472,6 +494,35 @@ def pair_peem(
     )
 
 
+@router.post("/{name}/separate", response_model=PeemSeparateSummary)
+def separate_peem(
+    name: str,
+    session: Session = Depends(current_session),
+) -> PeemSeparateSummary:
+    _require_tensor(session, name)
+    paired = _processed_pair_tensor(session, name)
+    if paired is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Separate requires a paired /processed cube. Run Stack Pairs first.",
+        )
+    try:
+        channels = separate_pairs(paired)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    for tag, td in channels.items():
+        if not session.workspace.write_processed_child_data(name, tag, td):
+            raise HTTPException(status_code=404, detail=f"PEEM data '{name}' not found.")
+    tags = sorted(channels)
+    sample = channels[tags[0]]
+    return PeemSeparateSummary(
+        name=name,
+        channels=tags,
+        n_frames=int(sample.value.shape[0]),
+        shape=[int(s) for s in sample.value.shape],
+    )
+
+
 @router.post("/{name}/drift", response_model=PeemDriftSummary)
 def drift_peem(
     name: str,
@@ -558,6 +609,7 @@ def get_meta(
             if processed_metadata.get("drift_method") is not None
             else None
         ),
+        separated_channels=session.workspace.list_processed_children(name),
     )
 
 
@@ -570,6 +622,7 @@ def get_frame(
     session: Session = Depends(current_session),
 ) -> PeemFrame:
     raw_tensor = _require_tensor(session, name)
+    tag: str | None = None
     if node == "raw":
         tensor = raw_tensor
         if not 0 <= i < tensor.value.shape[0]:
@@ -594,8 +647,18 @@ def get_frame(
             frame = np.asarray(tensor.value[i, channel], dtype=float)
         else:
             frame = np.asarray(tensor.value[i], dtype=float)
+    elif node.startswith("processed/"):
+        tensor, tag = _separated_tensor(session, name, node)
+        if not 0 <= i < tensor.value.shape[0]:
+            raise HTTPException(
+                status_code=404, detail=f"Frame index {i} is out of range."
+            )
+        frame = np.asarray(tensor.value[i], dtype=float)
     else:
-        raise HTTPException(status_code=422, detail="node must be 'raw' or 'processed'.")
+        raise HTTPException(
+            status_code=422,
+            detail="node must be 'raw', 'processed', or 'processed/<tag>'.",
+        )
 
     finite = frame[np.isfinite(frame)]
     if finite.size:
@@ -609,13 +672,18 @@ def get_frame(
     frame_names = metadata.get("frame_names", [])
     channel_tags = metadata.get("channel_tags", [])
     is_pair = node == "processed" and tensor.value.ndim == 4
+    is_separated = node.startswith("processed/")
     return PeemFrame(
         index=i,
         shape=[int(size) for size in frame.shape],
         intensity=frame.tolist(),
         vmin=float(vmin),
         vmax=float(vmax),
-        pol=str(pol[i]) if not is_pair and i < len(pol) else None,
+        pol=(
+            str(tag)
+            if is_separated
+            else str(pol[i]) if not is_pair and i < len(pol) else None
+        ),
         frame_name=(
             str(frame_names[i]) if not is_pair and i < len(frame_names) else None
         ),
@@ -623,8 +691,12 @@ def get_frame(
         pair=i if is_pair else None,
         channel=channel if is_pair else None,
         channel_tag=(
-            str(channel_tags[channel])
-            if is_pair and channel < len(channel_tags)
-            else None
+            str(tag)
+            if is_separated
+            else (
+                str(channel_tags[channel])
+                if is_pair and channel < len(channel_tags)
+                else None
+            )
         ),
     )

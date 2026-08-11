@@ -364,6 +364,16 @@ class PeemDriftSummary(BaseModel):
     shape: list[int]
 
 
+class PeemSeparateSummary(BaseModel):
+    """Summary after splitting paired /processed into channel children."""
+
+    name: str
+    channels: list[str]
+    n_frames: int
+    has_separated: bool = True
+    shape: list[int]  # per-channel (n_frames, y, x) — same for both
+
+
 class PeemMeta(BaseModel):
     """PEEM stack metadata needed by the frame viewer."""
 
@@ -386,6 +396,7 @@ class PeemMeta(BaseModel):
     unpaired_count: int = 0
     has_drift: bool = False
     drift_method: str | None = None
+    separated_channels: list[str] = Field(default_factory=list)
 
 
 class PeemFrame(BaseModel):
