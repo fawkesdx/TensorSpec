@@ -140,9 +140,9 @@ Grand App
 	- Analysis: EDC/MDC Lorentzian/Voigt peakfit → `/analysis/*_peakfit`; QP curves (δE–E, k_F, m*, v_F, FL/MFL) → `/analysis/qp_results`; Dynes SC/CDW gap → `/analysis/gap_fit`; DFT bands + sim intensity overlay on cuts
 	- Volume: BZ-prism 3D cutout (rectangle or hexagon from crystal/data); indent sectors to reveal interior walls; horizontal E-plane (Fermi surface)
 	- Simulator: matrix-element Option A + B1 (job queue + log stream)
-	- Deferred (not started): other beamline loaders; sim B2/B3; PEEM analysis; XAS / Transport (see Grand App vision below)
+	- Deferred (not started): other beamline loaders; sim B2/B3; PEEM sum-rule / domain tools; XAS / Transport (see Grand App vision below)
 
-- [ ] PEEM Suite — load + view shipped; analysis remains deferred
+- [ ] PEEM Suite — load + view shipped; linear pre-edge BG slice shipped (sum-rule / domain analysis deferred)
 	- [x] loader of tif file stacks
 	- [x] loader of sequences of series of tif files from a folder
 	- [x] accompanying beamline CSV metadata (I0 / beam current and other beamline params), stored for later CP vs CM sum-rule normalization
@@ -156,21 +156,36 @@ Grand App
 	- [x] once stacked, build drift-correction options
 		- [x] ROI NCC drift → `/processed` (POST `/api/peem/{name}/drift`)
 	- [x] separate those CP and CM or LH and LV
-	- [ ] make the background subtraction button to be applied to all
-		- [ ] for background, make it clear to the user what functions we use; refer to Co₃Sn₂S₂ laser ARPES paper as a starter. Other backgrounds can be suggested in later iterations.
-		- [ ] UI: plot spectra, toggle background overlay, toggle bg-subtracted spectra separately.
-		- [ ] several spectra and their background-related toggles can be plotted together
+	- [ ] background subtraction (partial — linear pre-edge slice shipped)
+		- [x] linear pre-edge fit on mean spectrum (picture-wide or ROI); preview + apply `bg(E)` to whole stack
+		- [x] writes `/analysis/background` + `/processed/bg` (or `{tag}_bg` from separated channel)
+		- [x] light window ensemble (vary e0/e1); spectrum plot with draggable pre-edge window
+		- [x] UI: plot spectrum; toggle raw / bg / band / bg-subtracted overlays
+		- [ ] make background subtraction applied to all stacks / batch
+		- [ ] document BG function choices for users (Co₃Sn₂S₂ laser ARPES paper reference, etc.)
+		- [ ] several spectra and their background-related toggles plotted together (multi-spectra)
 	- [ ] perform sum rule analysis if it is CP and CM data
 		- [ ] normalize CP/CM (and similar pairs) using I0 / beam current from accompanying CSV before sum rule
 	- [ ] analysis of spectra / sum rule switchable: picture-wide | user ROI | pixel-to-pixel (noisy / slower)
+		- [x] picture-wide mean spectrum (BG)
+		- [x] user ROI mean spectrum (BG)
+		- [ ] pixel-to-pixel (noisy / slower)
 		- [ ] ROI shapes: rectangle, ellipse, or custom polygon (straight segments or curved/interpolated from clicked points)
-	- [ ] ALWAYS include statistical analysis for background / sum rule (uncertainty often dominated by BG choice): vary plausible backgrounds and report sum-rule spread
+	- [ ] ALWAYS include statistical analysis for background / sum rule (uncertainty often dominated by BG choice): vary plausible backgrounds and report sum-rule spread (light BG window ensemble shipped; sum-rule spread not yet)
 	- [ ] real-space PEEM ↔ momentum-microscope data at a given XY: decide how to store / link in metadata
 	- [ ] tools to analyze magnetic domain wall size
 	- [ ] correlate azimuthal datasets: intensity at same sample position → estimate magnetic moment magnitude and direction
 		- [ ] rotate azimuth pictures onto a reference (e.g. azimuth 0); map features with possible non-homogeneous rescale (prefer defect landmarks; magnetic contrast is azimuth-dependent)
 	- [ ] tools for % up vs down domain area; temperature series of the same field of view to track domain evolution
 	- [ ] other common magnetic-domain shape analyses — iterate in discussion
+
+	**PEEM Suite — available in HTML now (keep in sync when shipping features):**
+	- Load: TIF stack or folder sequence (+ optional companion CSV metadata) via upload / `POST /api/peem/load`
+	- Data Viewer: frame canvas, slider, contrast limits; raw / processed / separated-channel nodes
+	- Process: CP/CM or LH/LV pair stack → `/processed`; ROI NCC drift → `/processed`; separate channels → `/processed/{tag}`
+	- Analysis (partial): linear pre-edge BG — preview/apply on picture-wide or ROI mean spectrum; `/analysis/background` + `/processed/bg`; spectrum plot with draggable e0/e1 window and ensemble band
+	- Deferred: sum rule; I0 normalization apply; multi-spectra BG overlay; pixel-to-pixel BG; magnetic-domain tools
+
 - [ ] XAS Suite — deferred (thin front-end; shared core with PEEM)
 	- [ ] Treat XAS analysis as a 1D sibling of PEEM BG / sum-rule tools (often TEY, not photoemission images). Keep a separate ribbon entry; share `core/` engines (BG, sum rule, stats). Possibly rename later if a better umbrella name emerges.
 - [ ] Transport Suite — deferred
