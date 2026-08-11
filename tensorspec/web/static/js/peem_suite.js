@@ -425,8 +425,16 @@ function scheduleBgPreview() {
     clearTimeout(state.bgPreviewTimer);
     state.bgPreviewTimer = setTimeout(() => {
         state.bgPreviewTimer = null;
-        if (state.name) previewBg();
+        if (!state.bgBusy && state.name) previewBg();
     }, 300);
+}
+
+function enterBgBusy() {
+    clearTimeout(state.bgPreviewTimer);
+    state.bgPreviewTimer = null;
+    state.bgBusy = true;
+    dom.bgPreview.disabled = true;
+    dom.bgApply.disabled = true;
 }
 
 function updateBgControls(summary) {
@@ -473,9 +481,7 @@ async function previewBg() {
 
     const previewName = state.name;
     const gen = ++state.bgPreviewGen;
-    state.bgBusy = true;
-    dom.bgPreview.disabled = true;
-    dom.bgApply.disabled = true;
+    enterBgBusy();
     dom.bgStatus.textContent = "Previewing background…";
     try {
         const payload = buildBgPayload();
@@ -512,9 +518,7 @@ async function applyBg() {
     }
 
     const applyName = state.name;
-    state.bgBusy = true;
-    dom.bgPreview.disabled = true;
-    dom.bgApply.disabled = true;
+    enterBgBusy();
     setBusy(true, "Applying background…");
     dom.bgStatus.textContent = "Applying background to all frames…";
     try {
@@ -523,7 +527,7 @@ async function applyBg() {
         if (state.name !== applyName) return;
         const meta = await TensorSpecAPI.peemMeta(applyName);
         if (state.name !== applyName) return;
-        state.nBgFrames = Number(summary.n_frames) || 0;
+        state.nBgFrames = Number(meta.n_bg_frames) || Number(summary.n_frames) || 0;
         state.hasBackground = Boolean(meta.has_background);
         state.processedBgNode = meta.processed_bg_node;
         state.energySource = meta.energy_source;
@@ -939,7 +943,9 @@ async function acceptLoad(summary) {
     clearTimeout(state.frameTimer);
     dom.name.value = summary.name;
     if (summary.has_processed_bg) {
-        state.nBgFrames = Number(summary.n_frames) || 0;
+        state.nBgFrames = Number(summary.n_bg_frames) > 0
+            ? Number(summary.n_bg_frames)
+            : (Number(summary.n_frames) || 0);
     }
     configureViewer(summary);
     dom.vmin.disabled = false;
