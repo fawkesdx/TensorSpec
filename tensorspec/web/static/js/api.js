@@ -225,6 +225,8 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify({ mode }),
             }),
+        peemSeparate: (name) =>
+            request(`/api/peem/${encodeURIComponent(name)}/separate`, { method: "POST" }),
         peemFrame: (name, i, { node = "raw", channel = 0 } = {}) => {
             const query = new URLSearchParams({ node });
             if (node === "processed") query.set("channel", String(channel));
