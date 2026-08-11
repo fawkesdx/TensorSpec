@@ -111,6 +111,42 @@ class DataTreeBuilder:
         return tree
 
     @staticmethod
+    def write_processed_child(
+        tree: DataTree, child_name: str, tensor_data: TensorData
+    ) -> DataTree:
+        """Write /processed/<child_name> without replacing parent Dataset; append history."""
+        safe = child_name.strip().strip("/")
+        if not safe or "/" in safe:
+            raise ValueError("Processed child name must be a single path segment.")
+        ds = DataTreeBuilder.dataset_from_tensor(tensor_data)
+        tree[f"processed/{safe}"] = ds
+
+        history_node = tree["history"]
+        history = history_node.to_dataset() if hasattr(history_node, "to_dataset") else history_node.ds
+        log = list(history.attrs.get("log") or [])
+        log.append(
+            f"[{datetime.datetime.now().time()}] Wrote /processed/{safe} ({tensor_data.data_type})"
+        )
+        history = history.copy()
+        history.attrs["log"] = log
+        tree["history"] = history
+        return tree
+
+    @staticmethod
+    def list_processed_children(tree: DataTree) -> list[str]:
+        """Return child names under /processed that contain a 'data' variable."""
+        try:
+            processed = tree["processed"]
+        except Exception:
+            return []
+        names: list[str] = []
+        for name, child in processed.children.items():
+            ds = child.to_dataset() if hasattr(child, "to_dataset") else child.ds
+            if ds is not None and "data" in ds:
+                names.append(str(name))
+        return sorted(names)
+
+    @staticmethod
     def write_analysis(tree: DataTree, node_name: str, dataset: xr.Dataset) -> DataTree:
         """Write ``/analysis/<node_name>`` and append a history line."""
         safe = node_name.strip().strip("/")
