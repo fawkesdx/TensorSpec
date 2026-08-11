@@ -146,6 +146,10 @@ class WorkspaceManager:
         }
         print(f"DataTree '{name}' successfully pushed to Global Workspace.")
 
+    def push_tensor_data(self, name: str, tensor_data: TensorData):
+        """Alias for push_spectroscopy_data."""
+        self.push_spectroscopy_data(name, tensor_data)
+
     def merge_spectroscopy_raw_attrs(self, name: str, attrs: dict) -> bool:
         """Merge metadata into an existing spectroscopy tree's ``/raw`` node."""
         item = self._data.get(name)
@@ -161,6 +165,21 @@ class WorkspaceManager:
             return False
         item['tree'] = DataTreeBuilder.write_processed(item['tree'], tensor_data)
         return True
+
+    def write_processed_child_data(self, name: str, child_name: str, tensor_data: TensorData) -> bool:
+        item = self._data.get(name)
+        if not item or item.get("type") != "spectroscopy_tree":
+            return False
+        item["tree"] = DataTreeBuilder.write_processed_child(
+            item["tree"], child_name, tensor_data
+        )
+        return True
+
+    def list_processed_children(self, name: str) -> list[str]:
+        item = self._data.get(name)
+        if not item or item.get("type") != "spectroscopy_tree":
+            return []
+        return DataTreeBuilder.list_processed_children(item["tree"])
 
     def write_analysis_data(self, name: str, node_name: str, dataset) -> bool:
         """Write an analysis Dataset under ``/analysis/<node_name>``."""
@@ -197,14 +216,14 @@ class WorkspaceManager:
             return None
             
         tree = item['tree']
-        # DataTree matches bare child names, so accept "raw", "/raw", or "/raw/".
         node = node.strip("/")
-        if node not in tree:
+        try:
+            target = tree[node]
+        except Exception:
             print(f"Error: Node '{node}' does not exist in dataset '{name}'.")
             return None
-            
-        # Extract the Dataset from the target node
-        ds = tree[node].to_dataset() if hasattr(tree[node], 'to_dataset') else tree[node]
+
+        ds = target.to_dataset() if hasattr(target, "to_dataset") else target
         if "data" not in ds:
             return None
             
