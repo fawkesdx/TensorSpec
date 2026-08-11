@@ -60,6 +60,7 @@ const state = {
     channel: 0,
     channelTags: [],
     separatedChannels: [],
+    separating: false,
     vmin: 0,
     vmax: 1,
     frameData: null,
@@ -360,7 +361,7 @@ function configureViewer(summary) {
     const usePairNav = state.node === "processed" && state.processedIsPaired;
 
     dom.processedNode.disabled = !state.hasProcessed;
-    dom.separatePairs.disabled = !state.processedIsPaired;
+    dom.separatePairs.disabled = state.separating || !state.processedIsPaired;
     dom.rawNode.checked = state.node === "raw";
     dom.processedNode.checked = state.node === "processed";
     updateProcessedNodeLabel();
@@ -548,6 +549,7 @@ async function separatePairs() {
     if (!state.processedIsPaired) return;
 
     const separateName = state.name;
+    state.separating = true;
     dom.separatePairs.disabled = true;
     setBusy(true, "Separating channels…");
     try {
@@ -570,10 +572,9 @@ async function separatePairs() {
         dom.status.textContent = String(err.message || err);
         dom.footerStatus.textContent = "Separate failed";
     } finally {
+        state.separating = false;
         setBusy(false);
-        if (state.name === separateName) {
-            dom.separatePairs.disabled = !state.processedIsPaired;
-        }
+        dom.separatePairs.disabled = !state.processedIsPaired;
     }
 }
 
