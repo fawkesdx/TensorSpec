@@ -77,8 +77,11 @@ const state = {
     separating: false,
     bgBusy: false,
     bgPreviewData: null,
+    bgPreviewGen: 0,
+    bgPreviewDirty: false,
     hasBackground: false,
     processedBgNode: null,
+    nBgFrames: 0,
     energySource: null,
     bgDrag: null,
     bgPreviewTimer: null,
@@ -118,6 +121,13 @@ function isSeparatedNode(node = state.node) {
     return typeof node === "string" && node.startsWith("processed/");
 }
 
+function isBgNode(node = state.node) {
+    if (!isSeparatedNode(node)) return false;
+    if (state.processedBgNode && node === state.processedBgNode) return true;
+    const tag = node.slice("processed/".length);
+    return tag === "bg" || tag.endsWith("_bg");
+}
+
 function viewerUsesFrameNav(node = state.node) {
     return node === "raw"
         || (node === "processed" && !state.processedIsPaired)
@@ -126,6 +136,7 @@ function viewerUsesFrameNav(node = state.node) {
 
 function viewerFrameCount(node = state.node) {
     if (node === "raw") return state.nFrames;
+    if (isBgNode(node)) return state.nBgFrames > 0 ? state.nBgFrames : state.nFrames;
     if (isSeparatedNode(node)) return state.nPairs || state.nProcessedFrames;
     return state.processedIsPaired ? state.nPairs : state.nProcessedFrames;
 }
@@ -163,6 +174,10 @@ function onNodeRadioChange(node) {
         n_pairs: state.nPairs,
         channel_tags: state.channelTags,
         separated_channels: state.separatedChannels,
+        has_background: state.hasBackground,
+        has_processed_bg: state.nBgFrames > 0 || Boolean(state.processedBgNode),
+        processed_bg_node: state.processedBgNode,
+        energy_source: state.energySource,
     });
     showFrame(viewerFrameIndex());
 }
@@ -403,9 +418,14 @@ function nearestBgHandle(xPx, energy) {
 }
 
 function scheduleBgPreview() {
+    if (state.bgBusy) {
+        state.bgPreviewDirty = true;
+        return;
+    }
     clearTimeout(state.bgPreviewTimer);
     state.bgPreviewTimer = setTimeout(() => {
-        if (!state.bgBusy && state.name) previewBg();
+        state.bgPreviewTimer = null;
+        if (state.name) previewBg();
     }, 300);
 }
 
@@ -414,9 +434,15 @@ function updateBgControls(summary) {
     dom.bgControls.disabled = !enabled;
     dom.bgPreview.disabled = !enabled || state.bgBusy;
     dom.bgApply.disabled = !enabled || state.bgBusy;
-    state.hasBackground = Boolean(summary?.has_background);
-    state.processedBgNode = summary?.processed_bg_node || null;
-    state.energySource = summary?.energy_source || null;
+    if (summary?.has_background !== undefined) {
+        state.hasBackground = Boolean(summary.has_background);
+    }
+    if (summary?.processed_bg_node !== undefined) {
+        state.processedBgNode = summary.processed_bg_node;
+    }
+    if (summary?.energy_source !== undefined) {
+        state.energySource = summary.energy_source;
+    }
 }
 
 async function loadStoredBgSpectrum(name) {
@@ -446,6 +472,7 @@ async function previewBg() {
     }
 
     const previewName = state.name;
+    const gen = ++state.bgPreviewGen;
     state.bgBusy = true;
     dom.bgPreview.disabled = true;
     dom.bgApply.disabled = true;
@@ -453,7 +480,7 @@ async function previewBg() {
     try {
         const payload = buildBgPayload();
         const data = await TensorSpecAPI.peemBgPreview(previewName, payload);
-        if (state.name !== previewName) return;
+        if (state.name !== previewName || gen !== state.bgPreviewGen) return;
         state.bgPreviewData = data;
         dom.bgE0.value = String(data.e0);
         dom.bgE1.value = String(data.e1);
@@ -462,14 +489,15 @@ async function previewBg() {
             `Fit: slope=${data.slope.toExponential(3)}, intercept=${data.intercept.toFixed(3)} · ${data.energy_source}`;
         drawBgPlot();
     } catch (err) {
-        if (state.name !== previewName) return;
+        if (state.name !== previewName || gen !== state.bgPreviewGen) return;
         dom.bgStatus.textContent = String(err.message || err);
     } finally {
-        if (state.name === previewName) {
-            state.bgBusy = false;
-            dom.bgPreview.disabled = false;
-            dom.bgApply.disabled = false;
-        }
+        state.bgBusy = false;
+        dom.bgPreview.disabled = false;
+        dom.bgApply.disabled = false;
+        const dirty = state.bgPreviewDirty;
+        state.bgPreviewDirty = false;
+        if (dirty) scheduleBgPreview();
     }
 }
 
@@ -495,6 +523,7 @@ async function applyBg() {
         if (state.name !== applyName) return;
         const meta = await TensorSpecAPI.peemMeta(applyName);
         if (state.name !== applyName) return;
+        state.nBgFrames = Number(summary.n_frames) || 0;
         state.hasBackground = Boolean(meta.has_background);
         state.processedBgNode = meta.processed_bg_node;
         state.energySource = meta.energy_source;
@@ -514,12 +543,13 @@ async function applyBg() {
         dom.bgStatus.textContent = String(err.message || err);
         dom.footerStatus.textContent = "Background apply failed";
     } finally {
-        if (state.name === applyName) {
-            state.bgBusy = false;
-            dom.bgPreview.disabled = false;
-            dom.bgApply.disabled = false;
-            setBusy(false);
-        }
+        state.bgBusy = false;
+        dom.bgPreview.disabled = false;
+        dom.bgApply.disabled = false;
+        setBusy(false);
+        const dirty = state.bgPreviewDirty;
+        state.bgPreviewDirty = false;
+        if (dirty) scheduleBgPreview();
     }
 }
 
@@ -685,6 +715,16 @@ function configureViewer(summary) {
     state.channelTags = state.processedIsPaired ? (summary.channel_tags || []) : [];
     state.separatedChannels = summary.separated_channels || [];
 
+    if (summary.has_processed_bg === true) {
+        if (Number(summary.n_bg_frames) > 0) {
+            state.nBgFrames = Number(summary.n_bg_frames);
+        } else if (!state.nBgFrames) {
+            state.nBgFrames = state.nFrames;
+        }
+    } else if (summary.has_processed_bg === false) {
+        state.nBgFrames = 0;
+    }
+
     if (!state.hasProcessed && state.node === "processed") state.node = "raw";
     if (isSeparatedNode(state.node)) {
         const tag = state.node.slice("processed/".length);
@@ -694,6 +734,13 @@ function configureViewer(summary) {
     }
     state.frameIndex = Math.min(state.frameIndex, Math.max(0, state.nFrames - 1));
     state.pairIndex = Math.min(state.pairIndex, Math.max(0, state.nPairs - 1));
+    if (isBgNode(state.node)) {
+        const bgCount = viewerFrameCount(state.node);
+        state.pairIndex = Math.min(state.pairIndex, Math.max(0, bgCount - 1));
+    } else if (isSeparatedNode(state.node)) {
+        const sepCount = state.nPairs || state.nProcessedFrames;
+        state.pairIndex = Math.min(state.pairIndex, Math.max(0, sepCount - 1));
+    }
     if (state.node === "processed" && !state.processedIsPaired) {
         state.frameIndex = Math.min(
             state.frameIndex,
@@ -876,15 +923,24 @@ async function acceptLoad(summary) {
     state.frameData = null;
     state.climCustomized = false;
     state.hasDrift = false;
+    state.bgBusy = false;
+    state.bgPreviewGen = 0;
+    state.bgPreviewDirty = false;
+    clearTimeout(state.bgPreviewTimer);
+    state.bgPreviewTimer = null;
     state.bgPreviewData = null;
     state.hasBackground = false;
     state.processedBgNode = null;
+    state.nBgFrames = 0;
     state.energySource = null;
     setDefaultBgWindow(summary.n_frames);
     resetRoi();
     setRoiMode(null);
     clearTimeout(state.frameTimer);
     dom.name.value = summary.name;
+    if (summary.has_processed_bg) {
+        state.nBgFrames = Number(summary.n_frames) || 0;
+    }
     configureViewer(summary);
     dom.vmin.disabled = false;
     dom.vmax.disabled = false;
