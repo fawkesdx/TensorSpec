@@ -95,6 +95,23 @@ class TestBgChildName(unittest.TestCase):
     def test_separated_tag(self):
         self.assertEqual(bg.bg_child_name("processed/CP"), "CP_bg")
 
+    def test_rejects_bg_output_nodes(self):
+        for node in ("processed/bg", "processed/CP_bg"):
+            with self.subTest(node=node):
+                self.assertTrue(bg.is_bg_output_node(node))
+                with self.assertRaises(ValueError):
+                    bg.bg_child_name(node)
+
+
+class TestIsBgOutputNode(unittest.TestCase):
+    def test_non_bg_nodes(self):
+        for node in ("raw", "processed", "processed/CP", "processed/O"):
+            self.assertFalse(bg.is_bg_output_node(node))
+
+    def test_bg_output_nodes(self):
+        for node in ("processed/bg", "processed/CP_bg"):
+            self.assertTrue(bg.is_bg_output_node(node))
+
 
 if __name__ == "__main__":
     unittest.main()

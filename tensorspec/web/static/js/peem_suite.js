@@ -81,6 +81,7 @@ const state = {
     bgPreviewDirty: false,
     hasBackground: false,
     processedBgNode: null,
+    bgSourceNode: null,
     nBgFrames: 0,
     energySource: null,
     bgDrag: null,
@@ -229,10 +230,27 @@ function setDefaultBgWindow(energyOrCount) {
     dom.bgE1.value = String(e1);
 }
 
+function isBgViewerNode(node) {
+    const n = String(node || "").replace(/^\/+|\/+$/g, "");
+    if (n === "processed/bg") return true;
+    if (n.startsWith("processed/")) {
+        const tag = n.slice("processed/".length);
+        return tag.endsWith("_bg");
+    }
+    return false;
+}
+
 function buildBgPayload() {
+    const viewerNode = state.node;
+    if (!isBgViewerNode(viewerNode)) {
+        state.bgSourceNode = viewerNode;
+    }
+    const sourceNode = isBgViewerNode(viewerNode)
+        ? (state.bgSourceNode || viewerNode)
+        : viewerNode;
     const deltaRaw = dom.bgEnsembleDelta.value.trim();
     const payload = {
-        node: state.node,
+        node: sourceNode,
         channel: state.channel,
         use_roi: dom.bgUseRoi.checked,
         e0: Number(dom.bgE0.value),
@@ -935,6 +953,7 @@ async function acceptLoad(summary) {
     state.bgPreviewData = null;
     state.hasBackground = false;
     state.processedBgNode = null;
+    state.bgSourceNode = null;
     state.nBgFrames = 0;
     state.energySource = null;
     setDefaultBgWindow(summary.n_frames);

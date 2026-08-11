@@ -27,6 +27,7 @@ from tensorspec.core.peem_bg import (
     ensemble_preedge,
     extract_spectrum,
     fit_linear_preedge,
+    is_bg_output_node,
     resolve_energy,
 )
 from tensorspec.core.peem_engine import drift_correct, pair_stack, separate_pairs
@@ -325,6 +326,14 @@ def _pull_bg_source(
     """Return (3D stack, source tensor, raw tensor for energy metadata)."""
     raw = _require_tensor(session, name)
     node = node.strip("/")
+    if is_bg_output_node(node):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"node '{node}' is a background output; "
+                "use raw, processed, or a non-bg separated channel."
+            ),
+        )
     if node == "raw":
         stack = np.asarray(raw.value, dtype=float)
         if stack.ndim != 3:

@@ -849,6 +849,27 @@ class TestPeemApi(unittest.TestCase):
 
             self.assertEqual(response.status_code, 422, response.text)
 
+    def test_bg_rejects_bg_output_as_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            self._load_ramp_stack(session, tmp)
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            request = PeemBgRequest(e0=0.0, e1=2.0)
+
+            apply = client.post(
+                "/api/peem/bg_ramp/bg/apply", json=request.model_dump()
+            )
+            self.assertEqual(apply.status_code, 200, apply.text)
+
+            retry = PeemBgRequest(e0=0.0, e1=2.0, node="processed/bg")
+            for path in ("/api/peem/bg_ramp/bg/preview", "/api/peem/bg_ramp/bg/apply"):
+                with self.subTest(path=path):
+                    response = client.post(path, json=retry.model_dump())
+                    self.assertEqual(response.status_code, 422, response.text)
+                    self.assertIn("background output", response.json()["detail"].lower())
+
 
 if __name__ == "__main__":
     unittest.main()
