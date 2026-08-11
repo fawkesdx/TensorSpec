@@ -58,3 +58,34 @@ class TestPairStack(unittest.TestCase):
     def test_invalid_mode_fails(self):
         with self.assertRaises(ValueError):
             eng.pair_stack(_raw(["CP", "CM"]), "bogus")
+
+
+class TestSeparatePairs(unittest.TestCase):
+    def test_cp_cm_split(self):
+        paired = eng.pair_stack(_raw(["CP", "CM", "CP", "CM"]), "CP_CM")
+        out = eng.separate_pairs(paired)
+        self.assertEqual(set(out), {"CP", "CM"})
+        self.assertEqual(out["CP"].value.shape, (2, 2, 2))
+        self.assertEqual(out["CP"].labels, ["frame", "y", "x"])
+        self.assertEqual(out["CP"].data_type, "Experimental PEEM (CP)")
+        self.assertEqual(out["CP"].metadata["channel_tag"], "CP")
+        self.assertEqual(out["CP"].metadata["separated_from"], "paired")
+        self.assertEqual(out["CP"].metadata["pair_mode"], "CP_CM")
+        self.assertTrue(out["CP"].metadata["csv_attached"])
+        np.testing.assert_array_equal(out["CP"].value[0], paired.value[0, 0])
+        np.testing.assert_array_equal(out["CM"].value[0], paired.value[0, 1])
+
+    def test_lh_lv_tags(self):
+        paired = eng.pair_stack(_raw(["LH", "LV"]), "LH_LV")
+        out = eng.separate_pairs(paired)
+        self.assertEqual(set(out), {"LH", "LV"})
+
+    def test_rejects_raw_3d(self):
+        with self.assertRaises(ValueError):
+            eng.separate_pairs(_raw(["CP", "CM"]))
+
+    def test_rejects_bad_channel_tags(self):
+        paired = eng.pair_stack(_raw(["CP", "CM"]), "CP_CM")
+        paired.metadata["channel_tags"] = ["CP"]
+        with self.assertRaises(ValueError):
+            eng.separate_pairs(paired)
