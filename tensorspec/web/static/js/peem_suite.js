@@ -17,6 +17,7 @@ const dom = {
     continueWithout: el("peem-continue"),
     mode: el("peem-mode"),
     stackPairs: el("peem-stack-pairs"),
+    separatePairs: el("peem-separate-pairs"),
     algo: el("peem-algo"),
     ref: el("peem-ref"),
     search: el("peem-search"),
@@ -32,6 +33,7 @@ const dom = {
     canvas: el("peem-canvas"),
     rawNode: el("peem-node-raw"),
     processedNode: el("peem-node-processed"),
+    separatedNodes: el("peem-separated-nodes"),
     rawControls: el("peem-raw-controls"),
     processedControls: el("peem-processed-controls"),
     frame: el("peem-frame"),
@@ -57,6 +59,8 @@ const state = {
     pairIndex: 0,
     channel: 0,
     channelTags: [],
+    separatedChannels: [],
+    separatedFrameCounts: {},
     vmin: 0,
     vmax: 1,
     frameData: null,
@@ -89,18 +93,76 @@ function processedFrameCount(summary) {
     return 0;
 }
 
+function isSeparatedNode(node = state.node) {
+    return typeof node === "string" && node.startsWith("processed/");
+}
+
 function viewerUsesFrameNav(node = state.node) {
-    return node === "raw" || (node === "processed" && !state.processedIsPaired);
+    return node === "raw"
+        || (node === "processed" && !state.processedIsPaired)
+        || isSeparatedNode(node);
 }
 
 function viewerFrameCount(node = state.node) {
     if (node === "raw") return state.nFrames;
+    if (isSeparatedNode(node)) return state.nPairs || state.nProcessedFrames;
     return state.processedIsPaired ? state.nPairs : state.nProcessedFrames;
 }
 
 function viewerFrameIndex(node = state.node) {
     if (node === "raw") return state.frameIndex;
+    if (isSeparatedNode(node)) return state.pairIndex;
     return state.processedIsPaired ? state.pairIndex : state.frameIndex;
+}
+
+function processedNodeLabel() {
+    return state.processedIsPaired ? "Paired" : "Processed";
+}
+
+function updateProcessedNodeLabel() {
+    const label = dom.processedNode.closest("label");
+    if (!label) return;
+    for (const child of [...label.childNodes]) {
+        if (child !== dom.processedNode) label.removeChild(child);
+    }
+    label.append(document.createTextNode(` ${processedNodeLabel()}`));
+}
+
+function onNodeRadioChange(node) {
+    state.requestId += 1;
+    clearTimeout(state.frameTimer);
+    state.node = node;
+    state.climCustomized = false;
+    configureViewer({
+        n_frames: state.nFrames,
+        has_processed: state.hasProcessed,
+        has_drift: state.hasDrift,
+        processed_is_paired: state.processedIsPaired,
+        n_processed_frames: state.nProcessedFrames,
+        n_pairs: state.nPairs,
+        channel_tags: state.channelTags,
+        separated_channels: state.separatedChannels,
+    });
+    showFrame(viewerFrameIndex());
+}
+
+function rebuildSeparatedNodeRadios() {
+    dom.separatedNodes.replaceChildren();
+    for (const tag of state.separatedChannels) {
+        const label = document.createElement("label");
+        label.className = "check";
+        const radio = document.createElement("input");
+        radio.type = "radio";
+        radio.name = "peem-node";
+        radio.value = `processed/${tag}`;
+        radio.checked = state.node === `processed/${tag}`;
+        radio.addEventListener("change", () => {
+            if (!radio.checked) return;
+            onNodeRadioChange(radio.value);
+        });
+        label.append(radio, document.createTextNode(` ${tag}`));
+        dom.separatedNodes.append(label);
+    }
 }
 
 function setBusy(busy, message = "") {
@@ -274,8 +336,15 @@ function configureViewer(summary) {
     state.nProcessedFrames = state.hasProcessed ? processedFrameCount(summary) : 0;
     state.nPairs = state.processedIsPaired ? Number(summary.n_pairs) || 0 : 0;
     state.channelTags = state.processedIsPaired ? (summary.channel_tags || []) : [];
+    state.separatedChannels = summary.separated_channels || [];
 
     if (!state.hasProcessed && state.node === "processed") state.node = "raw";
+    if (isSeparatedNode(state.node)) {
+        const tag = state.node.slice("processed/".length);
+        if (!state.separatedChannels.includes(tag)) {
+            state.node = state.hasProcessed ? "processed" : "raw";
+        }
+    }
     state.frameIndex = Math.min(state.frameIndex, Math.max(0, state.nFrames - 1));
     state.pairIndex = Math.min(state.pairIndex, Math.max(0, state.nPairs - 1));
     if (state.node === "processed" && !state.processedIsPaired) {
@@ -292,8 +361,11 @@ function configureViewer(summary) {
     const usePairNav = state.node === "processed" && state.processedIsPaired;
 
     dom.processedNode.disabled = !state.hasProcessed;
+    dom.separatePairs.disabled = !state.processedIsPaired;
     dom.rawNode.checked = state.node === "raw";
     dom.processedNode.checked = state.node === "processed";
+    updateProcessedNodeLabel();
+    rebuildSeparatedNodeRadios();
     dom.rawControls.hidden = !useFrameNav;
     dom.processedControls.hidden = !usePairNav;
 
@@ -362,6 +434,7 @@ async function showFrame(index, expectedName = state.name) {
     if (!count) return;
     const clamped = Math.max(0, Math.min(count - 1, Number(index) || 0));
     const usePairNav = state.node === "processed" && state.processedIsPaired;
+    const useSeparatedNav = isSeparatedNode(state.node);
     const itemName = usePairNav ? "pair" : "frame";
     dom.frameMeta.textContent = `Loading ${itemName} ${clamped + 1}…`;
     try {
@@ -374,6 +447,10 @@ async function showFrame(index, expectedName = state.name) {
             state.pairIndex = clamped;
             dom.pair.value = String(clamped);
             dom.pairLabel.textContent = `${clamped + 1} / ${state.nPairs}`;
+        } else if (useSeparatedNav) {
+            state.pairIndex = clamped;
+            dom.frame.value = String(clamped);
+            dom.frameLabel.textContent = `${clamped + 1} / ${count}`;
         } else {
             state.frameIndex = clamped;
             dom.frame.value = String(clamped);
@@ -392,7 +469,13 @@ async function showFrame(index, expectedName = state.name) {
                 frame.channel_tag,
                 `${frame.shape[1]} × ${frame.shape[0]}`,
             ]
-            : [frame.frame_name, frame.pol, `${frame.shape[1]} × ${frame.shape[0]}`];
+            : useSeparatedNav
+                ? [
+                    state.node.slice("processed/".length),
+                    `Frame ${clamped + 1}`,
+                    `${frame.shape[1]} × ${frame.shape[0]}`,
+                ]
+                : [frame.frame_name, frame.pol, `${frame.shape[1]} × ${frame.shape[0]}`];
         dom.frameMeta.textContent = details.filter(Boolean).join(" · ");
         renderFrame();
     } catch (error) {
@@ -441,6 +524,8 @@ async function acceptLoad(summary) {
     state.pairIndex = 0;
     state.channel = 0;
     state.channelTags = [];
+    state.separatedChannels = [];
+    state.separatedFrameCounts = {};
     state.frameData = null;
     state.climCustomized = false;
     state.hasDrift = false;
@@ -477,6 +562,7 @@ async function stackPairs() {
         state.frameIndex = 0;
         state.pairIndex = 0;
         state.channel = 0;
+        state.separatedChannels = [];
         state.frameData = null;
         state.climCustomized = false;
         configureViewer(summary);
@@ -535,6 +621,7 @@ async function applyDrift() {
         state.frameIndex = 0;
         state.pairIndex = 0;
         state.channel = 0;
+        state.separatedChannels = [];
         state.frameData = null;
         state.climCustomized = false;
         state.hasDrift = true;
@@ -617,6 +704,29 @@ dom.serverPath.addEventListener("keydown", (event) => {
 
 dom.attachCsv.addEventListener("click", attachCsv);
 dom.stackPairs.addEventListener("click", stackPairs);
+dom.separatePairs.addEventListener("click", async () => {
+    if (!state.name || !state.processedIsPaired) return;
+    setBusy(true, "Separating channels…");
+    try {
+        const summary = await TensorSpecAPI.peemSeparate(state.name);
+        const meta = await TensorSpecAPI.peemMeta(state.name);
+        configureViewer({ ...meta, n_frames: meta.n_frames });
+        dom.status.textContent =
+            `Separated ${summary.channels.join(", ")} (${summary.n_frames} frames)`;
+        dom.footerStatus.textContent =
+            `${state.name} · separated ${summary.channels.join(", ")}`;
+        if (summary.channels.length) {
+            state.node = `processed/${summary.channels[0]}`;
+            configureViewer(meta);
+        }
+        await showFrame(viewerFrameIndex());
+    } catch (err) {
+        dom.status.textContent = String(err.message || err);
+        dom.footerStatus.textContent = "Separate failed";
+    } finally {
+        setBusy(false);
+    }
+});
 dom.applyDrift.addEventListener("click", applyDrift);
 dom.roiRect.addEventListener("click", () => setRoiMode("rect"));
 dom.roiEllipse.addEventListener("click", () => setRoiMode("ellipse"));
@@ -651,20 +761,7 @@ dom.pair.addEventListener("input", () => {
 for (const input of [dom.rawNode, dom.processedNode]) {
     input.addEventListener("change", () => {
         if (!input.checked) return;
-        state.requestId += 1;
-        clearTimeout(state.frameTimer);
-        state.node = input.value;
-        state.climCustomized = false;
-        configureViewer({
-            n_frames: state.nFrames,
-            has_processed: state.hasProcessed,
-            has_drift: state.hasDrift,
-            processed_is_paired: state.processedIsPaired,
-            n_processed_frames: state.nProcessedFrames,
-            n_pairs: state.nPairs,
-            channel_tags: state.channelTags,
-        });
-        showFrame(viewerFrameIndex());
+        onNodeRadioChange(input.value);
     });
 }
 
