@@ -630,6 +630,80 @@ class TestPeemApi(unittest.TestCase):
             self.assertEqual(meta.status_code, 200, meta.text)
             self.assertEqual(meta.json()["I0"], 2.5)
 
+    def test_separate_after_pair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a_CP.tif", np.ones((4, 4), dtype=np.uint16))
+            tifffile.imwrite(root / "b_CM.tif", np.full((4, 4), 2, dtype=np.uint16))
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="separate_me",
+                session=session,
+            )
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+
+            pair = client.post(
+                "/api/peem/separate_me/pair",
+                json=PeemPairRequest(mode="CP_CM").model_dump(),
+            )
+            self.assertEqual(pair.status_code, 200, pair.text)
+
+            response = client.post("/api/peem/separate_me/separate")
+            self.assertEqual(response.status_code, 200, response.text)
+            body = response.json()
+            self.assertTrue(body["has_separated"])
+            self.assertEqual(set(body["channels"]), {"CP", "CM"})
+            self.assertGreaterEqual(body["n_frames"], 1)
+
+            meta = client.get("/api/peem/separate_me/meta")
+            self.assertEqual(meta.status_code, 200, meta.text)
+            self.assertEqual(set(meta.json()["separated_channels"]), {"CP", "CM"})
+            self.assertTrue(meta.json()["processed_is_paired"])
+
+            frame = client.get(
+                "/api/peem/separate_me/frame/0",
+                params={"node": "processed/CP"},
+            )
+            self.assertEqual(frame.status_code, 200, frame.text)
+            self.assertEqual(frame.json()["node"], "processed/CP")
+            self.assertEqual(frame.json()["channel_tag"], "CP")
+
+            paired = client.get(
+                "/api/peem/separate_me/frame/0",
+                params={"node": "processed", "channel": 0},
+            )
+            self.assertEqual(paired.status_code, 200, paired.text)
+
+    def test_separate_without_pair_422(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a_CP.tif", np.ones((4, 4), dtype=np.uint16))
+            tifffile.imwrite(root / "b_CM.tif", np.full((4, 4), 2, dtype=np.uint16))
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="raw_only",
+                session=session,
+            )
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+
+            response = client.post("/api/peem/raw_only/separate")
+
+            self.assertEqual(response.status_code, 422, response.text)
+
     def test_repeated_upload_filename_uses_clean_directory(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = self._session(tmp)
