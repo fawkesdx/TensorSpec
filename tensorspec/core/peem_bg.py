@@ -120,9 +120,24 @@ def apply_bg_to_stack(stack: np.ndarray, bg: np.ndarray) -> np.ndarray:
     return stack - bg.reshape(-1, 1, 1)
 
 
+def is_bg_output_node(node: str) -> bool:
+    """True if node is a background-subtracted processed child, not a fit source."""
+    node = node.strip("/")
+    if node == "processed/bg":
+        return True
+    if node.startswith("processed/"):
+        tag = node.split("/", 1)[1]
+        return bool(tag) and tag.endswith("_bg")
+    return False
+
+
 def bg_child_name(source_node: str) -> str:
     """Map source viewer node to processed child name."""
     node = source_node.strip("/")
+    if is_bg_output_node(node):
+        raise ValueError(
+            f"cannot use background output as source: {source_node!r}"
+        )
     if node in {"raw", "processed"}:
         return "bg"
     if node.startswith("processed/"):
