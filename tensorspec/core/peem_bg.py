@@ -62,12 +62,86 @@ def fit_linear_preedge(
     }
 
 
-def ensemble_preedge(
+def fit_two_step_pre_post(
     energy: np.ndarray,
     spectrum: np.ndarray,
+    pre_e0: float,
+    pre_e1: float,
+    post_e0: float,
+    post_e1: float,
+) -> dict:
+    """Return pre/post slopes, intercepts, and bg on full axis."""
+    energy = np.asarray(energy, dtype=float)
+    spectrum = np.asarray(spectrum, dtype=float)
+    pre_lo, pre_hi = (pre_e0, pre_e1) if pre_e0 <= pre_e1 else (pre_e1, pre_e0)
+    post_lo, post_hi = (
+        (post_e0, post_e1) if post_e0 <= post_e1 else (post_e1, post_e0)
+    )
+    if pre_hi >= post_lo:
+        raise ValueError("pre-edge end must be before post-edge start")
+
+    pre_window = (energy >= pre_lo) & (energy <= pre_hi)
+    post_window = (energy >= post_lo) & (energy <= post_hi)
+    if int(pre_window.sum()) < 2:
+        raise ValueError("pre-edge window must contain at least 2 points")
+    if int(post_window.sum()) < 2:
+        raise ValueError("post-edge window must contain at least 2 points")
+
+    pre_slope, pre_intercept = np.polyfit(energy[pre_window], spectrum[pre_window], 1)
+    post_slope, post_intercept = np.polyfit(
+        energy[post_window], spectrum[post_window], 1
+    )
+
+    y_pre = pre_slope * energy + pre_intercept
+    y_post = post_slope * energy + post_intercept
+    y_at_pre_end = pre_slope * pre_hi + pre_intercept
+    y_at_post_start = post_slope * post_lo + post_intercept
+
+    t = (energy - pre_hi) / (post_lo - pre_hi)
+    bg_connect = (1.0 - t) * y_at_pre_end + t * y_at_post_start
+    bg = np.where(energy <= pre_hi, y_pre, np.where(energy >= post_lo, y_post, bg_connect))
+
+    return {
+        "pre_slope": float(pre_slope),
+        "pre_intercept": float(pre_intercept),
+        "post_slope": float(post_slope),
+        "post_intercept": float(post_intercept),
+        "bg": bg,
+    }
+
+
+def fit_background(
+    method: str,
+    energy: np.ndarray,
+    spectrum: np.ndarray,
+    *,
     e0: float,
     e1: float,
+    post_e0: float | None = None,
+    post_e1: float | None = None,
+) -> dict:
+    """Fit background using linear or two_step method."""
+    method_norm = str(method).strip().lower()
+    if method_norm == "linear":
+        fit = fit_linear_preedge(energy, spectrum, e0, e1)
+        return {**fit, "method": "linear"}
+    if method_norm == "two_step":
+        if post_e0 is None or post_e1 is None:
+            raise ValueError("two_step requires post_e0 and post_e1")
+        fit = fit_two_step_pre_post(energy, spectrum, e0, e1, post_e0, post_e1)
+        return {**fit, "method": "two_step"}
+    raise ValueError(f"unknown background method: {method!r}")
+
+
+def ensemble_background(
+    method: str,
+    energy: np.ndarray,
+    spectrum: np.ndarray,
     *,
+    e0: float,
+    e1: float,
+    post_e0: float | None = None,
+    post_e1: float | None = None,
     delta: float,
     n: int,
     seed: int = 0,
@@ -82,14 +156,26 @@ def ensemble_preedge(
     spectrum = np.asarray(spectrum, dtype=float)
     e_min, e_max = float(energy.min()), float(energy.max())
     rng = np.random.default_rng(seed)
+    method_norm = str(method).strip().lower()
+    two_step = method_norm == "two_step"
+    if two_step and (post_e0 is None or post_e1 is None):
+        raise ValueError("two_step requires post_e0 and post_e1")
 
     bg_samples: list[np.ndarray] = []
     sub_samples: list[np.ndarray] = []
     for _ in range(n):
         e0_j = float(np.clip(rng.uniform(e0 - delta, e0 + delta), e_min, e_max))
         e1_j = float(np.clip(rng.uniform(e1 - delta, e1 + delta), e_min, e_max))
+        fit_kwargs: dict[str, Any] = {"e0": e0_j, "e1": e1_j}
+        if two_step:
+            fit_kwargs["post_e0"] = float(
+                np.clip(rng.uniform(post_e0 - delta, post_e0 + delta), e_min, e_max)
+            )
+            fit_kwargs["post_e1"] = float(
+                np.clip(rng.uniform(post_e1 - delta, post_e1 + delta), e_min, e_max)
+            )
         try:
-            fit = fit_linear_preedge(energy, spectrum, e0_j, e1_j)
+            fit = fit_background(method_norm, energy, spectrum, **fit_kwargs)
         except ValueError:
             continue
         bg_samples.append(fit["bg"])
@@ -107,6 +193,29 @@ def ensemble_preedge(
         "subtracted_std": sub_arr.std(axis=0, ddof=0),
         "n_valid": len(bg_samples),
     }
+
+
+def ensemble_preedge(
+    energy: np.ndarray,
+    spectrum: np.ndarray,
+    e0: float,
+    e1: float,
+    *,
+    delta: float,
+    n: int,
+    seed: int = 0,
+) -> dict:
+    """bg_mean, bg_std, subtracted_mean, subtracted_std, n_valid."""
+    return ensemble_background(
+        "linear",
+        energy,
+        spectrum,
+        e0=e0,
+        e1=e1,
+        delta=delta,
+        n=n,
+        seed=seed,
+    )
 
 
 def apply_bg_to_stack(stack: np.ndarray, bg: np.ndarray) -> np.ndarray:
