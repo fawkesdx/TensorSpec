@@ -637,3 +637,6 @@ const TensorSpecAPI = (() => {
         },
     };
 })();
+
+// ES module suite scripts cannot reliably see classic-script `const` bindings.
+window.TensorSpecAPI = TensorSpecAPI;
