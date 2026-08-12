@@ -173,7 +173,7 @@ class QERequest(BaseModel):
 
     run_name: str = Field(default="run_01", min_length=1, max_length=64)
     ecutwfc: float = Field(default=60.0, ge=20, le=200)
-    nbnd: int = Field(default=12, ge=1, le=500)
+    nbnd: int = Field(default=12, ge=1, le=2000)
     kx: int = Field(default=6, ge=1, le=20)
     ky: int = Field(default=6, ge=1, le=20)
     kz: int = Field(default=6, ge=1, le=20)
