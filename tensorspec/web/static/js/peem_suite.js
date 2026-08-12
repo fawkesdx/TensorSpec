@@ -26,8 +26,13 @@ const dom = {
     applyDrift: el("peem-apply-drift"),
     bgControls: el("peem-bg-controls"),
     bgUseRoi: el("peem-bg-use-roi"),
+    bgMethod: el("peem-bg-method"),
+    bgMethodHint: el("peem-bg-method-hint"),
+    bgPostFields: el("peem-bg-post-fields"),
     bgE0: el("peem-bg-e0"),
     bgE1: el("peem-bg-e1"),
+    bgPostE0: el("peem-bg-post-e0"),
+    bgPostE1: el("peem-bg-post-e1"),
     bgEnsembleDelta: el("peem-bg-ensemble-delta"),
     bgEnsembleN: el("peem-bg-ensemble-n"),
     bgShowRaw: el("peem-bg-show-raw"),
@@ -259,10 +264,121 @@ function defaultBgWindow(energyOrCount) {
     return { e0: 0, e1: 0.2 * (n - 1) };
 }
 
+function defaultBgPostWindow(energyOrCount, preE1) {
+    if (Array.isArray(energyOrCount) && energyOrCount.length > 1) {
+        const eMin = energyOrCount[0];
+        const eMax = energyOrCount[energyOrCount.length - 1];
+        const span = eMax - eMin;
+        let postE0 = eMin + 0.8 * span;
+        let postE1 = eMax;
+        if (Number.isFinite(preE1) && preE1 >= postE0) {
+            postE0 = preE1 + 0.05 * span;
+            postE1 = Math.min(eMax, postE0 + 0.2 * span);
+        }
+        return { postE0, postE1 };
+    }
+    const n = Math.max(5, Number(energyOrCount) || state.nFrames || 5);
+    const span = n - 1;
+    let postE0 = 0.8 * span;
+    let postE1 = span;
+    if (Number.isFinite(preE1) && preE1 >= postE0) {
+        postE0 = preE1 + 0.05 * span;
+        postE1 = Math.min(span, postE0 + 0.2 * span);
+    }
+    return { postE0, postE1 };
+}
+
 function setDefaultBgWindow(energyOrCount) {
     const { e0, e1 } = defaultBgWindow(energyOrCount);
     dom.bgE0.value = String(e0);
     dom.bgE1.value = String(e1);
+    const { postE0, postE1 } = defaultBgPostWindow(energyOrCount, e1);
+    dom.bgPostE0.value = String(postE0);
+    dom.bgPostE1.value = String(postE1);
+}
+
+function isBgTwoStep() {
+    return dom.bgMethod.value === "two_step";
+}
+
+function bgEnergySpan(energy) {
+    if (energy?.length > 1) return energy[energy.length - 1] - energy[0];
+    const n = Math.max(2, state.nFrames || 2);
+    return n - 1;
+}
+
+function enforceBgWindowOrder() {
+    if (!isBgTwoStep()) return;
+    const e1 = Number(dom.bgE1.value);
+    const postE0 = Number(dom.bgPostE0.value);
+    if (!Number.isFinite(e1) || !Number.isFinite(postE0) || postE0 > e1) return;
+    const energy = state.bgPreviewData?.energy;
+    const eps = 0.001 * bgEnergySpan(energy);
+    dom.bgPostE0.value = String(e1 + eps);
+}
+
+function updateBgMethodUI() {
+    const twoStep = isBgTwoStep();
+    dom.bgPostFields.hidden = !twoStep;
+    dom.bgMethodHint.hidden = !twoStep;
+    if (twoStep) {
+        const preE1 = Number(dom.bgE1.value);
+        const postE0 = Number(dom.bgPostE0.value);
+        const postE1 = Number(dom.bgPostE1.value);
+        if (!Number.isFinite(postE0) || !Number.isFinite(postE1)) {
+            const energy = state.bgPreviewData?.energy || state.nFrames;
+            const { postE0: d0, postE1: d1 } = defaultBgPostWindow(energy, preE1);
+            dom.bgPostE0.value = String(d0);
+            dom.bgPostE1.value = String(d1);
+        }
+        enforceBgWindowOrder();
+    }
+    drawBgPlot();
+}
+
+function applyBgFormFields(data) {
+    if (!data) return;
+    if (data.method === "two_step" || data.method === "linear") {
+        dom.bgMethod.value = data.method;
+    }
+    if (Number.isFinite(data.e0)) dom.bgE0.value = String(data.e0);
+    if (Number.isFinite(data.e1)) dom.bgE1.value = String(data.e1);
+    if (Number.isFinite(data.post_e0)) dom.bgPostE0.value = String(data.post_e0);
+    if (Number.isFinite(data.post_e1)) dom.bgPostE1.value = String(data.post_e1);
+    updateBgMethodUI();
+}
+
+function setBgField(key, value) {
+    const map = {
+        e0: dom.bgE0,
+        e1: dom.bgE1,
+        post_e0: dom.bgPostE0,
+        post_e1: dom.bgPostE1,
+    };
+    if (map[key]) map[key].value = String(value);
+}
+
+function bgWindowFields() {
+    const fields = {
+        e0: Number(dom.bgE0.value),
+        e1: Number(dom.bgE1.value),
+    };
+    if (isBgTwoStep()) {
+        fields.post_e0 = Number(dom.bgPostE0.value);
+        fields.post_e1 = Number(dom.bgPostE1.value);
+    }
+    return fields;
+}
+
+function bgFitStatusText(data) {
+    if (data.method === "two_step") {
+        return [
+            `Pre: slope=${data.pre_slope?.toExponential(3)}, intercept=${data.pre_intercept?.toFixed(3)}`,
+            `Post: slope=${data.post_slope?.toExponential(3)}, intercept=${data.post_intercept?.toFixed(3)}`,
+            data.energy_source,
+        ].join(" · ");
+    }
+    return `Fit: slope=${data.slope?.toExponential(3)}, intercept=${data.intercept?.toFixed(3)} · ${data.energy_source}`;
 }
 
 function defaultSumruleWindows(energyOrCount) {
@@ -340,6 +456,7 @@ function buildBgPayload() {
         : viewerNode;
     const deltaRaw = dom.bgEnsembleDelta.value.trim();
     const payload = {
+        method: dom.bgMethod.value,
         node: sourceNode,
         channel: state.channel,
         use_roi: dom.bgUseRoi.checked,
@@ -347,6 +464,10 @@ function buildBgPayload() {
         e1: Number(dom.bgE1.value),
         ensemble_n: Math.max(1, Math.min(101, Number(dom.bgEnsembleN.value) || 21)),
     };
+    if (isBgTwoStep()) {
+        payload.post_e0 = Number(dom.bgPostE0.value);
+        payload.post_e1 = Number(dom.bgPostE1.value);
+    }
     if (deltaRaw) payload.ensemble_delta = Number(deltaRaw);
     if (payload.use_roi) payload.roi = state.roi;
     return payload;
@@ -483,10 +604,15 @@ function drawBgPlot() {
 
     const e0 = Number(dom.bgE0.value);
     const e1 = Number(dom.bgE1.value);
-    for (const [e, label] of [[e0, "e0"], [e1, "e1"]]) {
+    const preEdges = [[e0, "e0"], [e1, "e1"]];
+    const postEdges = isBgTwoStep()
+        ? [[Number(dom.bgPostE0.value), "post_e0"], [Number(dom.bgPostE1.value), "post_e1"]]
+        : [];
+    for (const [e, label] of [...preEdges, ...postEdges]) {
         if (!Number.isFinite(e)) continue;
         const x = plotXForEnergy(e, energy);
-        ctx.strokeStyle = "#ffeb3b";
+        const isPost = label.startsWith("post_");
+        ctx.strokeStyle = isPost ? "#4dd0e1" : "#ffeb3b";
         ctx.lineWidth = 1;
         ctx.setLineDash([4, 3]);
         ctx.beginPath();
@@ -494,7 +620,7 @@ function drawBgPlot() {
         ctx.lineTo(x, pad.top + plotH);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = "#ffeb3b";
+        ctx.fillStyle = isPost ? "#4dd0e1" : "#ffeb3b";
         ctx.font = "10px sans-serif";
         ctx.fillText(label, x + 2, pad.top + 10);
     }
@@ -504,6 +630,17 @@ function drawBgPlot() {
     const x1 = plotXForEnergy(Math.max(e0, e1), energy);
     ctx.fillRect(x0, pad.top, x1 - x0, plotH);
 
+    if (isBgTwoStep()) {
+        const postE0 = Number(dom.bgPostE0.value);
+        const postE1 = Number(dom.bgPostE1.value);
+        if (Number.isFinite(postE0) && Number.isFinite(postE1)) {
+            ctx.fillStyle = "rgba(77, 208, 225, 0.12)";
+            const px0 = plotXForEnergy(Math.min(postE0, postE1), energy);
+            const px1 = plotXForEnergy(Math.max(postE0, postE1), energy);
+            ctx.fillRect(px0, pad.top, px1 - px0, plotH);
+        }
+    }
+
     ctx.fillStyle = "#888";
     ctx.font = "10px sans-serif";
     const xLabel = state.energySource === "csv" ? "Energy (eV)" : "Frame index";
@@ -511,17 +648,36 @@ function drawBgPlot() {
 }
 
 function nearestBgHandle(xPx, energy) {
-    const e0 = Number(dom.bgE0.value);
-    const e1 = Number(dom.bgE1.value);
-    if (!Number.isFinite(e0) || !Number.isFinite(e1)) return null;
-    const x0 = plotXForEnergy(e0, energy);
-    const x1 = plotXForEnergy(e1, energy);
+    const w = bgWindowFields();
+    const handles = [
+        ["e0", w.e0],
+        ["e1", w.e1],
+    ];
+    if (isBgTwoStep()) {
+        handles.push(["post_e0", w.post_e0], ["post_e1", w.post_e1]);
+    }
     const threshold = 8;
-    if (Math.abs(xPx - x0) <= threshold) return "e0";
-    if (Math.abs(xPx - x1) <= threshold) return "e1";
-    const lo = Math.min(x0, x1);
-    const hi = Math.max(x0, x1);
-    if (xPx >= lo && xPx <= hi) return "window";
+    let best = null;
+    let bestDist = threshold + 1;
+    for (const [name, e] of handles) {
+        if (!Number.isFinite(e)) continue;
+        const dist = Math.abs(xPx - plotXForEnergy(e, energy));
+        if (dist <= threshold && dist < bestDist) {
+            best = name;
+            bestDist = dist;
+        }
+    }
+    if (best) return best;
+
+    const x0 = plotXForEnergy(Math.min(w.e0, w.e1), energy);
+    const x1 = plotXForEnergy(Math.max(w.e0, w.e1), energy);
+    if (xPx >= x0 && xPx <= x1) return "window";
+
+    if (isBgTwoStep() && Number.isFinite(w.post_e0) && Number.isFinite(w.post_e1)) {
+        const px0 = plotXForEnergy(Math.min(w.post_e0, w.post_e1), energy);
+        const px1 = plotXForEnergy(Math.max(w.post_e0, w.post_e1), energy);
+        if (xPx >= px0 && xPx <= px1) return "post_window";
+    }
     return null;
 }
 
@@ -566,12 +722,11 @@ async function loadStoredBgSpectrum(name) {
     try {
         const data = await TensorSpecAPI.peemBgSpectrum(name);
         if (state.name !== name) return;
+        applyBgFormFields(data);
         state.bgPreviewData = data;
-        dom.bgE0.value = String(data.e0);
-        dom.bgE1.value = String(data.e1);
         state.energySource = data.energy_source;
         drawBgPlot();
-        dom.bgStatus.textContent = `Stored background (${data.energy_source})`;
+        dom.bgStatus.textContent = `Stored background (${data.method}, ${data.energy_source})`;
     } catch (_) {
         /* no stored analysis yet */
     }
@@ -595,12 +750,10 @@ async function previewBg() {
         const payload = buildBgPayload();
         const data = await TensorSpecAPI.peemBgPreview(previewName, payload);
         if (state.name !== previewName || gen !== state.bgPreviewGen) return;
+        applyBgFormFields(data);
         state.bgPreviewData = data;
-        dom.bgE0.value = String(data.e0);
-        dom.bgE1.value = String(data.e1);
         state.energySource = data.energy_source;
-        dom.bgStatus.textContent =
-            `Fit: slope=${data.slope.toExponential(3)}, intercept=${data.intercept.toFixed(3)} · ${data.energy_source}`;
+        dom.bgStatus.textContent = bgFitStatusText(data);
         drawBgPlot();
     } catch (err) {
         if (state.name !== previewName || gen !== state.bgPreviewGen) return;
@@ -1440,6 +1593,8 @@ async function acceptLoad(summary) {
     state.bgSourceNode = null;
     state.nBgFrames = 0;
     state.energySource = null;
+    dom.bgMethod.value = "linear";
+    updateBgMethodUI();
     setDefaultBgWindow(summary.n_frames);
     if (!summary.has_sumrule) {
         setDefaultSumruleWindows(summary.n_frames);
@@ -1682,12 +1837,17 @@ dom.sumruleApply.addEventListener("click", applySumrule);
 for (const input of [dom.bgShowRaw, dom.bgShowBg, dom.bgShowBand, dom.bgShowSub]) {
     input.addEventListener("change", drawBgPlot);
 }
-for (const input of [dom.bgE0, dom.bgE1]) {
+for (const input of [dom.bgE0, dom.bgE1, dom.bgPostE0, dom.bgPostE1]) {
     input.addEventListener("change", () => {
+        enforceBgWindowOrder();
         drawBgPlot();
         scheduleBgPreview();
     });
 }
+dom.bgMethod.addEventListener("change", () => {
+    updateBgMethodUI();
+    scheduleBgPreview();
+});
 dom.bgPlot.addEventListener("mousedown", (event) => {
     const data = state.bgPreviewData;
     if (!data?.energy?.length) return;
@@ -1696,18 +1856,46 @@ dom.bgPlot.addEventListener("mousedown", (event) => {
     const scaleX = dom.bgPlot.width / rect.width;
     const xPx = (event.clientX - rect.left) * scaleX;
     const handle = nearestBgHandle(xPx, data.energy);
+    const w = bgWindowFields();
+    if (handle === "window") {
+        state.bgDrag = {
+            handle,
+            energy: data.energy,
+            startE0: w.e0,
+            startE1: w.e1,
+            startX: xPx,
+        };
+        return;
+    }
+    if (handle === "post_window") {
+        state.bgDrag = {
+            handle,
+            energy: data.energy,
+            startPostE0: w.post_e0,
+            startPostE1: w.post_e1,
+            startX: xPx,
+        };
+        return;
+    }
     if (handle) {
-        state.bgDrag = { handle, energy: data.energy, startE0: Number(dom.bgE0.value), startE1: Number(dom.bgE1.value), startX: xPx };
+        state.bgDrag = { handle, energy: data.energy };
         return;
     }
     const e = energyAtPlotX(xPx, data.energy);
-    const e0 = Number(dom.bgE0.value);
-    const e1 = Number(dom.bgE1.value);
-    if (!Number.isFinite(e0) || !Number.isFinite(e1) || Math.abs(e - e0) <= Math.abs(e - e1)) {
-        dom.bgE0.value = String(e);
-    } else {
-        dom.bgE1.value = String(e);
+    const keys = isBgTwoStep()
+        ? ["e0", "e1", "post_e0", "post_e1"]
+        : ["e0", "e1"];
+    let bestKey = keys[0];
+    let bestDist = Infinity;
+    for (const key of keys) {
+        const dist = Math.abs(e - w[key]);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestKey = key;
+        }
     }
+    setBgField(bestKey, e);
+    enforceBgWindowOrder();
     drawBgPlot();
     scheduleBgPreview();
 });
@@ -1717,17 +1905,21 @@ dom.bgPlot.addEventListener("mousemove", (event) => {
     const scaleX = dom.bgPlot.width / rect.width;
     const xPx = (event.clientX - rect.left) * scaleX;
     const e = energyAtPlotX(xPx, state.bgDrag.energy);
-    const { handle, startE0, startE1, startX } = state.bgDrag;
-    if (handle === "e0") {
-        dom.bgE0.value = String(e);
-    } else if (handle === "e1") {
-        dom.bgE1.value = String(e);
-    } else {
-        const startE = energyAtPlotX(startX, state.bgDrag.energy);
+    const { handle } = state.bgDrag;
+    if (handle === "window") {
+        const startE = energyAtPlotX(state.bgDrag.startX, state.bgDrag.energy);
         const delta = e - startE;
-        dom.bgE0.value = String(startE0 + delta);
-        dom.bgE1.value = String(startE1 + delta);
+        setBgField("e0", state.bgDrag.startE0 + delta);
+        setBgField("e1", state.bgDrag.startE1 + delta);
+    } else if (handle === "post_window") {
+        const startE = energyAtPlotX(state.bgDrag.startX, state.bgDrag.energy);
+        const delta = e - startE;
+        setBgField("post_e0", state.bgDrag.startPostE0 + delta);
+        setBgField("post_e1", state.bgDrag.startPostE1 + delta);
+    } else {
+        setBgField(handle, e);
     }
+    enforceBgWindowOrder();
     drawBgPlot();
 });
 dom.bgPlot.addEventListener("mouseup", () => {
@@ -1930,4 +2122,5 @@ dom.canvas.addEventListener("dblclick", (event) => {
 });
 
 drawBgPlot();
+updateBgMethodUI();
 drawSumrulePlot();

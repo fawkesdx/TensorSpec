@@ -122,12 +122,30 @@
                             Use ROI for spectrum (picture-wide if unchecked)
                         </label>
                         <div class="form-row">
+                            <label for="peem-bg-method">Method:</label>
+                            <select class="field" id="peem-bg-method">
+                                <option value="linear">Linear</option>
+                                <option value="two_step">Two-step</option>
+                            </select>
+                        </div>
+                        <p class="hint" id="peem-bg-method-hint" hidden>Two linear segments + connect</p>
+                        <div class="form-row">
                             <label for="peem-bg-e0">Pre-edge e0:</label>
                             <input class="field field--num" id="peem-bg-e0" type="number" step="any" value="0">
                         </div>
                         <div class="form-row">
                             <label for="peem-bg-e1">Pre-edge e1:</label>
                             <input class="field field--num" id="peem-bg-e1" type="number" step="any" value="1">
+                        </div>
+                        <div id="peem-bg-post-fields" hidden>
+                            <div class="form-row">
+                                <label for="peem-bg-post-e0">Post-edge e0:</label>
+                                <input class="field field--num" id="peem-bg-post-e0" type="number" step="any" value="0">
+                            </div>
+                            <div class="form-row">
+                                <label for="peem-bg-post-e1">Post-edge e1:</label>
+                                <input class="field field--num" id="peem-bg-post-e1" type="number" step="any" value="1">
+                            </div>
                         </div>
                         <details class="hint" style="margin:8px 0">
                             <summary>Ensemble (optional)</summary>
