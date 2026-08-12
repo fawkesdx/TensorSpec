@@ -41,6 +41,40 @@ class TestDftSuggestNbndApi(unittest.TestCase):
             finally:
                 app.dependency_overrides.clear()
 
+    def test_params_replaces_default_nbnd_12(self):
+        from pathlib import Path
+
+        from tensorspec.web.server.routers.dft import _params_from_request
+        from tensorspec.web.server.schemas import QERequest
+
+        cdw = Structure.from_file(
+            Path(__file__).resolve().parents[1]
+            / "tensorspec"
+            / "cif_file"
+            / "VTe2_CDW_XRD.cif"
+        )
+        request = QERequest(
+            run_name="nbnd_check",
+            ecutwfc=60,
+            nbnd=12,
+            kx=2,
+            ky=2,
+            kz=1,
+            use_soc=True,
+            mlwf_mode=False,
+            use_mpi=False,
+            mpi_ranks=1,
+            slab_mode=False,
+            functional="PBE",
+            backend="local",
+        )
+        params = _params_from_request(request, 8, structure=cdw)
+        self.assertEqual(params.nbnd, 324)
+
+        request_no_soc = request.model_copy(update={"use_soc": False})
+        params2 = _params_from_request(request_no_soc, 8, structure=cdw)
+        self.assertEqual(params2.nbnd, 162)
+
 
 if __name__ == "__main__":
     unittest.main()

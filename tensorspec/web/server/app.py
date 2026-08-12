@@ -47,7 +47,10 @@ def create_app() -> FastAPI:
     @app.get("/", include_in_schema=False)
     @app.get("/main_browser.html", include_in_schema=False)
     def main_browser(session: Session = Depends(current_session)) -> FileResponse:
-        return FileResponse(TEMPLATES_DIR / "main_browser.html")
+        return FileResponse(
+            TEMPLATES_DIR / "main_browser.html",
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/suites/{page}", include_in_schema=False)
     def suite_page(page: str, session: Session = Depends(current_session)) -> FileResponse:
@@ -57,7 +60,7 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown suite page.")
         if not candidate.is_file():
             raise HTTPException(status_code=404, detail="Unknown suite page.")
-        return FileResponse(candidate)
+        return FileResponse(candidate, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/health", tags=["system"])
     def health() -> dict:
