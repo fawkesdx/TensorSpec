@@ -4,7 +4,7 @@ Dichroism dμ = μ+ − μ−; sum sμ = μ+ + μ−.
 
 Integrals (trapezoid on energy axis):
   p = ∫_{L3} dμ dE
-  q = ∫_{L3∪L2} dμ dE
+  q = ∫_{L3∪L2} dμ dE  (OR mask on energy; overlap counted once)
   r = ∫_{r_window} sμ dE
 
 Moments (⟨T_z⟩=0 form):
@@ -60,6 +60,33 @@ def _trapz_window(
     return float(trapz(y_win, e_win))
 
 
+def _trapz_union_windows(
+    energy: np.ndarray, y: np.ndarray, *windows: tuple[float, float]
+) -> float:
+    """Trapezoid over L3∪L2 via OR mask; overlap integrated once."""
+    mask = np.zeros(energy.shape, dtype=bool)
+    for e0, e1 in windows:
+        lo, hi = (e0, e1) if e0 <= e1 else (e1, e0)
+        mask |= (energy >= lo) & (energy <= hi)
+    indices = np.flatnonzero(mask)
+    if indices.size < 2:
+        return 0.0
+
+    trapz = getattr(np, "trapezoid", np.trapz)
+    total = 0.0
+    seg_start = 0
+    for i in range(1, indices.size):
+        if indices[i] != indices[i - 1] + 1:
+            seg = indices[seg_start:i]
+            if seg.size >= 2:
+                total += float(trapz(y[seg], energy[seg]))
+            seg_start = i
+    seg = indices[seg_start:]
+    if seg.size >= 2:
+        total += float(trapz(y[seg], energy[seg]))
+    return total
+
+
 def integrate_windows(
     energy: np.ndarray,
     mu_plus: np.ndarray,
@@ -69,7 +96,7 @@ def integrate_windows(
     l2: tuple[float, float],
     r_win: tuple[float, float],
 ) -> dict[str, float]:
-    """Return p, q, r integrals over L3, L3∪L2, and r windows."""
+    """Return p, q, r integrals over L3, L3∪L2 (OR mask), and r windows."""
     energy = np.asarray(energy, dtype=float)
     mu_plus = np.asarray(mu_plus, dtype=float)
     mu_minus = np.asarray(mu_minus, dtype=float)
@@ -77,9 +104,7 @@ def integrate_windows(
     s_mu = mu_plus + mu_minus
 
     p = _trapz_window(energy, d_mu, l3[0], l3[1])
-    q = _trapz_window(energy, d_mu, l3[0], l3[1]) + _trapz_window(
-        energy, d_mu, l2[0], l2[1]
-    )
+    q = _trapz_union_windows(energy, d_mu, l3, l2)
     r = _trapz_window(energy, s_mu, r_win[0], r_win[1])
     return {"p": p, "q": q, "r": r}
 
