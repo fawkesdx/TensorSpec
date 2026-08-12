@@ -8,6 +8,17 @@
     <link rel="stylesheet" href="../../static/css/base.css">
     <link rel="stylesheet" href="../../static/css/layout.css">
     <link rel="stylesheet" href="../../static/css/suite.css">
+
+    <!-- three.js addons import the bare specifier "three"; Volume tab needs this
+         map or the whole arpes_suite.js module fails to load (Refresh does nothing). -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "/static/vendor/three/three.module.min.js",
+            "three/addons/": "/static/vendor/three/"
+        }
+    }
+    </script>
 </head>
 
 <body>
