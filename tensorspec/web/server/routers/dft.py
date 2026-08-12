@@ -352,8 +352,11 @@ def queue_qe_run(
     session: Session = Depends(current_session),
 ) -> JobInfo:
     """Generate inputs if needed and enqueue the allowlisted pipeline."""
+    # Einstein scratch is a different filesystem; absolute Mac outdir paths fail
+    # inside pw.x (check_tempdir). Bundles already use relative ./out/.
+    relative_outdir = request.backend == "einstein_ssh"
     cfg, run_dir, params, _files = _prepare_run(
-        session, name, request, relative_outdir=False
+        session, name, request, relative_outdir=relative_outdir
     )
     if request.backend == "einstein_ssh":
         script = _remote_qe_script_path()

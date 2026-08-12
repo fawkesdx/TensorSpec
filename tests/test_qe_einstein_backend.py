@@ -84,11 +84,65 @@ class TestQEEinsteinBackend(unittest.TestCase):
                     session,
                     "Si",
                     QERequest(backend="einstein_ssh"),
-                    relative_outdir=False,
+                    relative_outdir=True,
                 )
             self.assertEqual(cfg.pseudo_dir.resolve(), pseudo_dir.resolve())
             self.assertTrue(run_dir.is_dir())
             self.assertIn("scf.in", files)
+            scf = (run_dir / "scf.in").read_text()
+            self.assertIn("outdir = './out/'", scf)
+            self.assertNotIn(str(run_dir), scf)
+
+    def test_einstein_queue_rewrites_relative_outdir(self):
+        """Regression: absolute Mac outdir breaks pw.x on Einstein scratch."""
+        with tempfile.TemporaryDirectory() as tmp:
+            pseudo_dir = Path(tmp) / "pseudo"
+            pseudo_dir.mkdir()
+            (pseudo_dir / "Si.pbe.upf").write_text("stub\n")
+            session = Session(
+                session_id="test",
+                workspace=WorkspaceManager(project_dir=Path(tmp)),
+            )
+            structure = Structure(Lattice.cubic(4.0), ["Si"], [[0, 0, 0]])
+            session.workspace.push_crystal_structure(
+                "Si", structure.lattice.matrix, structure=structure
+            )
+            env = {
+                "PATH": "",
+                "TENSORSPEC_PSEUDO_DIR": str(pseudo_dir),
+            }
+            fake_job = type(
+                "Job",
+                (),
+                {
+                    "to_dict": lambda self: {
+                        "job_id": "j1",
+                        "run_name": "run_rel",
+                        "status": "queued",
+                        "current_step": 0,
+                        "total_steps": 1,
+                        "exit_code": None,
+                        "error": None,
+                        "created_at": 0.0,
+                        "started_at": None,
+                        "finished_at": None,
+                    },
+                },
+            )()
+            with patch.dict(os.environ, env, clear=True):
+                with patch.object(dft_router, "get_job_queue") as mock_queue:
+                    mock_queue.return_value.submit.return_value = fake_job
+                    dft_router.queue_qe_run(
+                        "Si",
+                        QERequest(backend="einstein_ssh", run_name="run_rel"),
+                        session=session,
+                    )
+            run_dir = Path(tmp) / "qe_runs" / "run_rel"
+            scf = (run_dir / "scf.in").read_text()
+            nscf = (run_dir / "nscf.in").read_text()
+            self.assertIn("outdir = './out/'", scf)
+            self.assertIn("outdir = './out/'", nscf)
+            self.assertNotIn("/Users/", scf)
 
     def test_missing_remote_qe_script_returns_503(self):
         with tempfile.TemporaryDirectory() as tmp:
