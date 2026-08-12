@@ -18,6 +18,7 @@ from tensorspec.web.server.schemas import (
     PeemDriftRequest,
     PeemPairRequest,
     PeemRoi,
+    PeemSumruleRequest,
 )
 from tensorspec.web.server.session import Session, current_session
 
@@ -869,6 +870,147 @@ class TestPeemApi(unittest.TestCase):
                     response = client.post(path, json=retry.model_dump())
                     self.assertEqual(response.status_code, 422, response.text)
                     self.assertIn("background output", response.json()["detail"].lower())
+
+    def _sumrule_request(self, **overrides) -> PeemSumruleRequest:
+        payload = {
+            "nh": 1.0,
+            "l3_lo": 0.0,
+            "l3_hi": 1.0,
+            "l2_lo": 2.0,
+            "l2_hi": 3.0,
+            "r_lo": 0.0,
+            "r_hi": 4.0,
+        }
+        payload.update(overrides)
+        return PeemSumruleRequest(**payload)
+
+    def _load_cp_cm_pair_separate(self, session, tmp, name="sumrule_me", n_pairs=3):
+        root = Path(tmp) / "run"
+        root.mkdir()
+        for i in range(n_pairs):
+            tifffile.imwrite(
+                root / f"f{i:02d}_CP.tif", np.full((4, 4), 3 + i, dtype=np.uint16)
+            )
+            tifffile.imwrite(
+                root / f"g{i:02d}_CM.tif", np.full((4, 4), 1 + i, dtype=np.uint16)
+            )
+        peem_router.load_peem(
+            file=None,
+            server_path=str(root),
+            csv=None,
+            csv_path=None,
+            name=name,
+            session=session,
+        )
+        app = create_app()
+        app.dependency_overrides[current_session] = lambda: session
+        client = TestClient(app)
+        pair = client.post(
+            f"/api/peem/{name}/pair",
+            json=PeemPairRequest(mode="CP_CM").model_dump(),
+        )
+        self.assertEqual(pair.status_code, 200, pair.text)
+        separate = client.post(f"/api/peem/{name}/separate")
+        self.assertEqual(separate.status_code, 200, separate.text)
+        return client
+
+    def test_sumrule_preview_apply_meta_and_get(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            client = self._load_cp_cm_pair_separate(session, tmp)
+            request = self._sumrule_request()
+
+            preview = client.post(
+                "/api/peem/sumrule_me/sumrule/preview", json=request.model_dump()
+            )
+            self.assertEqual(preview.status_code, 200, preview.text)
+            body = preview.json()
+            self.assertEqual(body["energy_source"], "index")
+            self.assertEqual(body["source_kind"], "separated")
+            self.assertEqual(body["tag_plus"], "CP")
+            self.assertEqual(body["tag_minus"], "CM")
+            self.assertFalse(body["i0_applied"])
+            self.assertGreaterEqual(body["ensemble_n_valid"], 1)
+            self.assertIsNone(session.workspace.pull_analysis_data("sumrule_me", "sumrule"))
+
+            apply = client.post(
+                "/api/peem/sumrule_me/sumrule/apply", json=request.model_dump()
+            )
+            self.assertEqual(apply.status_code, 200, apply.text)
+            summary = apply.json()
+            self.assertTrue(summary["has_sumrule"])
+            self.assertEqual(summary["source_kind"], "separated")
+
+            meta = client.get("/api/peem/sumrule_me/meta")
+            self.assertEqual(meta.status_code, 200, meta.text)
+            meta_body = meta.json()
+            self.assertTrue(meta_body["has_sumrule"])
+            self.assertFalse(meta_body["sumrule_i0_applied"])
+            self.assertEqual(meta_body["sumrule_tags"], ["CP", "CM"])
+
+            stored = client.get("/api/peem/sumrule_me/sumrule")
+            self.assertEqual(stored.status_code, 200, stored.text)
+            self.assertEqual(len(stored.json()["energy"]), 3)
+
+    def test_sumrule_prefers_bg_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            client = self._load_cp_cm_pair_separate(session, tmp, name="sumrule_bg")
+            bg_req = PeemBgRequest(e0=0.0, e1=1.0)
+            for tag in ("CP", "CM"):
+                response = client.post(
+                    f"/api/peem/sumrule_bg/bg/apply",
+                    json={**bg_req.model_dump(), "node": f"processed/{tag}"},
+                )
+                self.assertEqual(response.status_code, 200, response.text)
+
+            request = self._sumrule_request()
+            preview = client.post(
+                "/api/peem/sumrule_bg/sumrule/preview", json=request.model_dump()
+            )
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertEqual(preview.json()["source_kind"], "bg")
+
+    def test_sumrule_i0_when_length_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            client = self._load_cp_cm_pair_separate(session, tmp, name="sumrule_i0")
+            session.workspace.merge_spectroscopy_raw_attrs(
+                "sumrule_i0", {"I0": [2.0, 2.0, 2.0]}
+            )
+
+            request = self._sumrule_request()
+            preview = client.post(
+                "/api/peem/sumrule_i0/sumrule/preview", json=request.model_dump()
+            )
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertTrue(preview.json()["i0_applied"])
+
+    def test_sumrule_without_pair_422(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            root = Path(tmp) / "run"
+            root.mkdir()
+            tifffile.imwrite(root / "a_CP.tif", np.ones((4, 4), dtype=np.uint16))
+            tifffile.imwrite(root / "b_CM.tif", np.full((4, 4), 2, dtype=np.uint16))
+            peem_router.load_peem(
+                file=None,
+                server_path=str(root),
+                csv=None,
+                csv_path=None,
+                name="no_pair",
+                session=session,
+            )
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            request = self._sumrule_request()
+
+            response = client.post(
+                "/api/peem/no_pair/sumrule/preview", json=request.model_dump()
+            )
+
+            self.assertEqual(response.status_code, 422, response.text)
 
 
 if __name__ == "__main__":

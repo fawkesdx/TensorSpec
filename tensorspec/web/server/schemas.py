@@ -417,6 +417,64 @@ class PeemBgApplySummary(BaseModel):
     energy_source: str
 
 
+class PeemSumruleRequest(BaseModel):
+    """XMCD sum-rule settings for preview or apply."""
+
+    use_roi: bool = False
+    roi: PeemRoi | None = None
+    nh: float = Field(gt=0)
+    l3_lo: float
+    l3_hi: float
+    l2_lo: float
+    l2_hi: float
+    r_lo: float
+    r_hi: float
+    window_delta: float | None = None
+    window_n: int = Field(default=21, ge=1, le=101)
+    bg_delta: float | None = None
+    bg_n: int = Field(default=21, ge=1, le=101)
+    seed: int = 0
+
+
+class PeemSumrulePreviewResponse(BaseModel):
+    """Preview curves and sum-rule integrals/moments (no tree write)."""
+
+    energy: list[float]
+    mu_plus: list[float]
+    mu_minus: list[float]
+    dichroism: list[float]
+    p: float
+    q: float
+    r: float
+    p_std: float
+    q_std: float
+    r_std: float
+    m_orb: float
+    m_orb_std: float
+    m_spin_plus_dipole: float
+    m_spin_plus_dipole_std: float
+    i0_applied: bool
+    source_kind: str
+    tag_plus: str
+    tag_minus: str
+    energy_source: str
+    ensemble_n_valid: int
+    ensemble_n_valid_bg: int
+
+
+class PeemSumruleApplySummary(BaseModel):
+    """Summary after writing /analysis/sumrule."""
+
+    name: str
+    analysis_node: str = "sumrule"
+    has_sumrule: bool = True
+    i0_applied: bool
+    source_kind: str
+    tag_plus: str
+    tag_minus: str
+    energy_source: str
+
+
 class PeemMeta(BaseModel):
     """PEEM stack metadata needed by the frame viewer."""
 
@@ -445,6 +503,9 @@ class PeemMeta(BaseModel):
     energy_source: str | None = None
     processed_bg_node: str | None = None
     n_bg_frames: int | None = None
+    has_sumrule: bool = False
+    sumrule_i0_applied: bool | None = None
+    sumrule_tags: list[str] = Field(default_factory=list)
 
 
 class PeemFrame(BaseModel):

@@ -21,7 +21,7 @@ from tensorspec.core.io.peem_loaders import (
 )
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.peem_bg import (
-    analysis_dataset,
+    analysis_dataset as bg_analysis_dataset,
     apply_bg_to_stack,
     bg_child_name,
     ensemble_preedge,
@@ -32,6 +32,14 @@ from tensorspec.core.peem_bg import (
 )
 from tensorspec.core.peem_engine import drift_correct, pair_stack, separate_pairs
 from tensorspec.core.peem_roi import roi_to_mask
+from tensorspec.core.peem_sumrule import (
+    analysis_dataset as sumrule_analysis_dataset,
+    apply_i0,
+    ensemble_sumrule,
+    integrate_windows,
+    moments,
+    pick_source_kind,
+)
 from tensorspec.web.server.schemas import (
     PeemBgApplySummary,
     PeemBgPreviewResponse,
@@ -44,6 +52,9 @@ from tensorspec.web.server.schemas import (
     PeemPairRequest,
     PeemPairSummary,
     PeemSeparateSummary,
+    PeemSumruleApplySummary,
+    PeemSumrulePreviewResponse,
+    PeemSumruleRequest,
 )
 from tensorspec.web.server.session import Session, current_session
 
@@ -542,6 +553,294 @@ def _bg_meta_fields(session: Session, name: str) -> dict:
     }
 
 
+_SUMRULE_PAIRS = (("CP", "CM"), ("LH", "LV"))
+
+
+def _sumrule_tags(session: Session, name: str) -> tuple[str, str]:
+    processed = _processed_tensor(session, name)
+    if processed is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Sum rule requires paired or separated CP/CM (or LH/LV) stacks.",
+        )
+    channel_tags = processed.metadata.get("channel_tags", [])
+    if len(channel_tags) >= 2:
+        return (str(channel_tags[0]), str(channel_tags[1]))
+    children = set(session.workspace.list_processed_children(name))
+    for pair in _SUMRULE_PAIRS:
+        if pair[0] in children and pair[1] in children:
+            return pair
+    if processed.value.ndim == 4:
+        return ("CP", "CM")
+    raise HTTPException(
+        status_code=422,
+        detail="Cannot resolve sum-rule channel pair (CP/CM or LH/LV).",
+    )
+
+
+def _sumrule_available_nodes(session: Session, name: str) -> list[str]:
+    nodes = [f"processed/{tag}" for tag in session.workspace.list_processed_children(name)]
+    processed = _processed_tensor(session, name)
+    if processed is not None and processed.value.ndim == 4:
+        nodes.append("processed")
+    return nodes
+
+
+def _resolve_sumrule_stacks(
+    session: Session,
+    name: str,
+    tags: tuple[str, str],
+    source_kind: str,
+) -> tuple[np.ndarray, np.ndarray, tuple[str, str], str]:
+    t0, t1 = tags
+    if source_kind == "bg":
+        plus_tensor, _ = _separated_tensor(session, name, f"processed/{t0}_bg")
+        minus_tensor, _ = _separated_tensor(session, name, f"processed/{t1}_bg")
+        plus_stack = np.asarray(plus_tensor.value, dtype=float)
+        minus_stack = np.asarray(minus_tensor.value, dtype=float)
+    elif source_kind == "separated":
+        plus_tensor, _ = _separated_tensor(session, name, f"processed/{t0}")
+        minus_tensor, _ = _separated_tensor(session, name, f"processed/{t1}")
+        plus_stack = np.asarray(plus_tensor.value, dtype=float)
+        minus_stack = np.asarray(minus_tensor.value, dtype=float)
+    else:
+        paired = _processed_pair_tensor(session, name)
+        plus_stack = np.asarray(paired.value[:, 0], dtype=float)
+        minus_stack = np.asarray(paired.value[:, 1], dtype=float)
+    return plus_stack, minus_stack, tags, source_kind
+
+
+def _sumrule_roi_mask(request: PeemSumruleRequest, ny: int, nx: int) -> np.ndarray | None:
+    if not request.use_roi:
+        return None
+    if request.roi is None:
+        raise HTTPException(status_code=422, detail="roi required when use_roi is true.")
+    try:
+        return roi_to_mask(ny, nx, request.roi.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _sumrule_i0(
+    raw_metadata: dict, n_frames: int, spectrum: np.ndarray
+) -> tuple[np.ndarray, bool]:
+    i0 = (raw_metadata or {}).get("I0")
+    if i0 is None:
+        return apply_i0(spectrum, None)
+    if isinstance(i0, list):
+        if len(i0) != n_frames:
+            return apply_i0(spectrum, None)
+        return apply_i0(spectrum, np.asarray(i0, dtype=float))
+    return apply_i0(spectrum, i0)
+
+
+def _sumrule_bg_params(
+    session: Session, name: str, energy: np.ndarray, energy_source: str
+) -> tuple[float | None, float | None, float, int]:
+    analysis = session.workspace.pull_analysis_data(name, "background")
+    if analysis is None:
+        return None, None, 0.0, 1
+    attrs = analysis.attrs or {}
+    e0 = attrs.get("e0")
+    e1 = attrs.get("e1")
+    if e0 is None or e1 is None:
+        return None, None, 0.0, 1
+    bg_delta = attrs.get("ensemble_delta")
+    if bg_delta is None:
+        bg_delta = _default_ensemble_delta(energy, energy_source)
+    else:
+        bg_delta = float(bg_delta)
+    bg_n = int(attrs.get("ensemble_n", 21))
+    return float(e0), float(e1), bg_delta, bg_n
+
+
+class _SumruleResult(NamedTuple):
+    energy: np.ndarray
+    energy_source: str
+    mu_plus: np.ndarray
+    mu_minus: np.ndarray
+    i0_applied: bool
+    source_kind: str
+    tags: tuple[str, str]
+    integrals: dict[str, float]
+    moment_vals: dict[str, float]
+    ensemble: dict
+    window_delta: float
+    bg_e0: float | None
+    bg_e1: float | None
+    bg_delta: float
+    bg_n: int
+    roi_dict: dict | None
+
+
+def _run_sumrule(
+    session: Session, name: str, request: PeemSumruleRequest
+) -> _SumruleResult:
+    raw = _require_tensor(session, name)
+    tags = _sumrule_tags(session, name)
+    try:
+        source_kind = pick_source_kind(_sumrule_available_nodes(session, name), tags)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    plus_stack, minus_stack, tags, source_kind = _resolve_sumrule_stacks(
+        session, name, tags, source_kind
+    )
+    if plus_stack.shape != minus_stack.shape:
+        raise HTTPException(status_code=422, detail="Plus/minus stacks have mismatched shape.")
+    if plus_stack.ndim != 3:
+        raise HTTPException(status_code=422, detail="Sum-rule stacks must be 3D.")
+
+    energy, energy_source = resolve_energy(plus_stack.shape[0], raw.metadata or {})
+    mask = _sumrule_roi_mask(request, plus_stack.shape[1], plus_stack.shape[2])
+    try:
+        mu_plus = extract_spectrum(plus_stack, mask)
+        mu_minus = extract_spectrum(minus_stack, mask)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    mu_plus, i0_plus = _sumrule_i0(raw.metadata or {}, plus_stack.shape[0], mu_plus)
+    mu_minus, i0_minus = _sumrule_i0(raw.metadata or {}, minus_stack.shape[0], mu_minus)
+    i0_applied = i0_plus and i0_minus
+
+    l3 = (request.l3_lo, request.l3_hi)
+    l2 = (request.l2_lo, request.l2_hi)
+    r_win = (request.r_lo, request.r_hi)
+    window_delta = request.window_delta
+    if window_delta is None:
+        window_delta = _default_ensemble_delta(energy, energy_source)
+
+    bg_e0, bg_e1, bg_delta_default, bg_n_default = _sumrule_bg_params(
+        session, name, energy, energy_source
+    )
+    if source_kind == "bg":
+        bg_e0, bg_e1 = None, None
+    bg_delta = request.bg_delta if request.bg_delta is not None else bg_delta_default
+    bg_n = request.bg_n if bg_e0 is not None else 1
+
+    try:
+        integrals = integrate_windows(energy, mu_plus, mu_minus, l3=l3, l2=l2, r_win=r_win)
+        moment_vals = moments(integrals["p"], integrals["q"], integrals["r"], request.nh)
+        ensemble = ensemble_sumrule(
+            energy,
+            mu_plus,
+            mu_minus,
+            l3=l3,
+            l2=l2,
+            r_win=r_win,
+            nh=request.nh,
+            window_delta=window_delta,
+            window_n=request.window_n,
+            bg_e0=bg_e0,
+            bg_e1=bg_e1,
+            bg_delta=bg_delta,
+            bg_n=bg_n,
+            seed=request.seed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    roi_dict = (
+        request.roi.model_dump(exclude_none=True)
+        if request.use_roi and request.roi
+        else None
+    )
+    return _SumruleResult(
+        energy=energy,
+        energy_source=energy_source,
+        mu_plus=mu_plus,
+        mu_minus=mu_minus,
+        i0_applied=i0_applied,
+        source_kind=source_kind,
+        tags=tags,
+        integrals=integrals,
+        moment_vals=moment_vals,
+        ensemble=ensemble,
+        window_delta=window_delta,
+        bg_e0=bg_e0,
+        bg_e1=bg_e1,
+        bg_delta=bg_delta,
+        bg_n=bg_n,
+        roi_dict=roi_dict,
+    )
+
+
+def _sumrule_to_preview(result: _SumruleResult) -> PeemSumrulePreviewResponse:
+    ens = result.ensemble
+    d_mu = result.mu_plus - result.mu_minus
+    return PeemSumrulePreviewResponse(
+        energy=[float(v) for v in result.energy],
+        mu_plus=[float(v) for v in result.mu_plus],
+        mu_minus=[float(v) for v in result.mu_minus],
+        dichroism=[float(v) for v in d_mu],
+        p=float(ens["p_mean"]),
+        q=float(ens["q_mean"]),
+        r=float(ens["r_mean"]),
+        p_std=float(ens["p_std"]),
+        q_std=float(ens["q_std"]),
+        r_std=float(ens["r_std"]),
+        m_orb=float(ens["m_orb_mean"]),
+        m_orb_std=float(ens["m_orb_std"]),
+        m_spin_plus_dipole=float(ens["m_spin_plus_dipole_mean"]),
+        m_spin_plus_dipole_std=float(ens["m_spin_plus_dipole_std"]),
+        i0_applied=result.i0_applied,
+        source_kind=result.source_kind,
+        tag_plus=result.tags[0],
+        tag_minus=result.tags[1],
+        energy_source=result.energy_source,
+        ensemble_n_valid=int(ens["n_valid"]),
+        ensemble_n_valid_bg=int(ens.get("n_valid_bg", 0)),
+    )
+
+
+def _analysis_to_sumrule_preview(ds) -> PeemSumrulePreviewResponse:
+    attrs = ds.attrs or {}
+    return PeemSumrulePreviewResponse(
+        energy=[float(v) for v in ds.coords["energy"].values],
+        mu_plus=[float(v) for v in ds["mu_plus"].values],
+        mu_minus=[float(v) for v in ds["mu_minus"].values],
+        dichroism=[float(v) for v in ds["dichroism"].values],
+        p=float(attrs["p"]),
+        q=float(attrs["q"]),
+        r=float(attrs["r"]),
+        p_std=float(attrs["p_std"]),
+        q_std=float(attrs["q_std"]),
+        r_std=float(attrs["r_std"]),
+        m_orb=float(attrs["m_orb"]),
+        m_orb_std=float(attrs["m_orb_std"]),
+        m_spin_plus_dipole=float(attrs["m_spin_plus_dipole"]),
+        m_spin_plus_dipole_std=float(attrs["m_spin_plus_dipole_std"]),
+        i0_applied=bool(attrs.get("i0_applied", False)),
+        source_kind=str(attrs.get("source_kind", "")),
+        tag_plus=str(attrs.get("tag_plus", "")),
+        tag_minus=str(attrs.get("tag_minus", "")),
+        energy_source=str(attrs.get("energy_source", "index")),
+        ensemble_n_valid=int(attrs.get("ensemble_n_valid", 0)),
+        ensemble_n_valid_bg=int(attrs.get("ensemble_n_valid_bg", 0)),
+    )
+
+
+def _sumrule_meta_fields(session: Session, name: str) -> dict:
+    analysis = session.workspace.pull_analysis_data(name, "sumrule")
+    if analysis is None:
+        return {
+            "has_sumrule": False,
+            "sumrule_i0_applied": None,
+            "sumrule_tags": [],
+        }
+    attrs = analysis.attrs or {}
+    tags: list[str] = []
+    tag_plus = attrs.get("tag_plus")
+    tag_minus = attrs.get("tag_minus")
+    if tag_plus is not None and tag_minus is not None:
+        tags = [str(tag_plus), str(tag_minus)]
+    return {
+        "has_sumrule": True,
+        "sumrule_i0_applied": bool(attrs.get("i0_applied", False)),
+        "sumrule_tags": tags,
+    }
+
+
 def _summary(
     name: str,
     tensor,
@@ -831,7 +1130,7 @@ def bg_apply_peem(
     result = _run_bg_fit(session, name, request)
     subtracted = apply_bg_to_stack(result.stack, result.ensemble["bg_mean"])
 
-    ds = analysis_dataset(
+    ds = bg_analysis_dataset(
         result.energy,
         result.spectrum,
         result.fit,
@@ -886,6 +1185,89 @@ def bg_spectrum_peem(
     return _analysis_to_preview(ds)
 
 
+@router.post("/{name}/sumrule/preview", response_model=PeemSumrulePreviewResponse)
+def sumrule_preview_peem(
+    name: str,
+    request: PeemSumruleRequest,
+    session: Session = Depends(current_session),
+) -> PeemSumrulePreviewResponse:
+    """Compute XMCD sum rule; return curves and moments without writing the tree."""
+    _require_tensor(session, name)
+    return _sumrule_to_preview(_run_sumrule(session, name, request))
+
+
+@router.post("/{name}/sumrule/apply", response_model=PeemSumruleApplySummary)
+def sumrule_apply_peem(
+    name: str,
+    request: PeemSumruleRequest,
+    session: Session = Depends(current_session),
+) -> PeemSumruleApplySummary:
+    """Write /analysis/sumrule only."""
+    _require_tensor(session, name)
+    result = _run_sumrule(session, name, request)
+    ens = result.ensemble
+    ds = sumrule_analysis_dataset(
+        result.energy,
+        result.mu_plus,
+        result.mu_minus,
+        integrals=result.integrals,
+        integral_stds={
+            "p": ens["p_std"],
+            "q": ens["q_std"],
+            "r": ens["r_std"],
+        },
+        moment_vals=result.moment_vals,
+        moment_stds={
+            "m_orb": ens["m_orb_std"],
+            "m_spin_plus_dipole": ens["m_spin_plus_dipole_std"],
+        },
+        ensemble=ens,
+        nh=request.nh,
+        l3=(request.l3_lo, request.l3_hi),
+        l2=(request.l2_lo, request.l2_hi),
+        r_win=(request.r_lo, request.r_hi),
+        i0_applied=result.i0_applied,
+        source_kind=result.source_kind,
+        tags=result.tags,
+        window_delta=result.window_delta,
+        window_n=request.window_n,
+        bg_e0=result.bg_e0,
+        bg_e1=result.bg_e1,
+        bg_delta=result.bg_delta if result.bg_e0 is not None else None,
+        bg_n=result.bg_n if result.bg_e0 is not None else None,
+        seed=request.seed,
+        use_roi=request.use_roi,
+        roi=result.roi_dict,
+    )
+    ds.attrs["energy_source"] = result.energy_source
+    if not session.workspace.write_analysis_data(name, "sumrule", ds):
+        raise HTTPException(status_code=404, detail=f"PEEM data '{name}' not found.")
+
+    return PeemSumruleApplySummary(
+        name=name,
+        i0_applied=result.i0_applied,
+        source_kind=result.source_kind,
+        tag_plus=result.tags[0],
+        tag_minus=result.tags[1],
+        energy_source=result.energy_source,
+    )
+
+
+@router.get("/{name}/sumrule", response_model=PeemSumrulePreviewResponse)
+def sumrule_get_peem(
+    name: str,
+    session: Session = Depends(current_session),
+) -> PeemSumrulePreviewResponse:
+    """Return stored /analysis/sumrule curves and moments."""
+    _require_tensor(session, name)
+    ds = session.workspace.pull_analysis_data(name, "sumrule")
+    if ds is None:
+        raise HTTPException(
+            status_code=404, detail=f"PEEM data '{name}' has no sum-rule analysis."
+        )
+    return _analysis_to_sumrule_preview(ds)
+
+
 @router.get("/{name}/meta", response_model=PeemMeta)
 def get_meta(
     name: str,
@@ -898,6 +1280,7 @@ def get_meta(
     processed_is_pair = processed is not None and processed.value.ndim == 4
     processed_is_frame = processed is not None and processed.value.ndim == 3
     bg_meta = _bg_meta_fields(session, name)
+    sumrule_meta = _sumrule_meta_fields(session, name)
     return PeemMeta(
         name=name,
         shape=[int(size) for size in tensor.value.shape],
@@ -938,6 +1321,9 @@ def get_meta(
         energy_source=bg_meta["energy_source"],
         processed_bg_node=bg_meta["processed_bg_node"],
         n_bg_frames=bg_meta["n_bg_frames"],
+        has_sumrule=sumrule_meta["has_sumrule"],
+        sumrule_i0_applied=sumrule_meta["sumrule_i0_applied"],
+        sumrule_tags=sumrule_meta["sumrule_tags"],
     )
 
 
