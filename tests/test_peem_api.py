@@ -950,7 +950,34 @@ class TestPeemApi(unittest.TestCase):
 
             stored = client.get("/api/peem/sumrule_me/sumrule")
             self.assertEqual(stored.status_code, 200, stored.text)
-            self.assertEqual(len(stored.json()["energy"]), 3)
+            stored_body = stored.json()
+            self.assertEqual(len(stored_body["energy"]), 3)
+            for key in (
+                "p",
+                "q",
+                "r",
+                "p_std",
+                "q_std",
+                "r_std",
+                "m_orb",
+                "m_orb_std",
+                "m_spin_plus_dipole",
+                "m_spin_plus_dipole_std",
+                "i0_applied",
+                "source_kind",
+                "tag_plus",
+                "tag_minus",
+                "energy_source",
+                "ensemble_n_valid",
+                "ensemble_n_valid_bg",
+            ):
+                self.assertAlmostEqual(
+                    body[key], stored_body[key], places=10, msg=key
+                )
+            self.assertEqual(body["energy"], stored_body["energy"])
+            self.assertEqual(body["mu_plus"], stored_body["mu_plus"])
+            self.assertEqual(body["mu_minus"], stored_body["mu_minus"])
+            self.assertEqual(body["dichroism"], stored_body["dichroism"])
 
     def test_sumrule_prefers_bg_sources(self):
         with tempfile.TemporaryDirectory() as tmp:

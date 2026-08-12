@@ -716,7 +716,7 @@ def _run_sumrule(
     if source_kind == "bg":
         bg_e0, bg_e1 = None, None
     bg_delta = request.bg_delta if request.bg_delta is not None else bg_delta_default
-    bg_n = request.bg_n if bg_e0 is not None else 1
+    bg_n = bg_n_default if bg_e0 is not None else 1
 
     try:
         integrals = integrate_windows(energy, mu_plus, mu_minus, l3=l3, l2=l2, r_win=r_win)
@@ -1210,13 +1210,20 @@ def sumrule_apply_peem(
         result.energy,
         result.mu_plus,
         result.mu_minus,
-        integrals=result.integrals,
+        integrals={
+            "p": ens["p_mean"],
+            "q": ens["q_mean"],
+            "r": ens["r_mean"],
+        },
         integral_stds={
             "p": ens["p_std"],
             "q": ens["q_std"],
             "r": ens["r_std"],
         },
-        moment_vals=result.moment_vals,
+        moment_vals={
+            "m_orb": ens["m_orb_mean"],
+            "m_spin_plus_dipole": ens["m_spin_plus_dipole_mean"],
+        },
         moment_stds={
             "m_orb": ens["m_orb_std"],
             "m_spin_plus_dipole": ens["m_spin_plus_dipole_std"],
