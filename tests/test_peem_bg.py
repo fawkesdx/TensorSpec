@@ -40,6 +40,104 @@ class TestFitLinearPreedge(unittest.TestCase):
             bg.fit_linear_preedge(energy, spectrum, 705.0, 705.0)
 
 
+class TestFitTwoStepPrePost(unittest.TestCase):
+    def _expected_two_step_bg(self, energy, pre_slope, pre_intercept, post_slope, post_intercept, pre_e1, post_e0):
+        y_pre = pre_slope * energy + pre_intercept
+        y_post = post_slope * energy + post_intercept
+        y_at_pre_e1 = pre_slope * pre_e1 + pre_intercept
+        y_at_post_e0 = post_slope * post_e0 + post_intercept
+        bg = np.empty_like(energy, dtype=float)
+        for i, e in enumerate(energy):
+            if e <= pre_e1:
+                bg[i] = y_pre[i]
+            elif e >= post_e0:
+                bg[i] = y_post[i]
+            else:
+                t = (e - pre_e1) / (post_e0 - pre_e1)
+                bg[i] = (1.0 - t) * y_at_pre_e1 + t * y_at_post_e0
+        return bg
+
+    def test_known_geometry(self):
+        energy = np.linspace(700.0, 750.0, 11)
+        pre_slope, pre_intercept = 2.0, 3.0
+        post_slope, post_intercept = 0.5, 50.0
+        pre_e1, post_e0 = 710.0, 730.0
+        spectrum = self._expected_two_step_bg(
+            energy, pre_slope, pre_intercept, post_slope, post_intercept, pre_e1, post_e0
+        )
+        out = bg.fit_two_step_pre_post(energy, spectrum, 700.0, pre_e1, post_e0, 740.0)
+        self.assertAlmostEqual(out["pre_slope"], pre_slope)
+        self.assertAlmostEqual(out["pre_intercept"], pre_intercept)
+        self.assertAlmostEqual(out["post_slope"], post_slope)
+        self.assertAlmostEqual(out["post_intercept"], post_intercept)
+        np.testing.assert_allclose(out["bg"], spectrum)
+
+    def test_invalid_window_order_raises(self):
+        energy = np.linspace(700.0, 740.0, 9)
+        spectrum = energy.copy()
+        with self.assertRaises(ValueError):
+            bg.fit_two_step_pre_post(energy, spectrum, 700.0, 730.0, 720.0, 740.0)
+
+    def test_too_few_points_raises(self):
+        energy = np.array([700.0, 710.0, 720.0, 730.0, 740.0])
+        spectrum = energy.copy()
+        with self.assertRaises(ValueError):
+            bg.fit_two_step_pre_post(energy, spectrum, 700.0, 700.0, 730.0, 740.0)
+
+
+class TestFitBackground(unittest.TestCase):
+    def test_linear_dispatch(self):
+        energy = np.array([700.0, 710.0, 720.0, 730.0, 740.0])
+        spectrum = 2.0 * energy + 3.0
+        out = bg.fit_background("linear", energy, spectrum, e0=700.0, e1=720.0)
+        self.assertEqual(out["method"], "linear")
+        self.assertAlmostEqual(out["slope"], 2.0)
+        self.assertAlmostEqual(out["intercept"], 3.0)
+
+    def test_two_step_dispatch(self):
+        energy = np.linspace(700.0, 750.0, 11)
+        spectrum = 0.001 * energy**2
+        out = bg.fit_background(
+            "two_step", energy, spectrum, e0=700.0, e1=710.0, post_e0=730.0, post_e1=740.0
+        )
+        self.assertEqual(out["method"], "two_step")
+        self.assertIn("pre_slope", out)
+        self.assertIn("post_slope", out)
+        self.assertEqual(out["bg"].shape, energy.shape)
+
+
+class TestEnsembleBackground(unittest.TestCase):
+    def test_two_step_std_positive(self):
+        energy = np.linspace(700.0, 750.0, 11)
+        spectrum = 0.001 * energy**2 + 0.5 * energy + 10.0
+        out = bg.ensemble_background(
+            "two_step",
+            energy,
+            spectrum,
+            e0=700.0,
+            e1=710.0,
+            post_e0=730.0,
+            post_e1=740.0,
+            delta=2.0,
+            n=31,
+            seed=0,
+        )
+        self.assertGreater(out["n_valid"], 1)
+        self.assertTrue(np.any(out["bg_std"] > 0))
+
+    def test_linear_matches_preedge(self):
+        energy = np.linspace(700.0, 740.0, 9)
+        spectrum = 0.001 * energy**2 + 0.5 * energy + 10.0
+        preedge = bg.ensemble_preedge(
+            energy, spectrum, 702.0, 712.0, delta=2.0, n=31, seed=0
+        )
+        dispatched = bg.ensemble_background(
+            "linear", energy, spectrum, e0=702.0, e1=712.0, delta=2.0, n=31, seed=0
+        )
+        for key in ("bg_mean", "bg_std", "subtracted_mean", "subtracted_std", "n_valid"):
+            np.testing.assert_allclose(dispatched[key], preedge[key])
+
+
 class TestEnsemblePreedge(unittest.TestCase):
     def test_std_positive_with_jitter(self):
         energy = np.linspace(700.0, 740.0, 9)
