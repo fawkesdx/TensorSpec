@@ -104,6 +104,7 @@ function setStatus(message, isError = false) {
 }
 
 function setQeStatus(message, isError = false) {
+    if (!dom.qeStatus) return;
     dom.qeStatus.textContent = message;
     dom.qeStatus.style.color = isError ? "#ff6b6b" : "";
 }
@@ -370,7 +371,9 @@ async function refreshStructures() {
         structures.forEach((s) => {
             const option = document.createElement("option");
             option.value = s.name;
-            option.textContent = `${s.name} (${s.formula}, ${s.n_sites} sites)`;
+            const base = Number(s.suggest_nbnd);
+            const nbndNote = Number.isFinite(base) && base > 0 ? `, nbnd≈${base}` : "";
+            option.textContent = `${s.name} (${s.formula}, ${s.n_sites} sites${nbndNote})`;
             dom.structures.appendChild(option);
         });
 
@@ -416,28 +419,24 @@ function syncSlabSuggestion() {
     }
 }
 
-function setQeStatus(message, isError = false) {
-    if (!dom.qeStatus) return;
-    dom.qeStatus.textContent = message;
-    dom.qeStatus.style.color = isError ? "#ff6b6b" : "";
-}
-
 function applySuggestedNbnd(structure) {
-    if (!structure || !dom.qeNbnd) return;
+    const nbndEl = document.getElementById("qe-nbnd") || dom.qeNbnd;
+    if (!structure || !nbndEl) return;
     const raw = structure.suggest_nbnd ?? structure.suggestNbnd;
     const base = Number(raw);
     if (!Number.isFinite(base) || base < 1) {
         setQeStatus(`No nbnd suggestion for ${structure.name || "structure"}`, true);
         return;
     }
-    const soc = Boolean(dom.qeSoc?.checked);
+    const socEl = document.getElementById("qe-soc") || dom.qeSoc;
+    const soc = Boolean(socEl?.checked);
     const nbnd = Math.min(2000, Math.max(1, soc ? base * 2 : base));
-    dom.qeNbnd.value = String(nbnd);
+    nbndEl.value = String(nbnd);
     const note = soc
         ? `Suggested nbnd=${nbnd} (${base}×2 SOC) for ${structure.name}`
         : `Suggested nbnd=${nbnd} for ${structure.name} (enable SOC → ${Math.min(2000, base * 2)})`;
     setQeStatus(note);
-    const hint = el("qe-nbnd-hint");
+    const hint = document.getElementById("qe-nbnd-hint");
     if (hint) hint.textContent = note;
 }
 
@@ -887,23 +886,40 @@ if (dom.soc) {
     });
 }
 
-[dom.eMin, dom.eMax].forEach((input) =>
+[dom.eMin, dom.eMax].forEach((input) => {
+    if (!input) return;
     input.addEventListener("change", () => {
         if (plot) plot.setRange(Number(dom.eMin.value) || -6, Number(dom.eMax.value) || 6);
-    })
-);
+    });
+});
 
 function syncPathFields() {
     syncKgridMode();
     if (isIsoenergyMode()) return;
+    if (!dom.pathMode) return;
     const isCustom = PATH_VALUES[dom.pathMode.value] === "custom";
-    dom.coords.disabled = !isCustom;
-    dom.labels.disabled = !isCustom;
+    if (dom.coords) dom.coords.disabled = !isCustom;
+    if (dom.labels) dom.labels.disabled = !isCustom;
     refreshBzNote();
 }
-dom.pathMode.addEventListener("change", syncPathFields);
+if (dom.pathMode) dom.pathMode.addEventListener("change", syncPathFields);
 if (dom.kgrid) dom.kgrid.addEventListener("change", syncPathFields);
-syncPathFields();
+try {
+    syncPathFields();
+} catch (err) {
+    console.error("[dft] syncPathFields failed", err);
+}
 
-refreshStructures();
-refreshSolvers();
+const api = globalThis.TensorSpecAPI;
+if (!api) {
+    setStatus("TensorSpecAPI missing — reload page (api.js failed to bind).", true);
+} else {
+    refreshStructures().catch((err) => {
+        console.error("[dft] refreshStructures failed", err);
+        setStatus(String(err.message || err), true);
+    });
+    refreshSolvers().catch((err) => {
+        console.error("[dft] refreshSolvers failed", err);
+        setQeStatus(String(err.message || err), true);
+    });
+}
