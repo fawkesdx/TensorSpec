@@ -55,6 +55,27 @@ class TestIntegrateWindows(unittest.TestCase):
         self.assertAlmostEqual(out["q"], 6.0, places=6)
         self.assertAlmostEqual(out["r"], 4.0, places=6)
 
+    def test_overlapping_l3_l2_no_double_count(self):
+        # L3=[2,5] L2=[4,7] overlap [4,5]; dμ=1 on union → q=5 not 6
+        energy = np.linspace(0.0, 10.0, 11)
+        mu_plus = np.full_like(energy, 3.0)
+        mu_minus = np.full_like(energy, 2.0)
+        outside = (energy < 2.0) | (energy > 7.0)
+        mu_plus[outside] = 2.0
+        mu_minus[outside] = 2.0
+
+        out = sr.integrate_windows(
+            energy,
+            mu_plus,
+            mu_minus,
+            l3=(2.0, 5.0),
+            l2=(4.0, 7.0),
+            r_win=(9.0, 10.0),
+        )
+        self.assertAlmostEqual(out["p"], 3.0, places=6)
+        self.assertAlmostEqual(out["q"], 5.0, places=6)
+        self.assertNotAlmostEqual(out["q"], 6.0, places=6)
+
 
 class TestMoments(unittest.TestCase):
     def test_known_values(self):
