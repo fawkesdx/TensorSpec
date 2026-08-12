@@ -140,9 +140,9 @@ Grand App
 	- Analysis: EDC/MDC Lorentzian/Voigt peakfit → `/analysis/*_peakfit`; QP curves (δE–E, k_F, m*, v_F, FL/MFL) → `/analysis/qp_results`; Dynes SC/CDW gap → `/analysis/gap_fit`; DFT bands + sim intensity overlay on cuts
 	- Volume: BZ-prism 3D cutout (rectangle or hexagon from crystal/data); indent sectors to reveal interior walls; horizontal E-plane (Fermi surface)
 	- Simulator: matrix-element Option A + B1 (job queue + log stream)
-	- Deferred (not started): other beamline loaders; sim B2/B3; PEEM sum-rule / domain tools; XAS / Transport (see Grand App vision below)
+	- Deferred (not started): other beamline loaders; sim B2/B3; PEEM domain tools; XAS / Transport (see Grand App vision below)
 
-- [ ] PEEM Suite — load + view shipped; linear pre-edge BG slice shipped (sum-rule / domain analysis deferred)
+- [ ] PEEM Suite — load + view shipped; linear pre-edge BG slice shipped; XMCD sum-rule slice shipped (partial); domain analysis deferred
 	- [x] loader of tif file stacks
 	- [x] loader of sequences of series of tif files from a folder
 	- [x] accompanying beamline CSV metadata (I0 / beam current and other beamline params), stored for later CP vs CM sum-rule normalization
@@ -150,7 +150,7 @@ Grand App
 		- [x] if none found, prompt user for CSV path / upload
 		- [x] if user has no CSV, still load TIF data; leave I0/etc. missing and allow attaching / updating CSV (or similar metadata) later
 		- [x] load+view slice: attach on load + “update metadata” path
-		- [ ] apply I0 in sum-rule slice
+		- [x] apply I0 in sum-rule slice (when CSV I0 length matches frame count; else warn + unnormalized)
 	- [x] load+view UI: upload or server path, metadata summary, frame canvas, frame slider, and contrast limits
 	- [x] stack the CP and CM together or LH and LV together depending on the files
 	- [x] once stacked, build drift-correction options
@@ -164,14 +164,14 @@ Grand App
 		- [ ] make background subtraction applied to all stacks / batch
 		- [ ] document BG function choices for users (Co₃Sn₂S₂ laser ARPES paper reference, etc.)
 		- [ ] several spectra and their background-related toggles plotted together (multi-spectra)
-	- [ ] perform sum rule analysis if it is CP and CM data
-		- [ ] normalize CP/CM (and similar pairs) using I0 / beam current from accompanying CSV before sum rule
+	- [x] perform sum rule analysis if it is CP and CM data (partial — picture-wide / ROI mean spectrum; Thole/Carra p/q/r → m_orb, m_spin+dipole; dual L-window + optional BG ensemble)
+		- [x] normalize CP/CM (and similar pairs) using I0 / beam current from accompanying CSV before sum rule (when present and length-aligned)
 	- [ ] analysis of spectra / sum rule switchable: picture-wide | user ROI | pixel-to-pixel (noisy / slower)
-		- [x] picture-wide mean spectrum (BG)
-		- [x] user ROI mean spectrum (BG)
+		- [x] picture-wide mean spectrum (BG + sum rule)
+		- [x] user ROI mean spectrum (BG + sum rule)
 		- [ ] pixel-to-pixel (noisy / slower)
 		- [ ] ROI shapes: rectangle, ellipse, or custom polygon (straight segments or curved/interpolated from clicked points)
-	- [ ] ALWAYS include statistical analysis for background / sum rule (uncertainty often dominated by BG choice): vary plausible backgrounds and report sum-rule spread (light BG window ensemble shipped; sum-rule spread not yet)
+	- [x] ALWAYS include statistical analysis for background / sum rule (uncertainty often dominated by BG choice): vary plausible backgrounds and report sum-rule spread (partial — light BG window ensemble + L-window / optional BG jitter ensemble for sum rule)
 	- [ ] real-space PEEM ↔ momentum-microscope data at a given XY: decide how to store / link in metadata
 	- [ ] tools to analyze magnetic domain wall size
 	- [ ] correlate azimuthal datasets: intensity at same sample position → estimate magnetic moment magnitude and direction
@@ -184,7 +184,8 @@ Grand App
 	- Data Viewer: frame canvas, slider, contrast limits; raw / processed / separated-channel nodes
 	- Process: CP/CM or LH/LV pair stack → `/processed`; ROI NCC drift → `/processed`; separate channels → `/processed/{tag}`
 	- Analysis (partial): linear pre-edge BG — preview/apply on picture-wide or ROI mean spectrum; `/analysis/background` + `/processed/bg`; spectrum plot with draggable e0/e1 window and ensemble band
-	- Deferred: sum rule; I0 normalization apply; multi-spectra BG overlay; pixel-to-pixel BG; magnetic-domain tools
+	- Analysis (partial): XMCD sum rule — preview/apply on picture-wide or ROI mean spectrum from CP/CM or LH/LV (prefers `*_bg` stacks); optional I0 when CSV length matches; `/analysis/sumrule`; draggable L3/L2/r windows + dual ensemble (L-window ± optional BG jitter)
+	- Deferred: pixel-to-pixel sum rule / BG; multi-spectra BG overlay; magnetic-domain tools
 
 - [ ] XAS Suite — deferred (thin front-end; shared core with PEEM)
 	- [ ] Treat XAS analysis as a 1D sibling of PEEM BG / sum-rule tools (often TEY, not photoemission images). Keep a separate ribbon entry; share `core/` engines (BG, sum rule, stats). Possibly rename later if a better umbrella name emerges.
