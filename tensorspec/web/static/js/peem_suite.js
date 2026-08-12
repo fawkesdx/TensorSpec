@@ -38,6 +38,34 @@ const dom = {
     bgStatus: el("peem-bg-status"),
     bgPreview: el("peem-bg-preview"),
     bgApply: el("peem-bg-apply"),
+    sumruleControls: el("peem-sumrule-controls"),
+    sumruleUseRoi: el("peem-sumrule-use-roi"),
+    sumruleNh: el("peem-sumrule-nh"),
+    sumruleL3Lo: el("peem-sumrule-l3-lo"),
+    sumruleL3Hi: el("peem-sumrule-l3-hi"),
+    sumruleL2Lo: el("peem-sumrule-l2-lo"),
+    sumruleL2Hi: el("peem-sumrule-l2-hi"),
+    sumruleRLo: el("peem-sumrule-r-lo"),
+    sumruleRHi: el("peem-sumrule-r-hi"),
+    sumruleWindowDelta: el("peem-sumrule-window-delta"),
+    sumruleWindowN: el("peem-sumrule-window-n"),
+    sumruleBgDelta: el("peem-sumrule-bg-delta"),
+    sumruleBgN: el("peem-sumrule-bg-n"),
+    sumruleShowPlus: el("peem-sumrule-show-plus"),
+    sumruleShowMinus: el("peem-sumrule-show-minus"),
+    sumruleShowDichro: el("peem-sumrule-show-dichro"),
+    sumrulePlot: el("peem-sumrule-plot"),
+    sumruleI0Warn: el("peem-sumrule-i0-warn"),
+    sumruleStatus: el("peem-sumrule-status"),
+    sumruleResults: el("peem-sumrule-results"),
+    sumruleP: el("peem-sumrule-p"),
+    sumruleQ: el("peem-sumrule-q"),
+    sumruleR: el("peem-sumrule-r"),
+    sumruleMOrb: el("peem-sumrule-m-orb"),
+    sumruleMSpin: el("peem-sumrule-m-spin"),
+    sumruleTags: el("peem-sumrule-tags"),
+    sumrulePreview: el("peem-sumrule-preview"),
+    sumruleApply: el("peem-sumrule-apply"),
     roiRect: el("peem-roi-rect"),
     roiEllipse: el("peem-roi-ellipse"),
     roiPolygon: el("peem-roi-polygon"),
@@ -86,6 +114,13 @@ const state = {
     energySource: null,
     bgDrag: null,
     bgPreviewTimer: null,
+    sumruleBusy: false,
+    sumrulePreviewGen: 0,
+    sumrulePreviewDirty: false,
+    sumrulePreviewTimer: null,
+    sumrulePreviewData: null,
+    sumruleDrag: null,
+    hasSumrule: false,
     vmin: 0,
     vmax: 1,
     frameData: null,
@@ -228,6 +263,46 @@ function setDefaultBgWindow(energyOrCount) {
     const { e0, e1 } = defaultBgWindow(energyOrCount);
     dom.bgE0.value = String(e0);
     dom.bgE1.value = String(e1);
+}
+
+function defaultSumruleWindows(energyOrCount) {
+    if (Array.isArray(energyOrCount) && energyOrCount.length > 1) {
+        const eMin = energyOrCount[0];
+        const eMax = energyOrCount[energyOrCount.length - 1];
+        const span = eMax - eMin;
+        return {
+            l3Lo: eMin,
+            l3Hi: eMin + 0.25 * span,
+            l2Lo: eMin + 0.25 * span,
+            l2Hi: eMin + 0.5 * span,
+            rLo: eMin + 0.5 * span,
+            rHi: eMax,
+        };
+    }
+    const n = Math.max(5, Number(energyOrCount) || state.nFrames || 5);
+    const span = n - 1;
+    return {
+        l3Lo: 0,
+        l3Hi: 0.25 * span,
+        l2Lo: 0.25 * span,
+        l2Hi: 0.5 * span,
+        rLo: 0.5 * span,
+        rHi: span,
+    };
+}
+
+function setDefaultSumruleWindows(energyOrCount) {
+    const w = defaultSumruleWindows(energyOrCount);
+    dom.sumruleL3Lo.value = String(w.l3Lo);
+    dom.sumruleL3Hi.value = String(w.l3Hi);
+    dom.sumruleL2Lo.value = String(w.l2Lo);
+    dom.sumruleL2Hi.value = String(w.l2Hi);
+    dom.sumruleRLo.value = String(w.rLo);
+    dom.sumruleRHi.value = String(w.rHi);
+}
+
+function sumrulePairReady() {
+    return state.processedIsPaired || state.separatedChannels.length >= 2;
 }
 
 function isBgViewerNode(node) {
@@ -575,6 +650,397 @@ async function applyBg() {
     }
 }
 
+function fmtValStd(mean, std) {
+    if (!Number.isFinite(mean)) return "—";
+    const m = mean.toExponential(3);
+    const s = Number.isFinite(std) ? std.toExponential(3) : "0";
+    return `${m} ± ${s}`;
+}
+
+function buildSumrulePayload() {
+    const deltaRaw = dom.sumruleWindowDelta.value.trim();
+    const bgDeltaRaw = dom.sumruleBgDelta.value.trim();
+    const payload = {
+        use_roi: dom.sumruleUseRoi.checked,
+        nh: Number(dom.sumruleNh.value),
+        l3_lo: Number(dom.sumruleL3Lo.value),
+        l3_hi: Number(dom.sumruleL3Hi.value),
+        l2_lo: Number(dom.sumruleL2Lo.value),
+        l2_hi: Number(dom.sumruleL2Hi.value),
+        r_lo: Number(dom.sumruleRLo.value),
+        r_hi: Number(dom.sumruleRHi.value),
+        window_n: Math.max(1, Math.min(101, Number(dom.sumruleWindowN.value) || 21)),
+        bg_n: Math.max(1, Math.min(101, Number(dom.sumruleBgN.value) || 21)),
+    };
+    if (deltaRaw) payload.window_delta = Number(deltaRaw);
+    if (bgDeltaRaw) payload.bg_delta = Number(bgDeltaRaw);
+    if (payload.use_roi) payload.roi = state.roi;
+    return payload;
+}
+
+function sumrulePlotLayout() {
+    const width = dom.sumrulePlot.width;
+    const height = dom.sumrulePlot.height;
+    const pad = { left: 48, right: 12, top: 12, bottom: 28 };
+    return {
+        width,
+        height,
+        pad,
+        plotW: width - pad.left - pad.right,
+        plotH: height - pad.top - pad.bottom,
+    };
+}
+
+function sumruleEnergyAtPlotX(xPx, energy) {
+    const { pad, plotW } = sumrulePlotLayout();
+    const frac = Math.max(0, Math.min(1, (xPx - pad.left) / plotW));
+    const idx = frac * (energy.length - 1);
+    const i0 = Math.floor(idx);
+    const i1 = Math.min(energy.length - 1, i0 + 1);
+    const t = idx - i0;
+    return energy[i0] * (1 - t) + energy[i1] * t;
+}
+
+function sumrulePlotXForEnergy(e, energy) {
+    const { pad, plotW } = sumrulePlotLayout();
+    let idx = 0;
+    for (let i = 1; i < energy.length; i += 1) {
+        if (energy[i] >= e) break;
+        idx = i;
+    }
+    if (idx >= energy.length - 1) return pad.left + plotW;
+    const e0 = energy[idx];
+    const e1 = energy[idx + 1];
+    const t = e1 === e0 ? 0 : (e - e0) / (e1 - e0);
+    const frac = (idx + t) / (energy.length - 1);
+    return pad.left + frac * plotW;
+}
+
+function sumruleWindowFields() {
+    return {
+        l3_lo: Number(dom.sumruleL3Lo.value),
+        l3_hi: Number(dom.sumruleL3Hi.value),
+        l2_lo: Number(dom.sumruleL2Lo.value),
+        l2_hi: Number(dom.sumruleL2Hi.value),
+        r_lo: Number(dom.sumruleRLo.value),
+        r_hi: Number(dom.sumruleRHi.value),
+    };
+}
+
+function drawSumruleWindowBand(ctx, energy, lo, hi, color, pad, plotH) {
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    const x0 = sumrulePlotXForEnergy(Math.min(lo, hi), energy);
+    const x1 = sumrulePlotXForEnergy(Math.max(lo, hi), energy);
+    ctx.fillStyle = color;
+    ctx.fillRect(x0, pad.top, x1 - x0, plotH);
+}
+
+function drawSumrulePlot() {
+    const ctx = dom.sumrulePlot.getContext("2d");
+    const layout = sumrulePlotLayout();
+    const { width, height, pad, plotW, plotH } = layout;
+    ctx.fillStyle = "#111";
+    ctx.fillRect(0, 0, width, height);
+
+    const data = state.sumrulePreviewData;
+    if (!data?.energy?.length) {
+        ctx.fillStyle = "#888";
+        ctx.font = "12px sans-serif";
+        ctx.fillText("Preview to show spectra", pad.left, pad.top + plotH / 2);
+        return;
+    }
+
+    const { energy, mu_plus: muPlus, mu_minus: muMinus, dichroism } = data;
+    const series = [];
+    if (dom.sumruleShowPlus.checked) series.push(...muPlus);
+    if (dom.sumruleShowMinus.checked) series.push(...muMinus);
+    if (dom.sumruleShowDichro.checked) series.push(...dichroism);
+
+    let yMin = Infinity;
+    let yMax = -Infinity;
+    for (const v of series) {
+        if (Number.isFinite(v)) {
+            yMin = Math.min(yMin, v);
+            yMax = Math.max(yMax, v);
+        }
+    }
+    if (!Number.isFinite(yMin) || yMin === yMax) {
+        yMin = 0;
+        yMax = 1;
+    }
+    const yPad = 0.05 * (yMax - yMin || 1);
+    yMin -= yPad;
+    yMax += yPad;
+
+    const xOf = (i) => pad.left + (i / (energy.length - 1)) * plotW;
+    const yOf = (v) => pad.top + plotH - ((v - yMin) / (yMax - yMin)) * plotH;
+
+    ctx.strokeStyle = "#444";
+    ctx.beginPath();
+    ctx.moveTo(pad.left, pad.top + plotH);
+    ctx.lineTo(pad.left + plotW, pad.top + plotH);
+    ctx.stroke();
+
+    const w = sumruleWindowFields();
+    drawSumruleWindowBand(ctx, energy, w.r_lo, w.r_hi, "rgba(255, 140, 0, 0.1)", pad, plotH);
+    drawSumruleWindowBand(ctx, energy, w.l2_lo, w.l2_hi, "rgba(255, 0, 255, 0.12)", pad, plotH);
+    drawSumruleWindowBand(ctx, energy, w.l3_lo, w.l3_hi, "rgba(0, 200, 255, 0.15)", pad, plotH);
+
+    const drawLine = (values, color) => {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        let started = false;
+        for (let i = 0; i < values.length; i += 1) {
+            const v = values[i];
+            if (!Number.isFinite(v)) continue;
+            const x = xOf(i);
+            const y = yOf(v);
+            if (!started) {
+                ctx.moveTo(x, y);
+                started = true;
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+    };
+
+    if (dom.sumruleShowPlus.checked) drawLine(muPlus, "#4dd0e1");
+    if (dom.sumruleShowMinus.checked) drawLine(muMinus, "#ff8c00");
+    if (dom.sumruleShowDichro.checked) drawLine(dichroism, "#ddd");
+
+    const edgeColors = {
+        l3_lo: "#00e5ff",
+        l3_hi: "#00e5ff",
+        l2_lo: "#ff66ff",
+        l2_hi: "#ff66ff",
+        r_lo: "#ffb347",
+        r_hi: "#ffb347",
+    };
+    for (const [key, color] of Object.entries(edgeColors)) {
+        const e = w[key];
+        if (!Number.isFinite(e)) continue;
+        const x = sumrulePlotXForEnergy(e, energy);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x, pad.top);
+        ctx.lineTo(x, pad.top + plotH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    ctx.fillStyle = "#888";
+    ctx.font = "10px sans-serif";
+    const xLabel = (data.energy_source || state.energySource) === "csv"
+        ? "Energy (eV)"
+        : "Frame index";
+    ctx.fillText(xLabel, pad.left, height - 8);
+}
+
+function nearestSumruleHandle(xPx, energy) {
+    const w = sumruleWindowFields();
+    const handles = [
+        ["l3_lo", w.l3_lo],
+        ["l3_hi", w.l3_hi],
+        ["l2_lo", w.l2_lo],
+        ["l2_hi", w.l2_hi],
+        ["r_lo", w.r_lo],
+        ["r_hi", w.r_hi],
+    ];
+    const threshold = 8;
+    let best = null;
+    let bestDist = threshold + 1;
+    for (const [name, e] of handles) {
+        if (!Number.isFinite(e)) continue;
+        const dist = Math.abs(xPx - sumrulePlotXForEnergy(e, energy));
+        if (dist <= threshold && dist < bestDist) {
+            best = name;
+            bestDist = dist;
+        }
+    }
+    if (best) return best;
+
+    for (const [loKey, hiKey] of [
+        ["l3_lo", "l3_hi"],
+        ["l2_lo", "l2_hi"],
+        ["r_lo", "r_hi"],
+    ]) {
+        const lo = w[loKey];
+        const hi = w[hiKey];
+        if (!Number.isFinite(lo) || !Number.isFinite(hi)) continue;
+        const x0 = sumrulePlotXForEnergy(Math.min(lo, hi), energy);
+        const x1 = sumrulePlotXForEnergy(Math.max(lo, hi), energy);
+        if (xPx >= x0 && xPx <= x1) return `window:${loKey}:${hiKey}`;
+    }
+    return null;
+}
+
+function setSumruleField(key, value) {
+    const map = {
+        l3_lo: dom.sumruleL3Lo,
+        l3_hi: dom.sumruleL3Hi,
+        l2_lo: dom.sumruleL2Lo,
+        l2_hi: dom.sumruleL2Hi,
+        r_lo: dom.sumruleRLo,
+        r_hi: dom.sumruleRHi,
+    };
+    if (map[key]) map[key].value = String(value);
+}
+
+function updateSumruleResults(data) {
+    if (!data) {
+        dom.sumruleResults.hidden = true;
+        return;
+    }
+    dom.sumruleResults.hidden = false;
+    dom.sumruleP.textContent = fmtValStd(data.p, data.p_std);
+    dom.sumruleQ.textContent = fmtValStd(data.q, data.q_std);
+    dom.sumruleR.textContent = fmtValStd(data.r, data.r_std);
+    dom.sumruleMOrb.textContent = fmtValStd(data.m_orb, data.m_orb_std);
+    dom.sumruleMSpin.textContent = fmtValStd(data.m_spin_plus_dipole, data.m_spin_plus_dipole_std);
+    dom.sumruleTags.textContent =
+        `${data.tag_plus}/${data.tag_minus} · ${data.source_kind} · n=${data.ensemble_n_valid}` +
+        (data.ensemble_n_valid_bg ? ` (BG n=${data.ensemble_n_valid_bg})` : "");
+    dom.sumruleI0Warn.hidden = Boolean(data.i0_applied);
+}
+
+function scheduleSumrulePreview() {
+    if (state.sumruleBusy) {
+        state.sumrulePreviewDirty = true;
+        return;
+    }
+    clearTimeout(state.sumrulePreviewTimer);
+    state.sumrulePreviewTimer = setTimeout(() => {
+        state.sumrulePreviewTimer = null;
+        if (!state.sumruleBusy && state.name) previewSumrule();
+    }, 300);
+}
+
+function enterSumruleBusy() {
+    clearTimeout(state.sumrulePreviewTimer);
+    state.sumrulePreviewTimer = null;
+    state.sumruleBusy = true;
+    dom.sumrulePreview.disabled = true;
+    dom.sumruleApply.disabled = true;
+}
+
+function updateSumruleControls(summary) {
+    const enabled = sumrulePairReady() && (Number(summary?.n_frames) || state.nFrames) > 0;
+    dom.sumruleControls.disabled = !enabled;
+    dom.sumrulePreview.disabled = !enabled || state.sumruleBusy;
+    dom.sumruleApply.disabled = !enabled || state.sumruleBusy;
+    if (summary?.has_sumrule !== undefined) {
+        state.hasSumrule = Boolean(summary.has_sumrule);
+    }
+}
+
+async function loadStoredSumrule(name) {
+    if (!state.hasSumrule) return;
+    try {
+        const data = await TensorSpecAPI.peemSumruleGet(name);
+        if (state.name !== name) return;
+        state.sumrulePreviewData = data;
+        updateSumruleResults(data);
+        drawSumrulePlot();
+        dom.sumruleStatus.textContent = `Stored sum rule (${data.energy_source})`;
+    } catch (_) {
+        /* no stored analysis yet */
+    }
+}
+
+function applySumrulePreviewData(data) {
+    state.sumrulePreviewData = data;
+    updateSumruleResults(data);
+    drawSumrulePlot();
+}
+
+async function previewSumrule() {
+    if (!state.name) {
+        dom.sumruleStatus.textContent = "Load a PEEM stack before preview.";
+        return;
+    }
+    if (!sumrulePairReady()) {
+        dom.sumruleStatus.textContent = "Stack and pair CP/CM or LH/LV first.";
+        return;
+    }
+    if (dom.sumruleUseRoi.checked && !state.roi) {
+        dom.sumruleStatus.textContent = "Draw an ROI or uncheck Use ROI.";
+        return;
+    }
+
+    const previewName = state.name;
+    const gen = ++state.sumrulePreviewGen;
+    enterSumruleBusy();
+    dom.sumruleStatus.textContent = "Previewing sum rule…";
+    try {
+        const payload = buildSumrulePayload();
+        const data = await TensorSpecAPI.peemSumrulePreview(previewName, payload);
+        if (state.name !== previewName || gen !== state.sumrulePreviewGen) return;
+        applySumrulePreviewData(data);
+        dom.sumruleStatus.textContent =
+            `Preview · ${data.tag_plus}/${data.tag_minus} · ${data.source_kind} · ${data.energy_source}`;
+    } catch (err) {
+        if (state.name !== previewName || gen !== state.sumrulePreviewGen) return;
+        dom.sumruleStatus.textContent = String(err.message || err);
+    } finally {
+        state.sumruleBusy = false;
+        updateSumruleControls({ n_frames: state.nFrames, has_sumrule: state.hasSumrule });
+        const dirty = state.sumrulePreviewDirty;
+        state.sumrulePreviewDirty = false;
+        if (dirty) scheduleSumrulePreview();
+    }
+}
+
+async function applySumrule() {
+    if (!state.name) {
+        dom.sumruleStatus.textContent = "Load a PEEM stack before apply.";
+        return;
+    }
+    if (!sumrulePairReady()) {
+        dom.sumruleStatus.textContent = "Stack and pair CP/CM or LH/LV first.";
+        return;
+    }
+    if (dom.sumruleUseRoi.checked && !state.roi) {
+        dom.sumruleStatus.textContent = "Draw an ROI or uncheck Use ROI.";
+        return;
+    }
+
+    const applyName = state.name;
+    enterSumruleBusy();
+    setBusy(true, "Applying sum rule…");
+    dom.sumruleStatus.textContent = "Writing /analysis/sumrule…";
+    try {
+        const payload = buildSumrulePayload();
+        const summary = await TensorSpecAPI.peemSumruleApply(applyName, payload);
+        if (state.name !== applyName) return;
+        const meta = await TensorSpecAPI.peemMeta(applyName);
+        if (state.name !== applyName) return;
+        state.hasSumrule = Boolean(meta.has_sumrule);
+        configureViewer(meta);
+        dom.status.textContent =
+            `Sum rule applied · ${summary.tag_plus}/${summary.tag_minus} · ${summary.source_kind}`;
+        dom.footerStatus.textContent = `${state.name} · sum rule applied`;
+        dom.sumruleStatus.textContent = `Applied · I0 ${summary.i0_applied ? "on" : "off"}`;
+        const stored = await TensorSpecAPI.peemSumruleGet(applyName);
+        if (state.name !== applyName) return;
+        applySumrulePreviewData(stored);
+    } catch (err) {
+        if (state.name !== applyName) return;
+        dom.sumruleStatus.textContent = String(err.message || err);
+        dom.footerStatus.textContent = "Sum rule apply failed";
+    } finally {
+        state.sumruleBusy = false;
+        updateSumruleControls({ n_frames: state.nFrames, has_sumrule: state.hasSumrule });
+        setBusy(false);
+        const dirty = state.sumrulePreviewDirty;
+        state.sumrulePreviewDirty = false;
+        if (dirty) scheduleSumrulePreview();
+    }
+}
+
 function updateDriftControls() {
     const showTrack = state.hasProcessed && state.processedIsPaired;
     dom.trackChannelRow.hidden = !showTrack;
@@ -812,6 +1278,7 @@ function configureViewer(summary) {
     dom.channel.disabled = !usePairNav || state.channelTags.length < 2;
     updateDriftControls();
     updateBgControls(summary);
+    updateSumruleControls(summary);
 }
 
 function renderFrame() {
@@ -957,6 +1424,16 @@ async function acceptLoad(summary) {
     state.nBgFrames = 0;
     state.energySource = null;
     setDefaultBgWindow(summary.n_frames);
+    setDefaultSumruleWindows(summary.n_frames);
+    state.sumruleBusy = false;
+    state.sumrulePreviewGen = 0;
+    state.sumrulePreviewDirty = false;
+    clearTimeout(state.sumrulePreviewTimer);
+    state.sumrulePreviewTimer = null;
+    state.sumrulePreviewData = null;
+    state.hasSumrule = Boolean(summary.has_sumrule);
+    dom.sumruleResults.hidden = true;
+    dom.sumruleI0Warn.hidden = true;
     resetRoi();
     setRoiMode(null);
     clearTimeout(state.frameTimer);
@@ -975,6 +1452,7 @@ async function acceptLoad(summary) {
     updateBgControls(summary);
     await showFrame(0);
     await loadStoredBgSpectrum(summary.name);
+    await loadStoredSumrule(summary.name);
 }
 
 async function separatePairs() {
@@ -1180,6 +1658,8 @@ dom.separatePairs.addEventListener("click", separatePairs);
 dom.applyDrift.addEventListener("click", applyDrift);
 dom.bgPreview.addEventListener("click", previewBg);
 dom.bgApply.addEventListener("click", applyBg);
+dom.sumrulePreview.addEventListener("click", previewSumrule);
+dom.sumruleApply.addEventListener("click", applySumrule);
 for (const input of [dom.bgShowRaw, dom.bgShowBg, dom.bgShowBand, dom.bgShowSub]) {
     input.addEventListener("change", drawBgPlot);
 }
@@ -1240,6 +1720,86 @@ dom.bgPlot.addEventListener("mouseleave", () => {
     if (!state.bgDrag) return;
     state.bgDrag = null;
     scheduleBgPreview();
+});
+for (const input of [dom.sumruleShowPlus, dom.sumruleShowMinus, dom.sumruleShowDichro]) {
+    input.addEventListener("change", drawSumrulePlot);
+}
+for (const input of [
+    dom.sumruleL3Lo, dom.sumruleL3Hi,
+    dom.sumruleL2Lo, dom.sumruleL2Hi,
+    dom.sumruleRLo, dom.sumruleRHi,
+]) {
+    input.addEventListener("change", () => {
+        drawSumrulePlot();
+        scheduleSumrulePreview();
+    });
+}
+dom.sumrulePlot.addEventListener("mousedown", (event) => {
+    const data = state.sumrulePreviewData;
+    if (!data?.energy?.length) return;
+    event.preventDefault();
+    const rect = dom.sumrulePlot.getBoundingClientRect();
+    const scaleX = dom.sumrulePlot.width / rect.width;
+    const xPx = (event.clientX - rect.left) * scaleX;
+    const handle = nearestSumruleHandle(xPx, data.energy);
+    const w = sumruleWindowFields();
+    if (handle?.startsWith("window:")) {
+        const [, loKey, hiKey] = handle.split(":");
+        state.sumruleDrag = {
+            handle: "window",
+            loKey,
+            hiKey,
+            energy: data.energy,
+            startLo: w[loKey],
+            startHi: w[hiKey],
+            startX: xPx,
+        };
+        return;
+    }
+    if (handle) {
+        state.sumruleDrag = { handle, energy: data.energy };
+        return;
+    }
+    const e = sumruleEnergyAtPlotX(xPx, data.energy);
+    let bestKey = "l3_lo";
+    let bestDist = Infinity;
+    for (const key of ["l3_lo", "l3_hi", "l2_lo", "l2_hi", "r_lo", "r_hi"]) {
+        const dist = Math.abs(e - w[key]);
+        if (dist < bestDist) {
+            bestDist = dist;
+            bestKey = key;
+        }
+    }
+    setSumruleField(bestKey, e);
+    drawSumrulePlot();
+    scheduleSumrulePreview();
+});
+dom.sumrulePlot.addEventListener("mousemove", (event) => {
+    if (!state.sumruleDrag) return;
+    const rect = dom.sumrulePlot.getBoundingClientRect();
+    const scaleX = dom.sumrulePlot.width / rect.width;
+    const xPx = (event.clientX - rect.left) * scaleX;
+    const e = sumruleEnergyAtPlotX(xPx, state.sumruleDrag.energy);
+    const { handle } = state.sumruleDrag;
+    if (handle === "window") {
+        const startE = sumruleEnergyAtPlotX(state.sumruleDrag.startX, state.sumruleDrag.energy);
+        const delta = e - startE;
+        setSumruleField(state.sumruleDrag.loKey, state.sumruleDrag.startLo + delta);
+        setSumruleField(state.sumruleDrag.hiKey, state.sumruleDrag.startHi + delta);
+    } else {
+        setSumruleField(handle, e);
+    }
+    drawSumrulePlot();
+});
+dom.sumrulePlot.addEventListener("mouseup", () => {
+    if (!state.sumruleDrag) return;
+    state.sumruleDrag = null;
+    scheduleSumrulePreview();
+});
+dom.sumrulePlot.addEventListener("mouseleave", () => {
+    if (!state.sumruleDrag) return;
+    state.sumruleDrag = null;
+    scheduleSumrulePreview();
 });
 dom.roiRect.addEventListener("click", () => setRoiMode("rect"));
 dom.roiEllipse.addEventListener("click", () => setRoiMode("ellipse"));
@@ -1351,3 +1911,4 @@ dom.canvas.addEventListener("dblclick", (event) => {
 });
 
 drawBgPlot();
+drawSumrulePlot();

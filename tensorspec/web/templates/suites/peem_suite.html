@@ -152,8 +152,78 @@
                         <p class="hint" id="peem-bg-status">Load a stack to preview background.</p>
                         <button type="button" class="btn btn--block" id="peem-bg-preview">Preview Background</button>
                         <button type="button" class="btn btn--block" id="peem-bg-apply">Apply to All Frames</button>
-                        <button type="button" class="btn btn--block" disabled>&#931; Run Sum Rule Analysis (CP/CM)</button>
-                        <p class="hint">Sum rule analysis requires a paired CP/CM stack.</p>
+                    </fieldset>
+
+                    <fieldset class="fieldset" id="peem-sumrule-controls" disabled>
+                        <legend>5. XMCD Sum Rule</legend>
+                        <label class="check">
+                            <input type="checkbox" id="peem-sumrule-use-roi">
+                            Use ROI for spectrum (picture-wide if unchecked)
+                        </label>
+                        <div class="form-row">
+                            <label for="peem-sumrule-nh">nₕ (holes):</label>
+                            <input class="field field--num" id="peem-sumrule-nh" type="number" step="any" min="0.001" value="1">
+                        </div>
+                        <div class="form-row">
+                            <label for="peem-sumrule-l3-lo">L₃ lo:</label>
+                            <input class="field field--num" id="peem-sumrule-l3-lo" type="number" step="any" value="0">
+                        </div>
+                        <div class="form-row">
+                            <label for="peem-sumrule-l3-hi">L₃ hi:</label>
+                            <input class="field field--num" id="peem-sumrule-l3-hi" type="number" step="any" value="1">
+                        </div>
+                        <div class="form-row">
+                            <label for="peem-sumrule-l2-lo">L₂ lo:</label>
+                            <input class="field field--num" id="peem-sumrule-l2-lo" type="number" step="any" value="2">
+                        </div>
+                        <div class="form-row">
+                            <label for="peem-sumrule-l2-hi">L₂ hi:</label>
+                            <input class="field field--num" id="peem-sumrule-l2-hi" type="number" step="any" value="3">
+                        </div>
+                        <div class="form-row">
+                            <label for="peem-sumrule-r-lo">r lo:</label>
+                            <input class="field field--num" id="peem-sumrule-r-lo" type="number" step="any" value="0">
+                        </div>
+                        <div class="form-row">
+                            <label for="peem-sumrule-r-hi">r hi:</label>
+                            <input class="field field--num" id="peem-sumrule-r-hi" type="number" step="any" value="4">
+                        </div>
+                        <details class="hint" style="margin:8px 0">
+                            <summary>Ensemble (optional)</summary>
+                            <div class="form-row" style="margin-top:8px">
+                                <label for="peem-sumrule-window-delta">L-window delta:</label>
+                                <input class="field field--num" id="peem-sumrule-window-delta" type="number" step="any" placeholder="Auto (5% span)">
+                            </div>
+                            <div class="form-row">
+                                <label for="peem-sumrule-window-n">L-window n:</label>
+                                <input class="field field--num" id="peem-sumrule-window-n" type="number" min="1" max="101" value="21">
+                            </div>
+                            <div class="form-row">
+                                <label for="peem-sumrule-bg-delta">BG delta:</label>
+                                <input class="field field--num" id="peem-sumrule-bg-delta" type="number" step="any" placeholder="Auto">
+                            </div>
+                            <div class="form-row">
+                                <label for="peem-sumrule-bg-n">BG n:</label>
+                                <input class="field field--num" id="peem-sumrule-bg-n" type="number" min="1" max="101" value="21">
+                            </div>
+                        </details>
+                        <div class="inline" style="flex-wrap:wrap;gap:8px;margin:8px 0">
+                            <label class="check"><input type="checkbox" id="peem-sumrule-show-plus" checked> μ+</label>
+                            <label class="check"><input type="checkbox" id="peem-sumrule-show-minus" checked> μ−</label>
+                            <label class="check"><input type="checkbox" id="peem-sumrule-show-dichro" checked> Dichroism</label>
+                        </div>
+                        <canvas id="peem-sumrule-plot" width="400" height="180"
+                            style="width:100%;height:auto;display:block;background:#111;cursor:crosshair"
+                            aria-label="XMCD sum-rule spectra and integration windows"></canvas>
+                        <p class="hint" id="peem-sumrule-i0-warn" hidden>I0 not applied — spectra unnormalized.</p>
+                        <p class="hint" id="peem-sumrule-status">Pair CP/CM or LH/LV, then preview.</p>
+                        <div id="peem-sumrule-results" class="hint" hidden>
+                            <p><strong>Integrals</strong> p=<span id="peem-sumrule-p"></span> q=<span id="peem-sumrule-q"></span> r=<span id="peem-sumrule-r"></span></p>
+                            <p><strong>Moments</strong> m<sub>orb</sub>=<span id="peem-sumrule-m-orb"></span> m<sub>spin</sub>=<span id="peem-sumrule-m-spin"></span></p>
+                            <p id="peem-sumrule-tags"></p>
+                        </div>
+                        <button type="button" class="btn btn--block" id="peem-sumrule-preview">Preview Sum Rule</button>
+                        <button type="button" class="btn btn--block" id="peem-sumrule-apply">Apply Sum Rule</button>
                     </fieldset>
 
                     <button type="button" class="btn btn--primary" disabled>&#128229; Push Stack to Workspace</button>

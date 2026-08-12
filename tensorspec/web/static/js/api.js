@@ -257,6 +257,18 @@ const TensorSpecAPI = (() => {
             }),
         peemBgSpectrum: (name) =>
             request(`/api/peem/${encodeURIComponent(name)}/bg/spectrum`),
+        peemSumrulePreview: (name, payload) =>
+            request(`/api/peem/${encodeURIComponent(name)}/sumrule/preview`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        peemSumruleApply: (name, payload) =>
+            request(`/api/peem/${encodeURIComponent(name)}/sumrule/apply`, {
+                method: "POST",
+                body: JSON.stringify(payload),
+            }),
+        peemSumruleGet: (name) =>
+            request(`/api/peem/${encodeURIComponent(name)}/sumrule`),
         processRoles: (name) =>
             request(`/api/arpes/process/${encodeURIComponent(name)}/roles`),
         processSuggestCenter: (name, payload) =>
