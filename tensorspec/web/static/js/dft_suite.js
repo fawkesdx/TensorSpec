@@ -558,6 +558,7 @@ function readParameters() {
 
 function readQeParameters() {
     const slab = !!dom.qeSlabMode?.checked;
+    syncNbndSuggestion();
     return {
         run_name: dom.qeRunName.value.trim() || "run_01",
         ecutwfc: Number(dom.qeCutoff.value) || 60,

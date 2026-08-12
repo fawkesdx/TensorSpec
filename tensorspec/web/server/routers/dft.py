@@ -135,10 +135,20 @@ def _einstein_ssh_commands(
     ]
 
 
-def _params_from_request(request: QERequest, max_mpi_ranks: int) -> PipelineParams:
+def _params_from_request(
+    request: QERequest, max_mpi_ranks: int, *, structure=None
+) -> PipelineParams:
+    nbnd = int(request.nbnd)
+    if structure is not None:
+        base = suggest_nbnd_base(structure)
+        suggested = min(2000, max(1, base * (2 if request.use_soc else 1)))
+        # HTML default is 12; if the UI never applied the suggestion, prefer
+        # the structure-based count. Keep any intentional non-default override.
+        if nbnd == 12 and suggested != 12:
+            nbnd = suggested
     return PipelineParams(
         ecutwfc=request.ecutwfc,
-        nbnd=request.nbnd,
+        nbnd=nbnd,
         kx=request.kx,
         ky=request.ky,
         kz=request.kz,
@@ -182,7 +192,7 @@ def _prepare_run(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    params = _params_from_request(request, cfg.max_mpi_ranks)
+    params = _params_from_request(request, cfg.max_mpi_ranks, structure=structure)
     try:
         files = qe_pipeline.generate_inputs(
             structure,
