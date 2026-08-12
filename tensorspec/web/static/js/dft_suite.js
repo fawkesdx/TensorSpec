@@ -374,12 +374,18 @@ async function refreshStructures() {
             dom.structures.appendChild(option);
         });
 
+        // Keep first structure selected after rebuild so suggestions apply.
+        if (!dom.structures.value || ![...dom.structures.options].some((o) => o.value === dom.structures.value)) {
+            dom.structures.value = structures[0].name;
+        }
+
         dom.calculate.disabled = false;
         if (dom.gapPredict) dom.gapPredict.disabled = false;
         if (dom.qeSlabPrepare) dom.qeSlabPrepare.disabled = false;
-        renderShells();
-        syncSlabSuggestion();
+        // nbnd first — independent of TB shell rendering
         syncNbndSuggestion();
+        syncSlabSuggestion();
+        renderShells();
         setStatus(`${structures.length} structure(s) available`);
         refreshBzNote();
     } catch (err) {
@@ -410,18 +416,33 @@ function syncSlabSuggestion() {
     }
 }
 
-function syncNbndSuggestion() {
-    const structure = selected();
+function setQeStatus(message, isError = false) {
+    if (!dom.qeStatus) return;
+    dom.qeStatus.textContent = message;
+    dom.qeStatus.style.color = isError ? "#ff6b6b" : "";
+}
+
+function applySuggestedNbnd(structure) {
     if (!structure || !dom.qeNbnd) return;
-    const base = Number(structure.suggest_nbnd);
-    if (!Number.isFinite(base) || base < 1) return;
+    const raw = structure.suggest_nbnd ?? structure.suggestNbnd;
+    const base = Number(raw);
+    if (!Number.isFinite(base) || base < 1) {
+        setQeStatus(`No nbnd suggestion for ${structure.name || "structure"}`, true);
+        return;
+    }
     const soc = Boolean(dom.qeSoc?.checked);
-    const nbnd = Math.min(500, Math.max(1, soc ? base * 2 : base));
+    const nbnd = Math.min(2000, Math.max(1, soc ? base * 2 : base));
     dom.qeNbnd.value = String(nbnd);
     const note = soc
-        ? `Suggested nbnd=${nbnd} (${base}×2 SOC)`
-        : `Suggested nbnd=${nbnd}`;
+        ? `Suggested nbnd=${nbnd} (${base}×2 SOC) for ${structure.name}`
+        : `Suggested nbnd=${nbnd} for ${structure.name} (enable SOC → ${Math.min(2000, base * 2)})`;
     setQeStatus(note);
+    const hint = el("qe-nbnd-hint");
+    if (hint) hint.textContent = note;
+}
+
+function syncNbndSuggestion() {
+    applySuggestedNbnd(selected());
 }
 
 function setSlabStatus(message, isError = false) {
@@ -859,9 +880,11 @@ dom.qeBundle.addEventListener("click", downloadBundle);
 dom.qeQueue.addEventListener("click", queueRun);
 dom.qeCancel.addEventListener("click", cancelRun);
 
-dom.soc.addEventListener("change", () => {
-    dom.socStrength.disabled = !dom.soc.checked;
-});
+if (dom.soc) {
+    dom.soc.addEventListener("change", () => {
+        if (dom.socStrength) dom.socStrength.disabled = !dom.soc.checked;
+    });
+}
 
 [dom.eMin, dom.eMax].forEach((input) =>
     input.addEventListener("change", () => {
