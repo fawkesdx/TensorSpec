@@ -301,6 +301,21 @@ function setDefaultSumruleWindows(energyOrCount) {
     dom.sumruleRHi.value = String(w.rHi);
 }
 
+function applySumruleFormFields(data) {
+    if (!data) return;
+    if (Number.isFinite(data.nh)) dom.sumruleNh.value = String(data.nh);
+    for (const [key, input] of [
+        ["l3_lo", dom.sumruleL3Lo],
+        ["l3_hi", dom.sumruleL3Hi],
+        ["l2_lo", dom.sumruleL2Lo],
+        ["l2_hi", dom.sumruleL2Hi],
+        ["r_lo", dom.sumruleRLo],
+        ["r_hi", dom.sumruleRHi],
+    ]) {
+        if (Number.isFinite(data[key])) input.value = String(data[key]);
+    }
+}
+
 function sumrulePairReady() {
     return state.processedIsPaired || state.separatedChannels.length >= 2;
 }
@@ -942,6 +957,7 @@ async function loadStoredSumrule(name) {
     try {
         const data = await TensorSpecAPI.peemSumruleGet(name);
         if (state.name !== name) return;
+        applySumruleFormFields(data);
         state.sumrulePreviewData = data;
         updateSumruleResults(data);
         drawSumrulePlot();
@@ -952,6 +968,7 @@ async function loadStoredSumrule(name) {
 }
 
 function applySumrulePreviewData(data) {
+    applySumruleFormFields(data);
     state.sumrulePreviewData = data;
     updateSumruleResults(data);
     drawSumrulePlot();
@@ -1424,7 +1441,9 @@ async function acceptLoad(summary) {
     state.nBgFrames = 0;
     state.energySource = null;
     setDefaultBgWindow(summary.n_frames);
-    setDefaultSumruleWindows(summary.n_frames);
+    if (!summary.has_sumrule) {
+        setDefaultSumruleWindows(summary.n_frames);
+    }
     state.sumruleBusy = false;
     state.sumrulePreviewGen = 0;
     state.sumrulePreviewDirty = false;

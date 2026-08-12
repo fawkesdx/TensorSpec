@@ -931,6 +931,13 @@ class TestPeemApi(unittest.TestCase):
             self.assertEqual(body["tag_minus"], "CM")
             self.assertFalse(body["i0_applied"])
             self.assertGreaterEqual(body["ensemble_n_valid"], 1)
+            self.assertAlmostEqual(body["nh"], request.nh)
+            self.assertAlmostEqual(body["l3_lo"], request.l3_lo)
+            self.assertAlmostEqual(body["l3_hi"], request.l3_hi)
+            self.assertAlmostEqual(body["l2_lo"], request.l2_lo)
+            self.assertAlmostEqual(body["l2_hi"], request.l2_hi)
+            self.assertAlmostEqual(body["r_lo"], request.r_lo)
+            self.assertAlmostEqual(body["r_hi"], request.r_hi)
             self.assertIsNone(session.workspace.pull_analysis_data("sumrule_me", "sumrule"))
 
             apply = client.post(
@@ -953,6 +960,13 @@ class TestPeemApi(unittest.TestCase):
             stored_body = stored.json()
             self.assertEqual(len(stored_body["energy"]), 3)
             for key in (
+                "nh",
+                "l3_lo",
+                "l3_hi",
+                "l2_lo",
+                "l2_hi",
+                "r_lo",
+                "r_hi",
                 "p",
                 "q",
                 "r",

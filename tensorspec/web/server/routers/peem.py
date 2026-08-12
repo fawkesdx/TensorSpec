@@ -671,6 +671,13 @@ class _SumruleResult(NamedTuple):
     bg_delta: float
     bg_n: int
     roi_dict: dict | None
+    nh: float
+    l3_lo: float
+    l3_hi: float
+    l2_lo: float
+    l2_hi: float
+    r_lo: float
+    r_hi: float
 
 
 def _run_sumrule(
@@ -762,6 +769,13 @@ def _run_sumrule(
         bg_delta=bg_delta,
         bg_n=bg_n,
         roi_dict=roi_dict,
+        nh=request.nh,
+        l3_lo=l3[0],
+        l3_hi=l3[1],
+        l2_lo=l2[0],
+        l2_hi=l2[1],
+        r_lo=r_win[0],
+        r_hi=r_win[1],
     )
 
 
@@ -773,6 +787,13 @@ def _sumrule_to_preview(result: _SumruleResult) -> PeemSumrulePreviewResponse:
         mu_plus=[float(v) for v in result.mu_plus],
         mu_minus=[float(v) for v in result.mu_minus],
         dichroism=[float(v) for v in d_mu],
+        nh=float(result.nh),
+        l3_lo=float(result.l3_lo),
+        l3_hi=float(result.l3_hi),
+        l2_lo=float(result.l2_lo),
+        l2_hi=float(result.l2_hi),
+        r_lo=float(result.r_lo),
+        r_hi=float(result.r_hi),
         p=float(ens["p_mean"]),
         q=float(ens["q_mean"]),
         r=float(ens["r_mean"]),
@@ -800,6 +821,13 @@ def _analysis_to_sumrule_preview(ds) -> PeemSumrulePreviewResponse:
         mu_plus=[float(v) for v in ds["mu_plus"].values],
         mu_minus=[float(v) for v in ds["mu_minus"].values],
         dichroism=[float(v) for v in ds["dichroism"].values],
+        nh=float(attrs["nh"]),
+        l3_lo=float(attrs["l3_lo"]),
+        l3_hi=float(attrs["l3_hi"]),
+        l2_lo=float(attrs["l2_lo"]),
+        l2_hi=float(attrs["l2_hi"]),
+        r_lo=float(attrs["r_lo"]),
+        r_hi=float(attrs["r_hi"]),
         p=float(attrs["p"]),
         q=float(attrs["q"]),
         r=float(attrs["r"]),

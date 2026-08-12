@@ -443,6 +443,13 @@ class PeemSumrulePreviewResponse(BaseModel):
     mu_plus: list[float]
     mu_minus: list[float]
     dichroism: list[float]
+    nh: float
+    l3_lo: float
+    l3_hi: float
+    l2_lo: float
+    l2_hi: float
+    r_lo: float
+    r_hi: float
     p: float
     q: float
     r: float
