@@ -379,6 +379,7 @@ async function refreshStructures() {
         if (dom.qeSlabPrepare) dom.qeSlabPrepare.disabled = false;
         renderShells();
         syncSlabSuggestion();
+        syncNbndSuggestion();
         setStatus(`${structures.length} structure(s) available`);
         refreshBzNote();
     } catch (err) {
@@ -407,6 +408,20 @@ function syncSlabSuggestion() {
     if (dom.qeSlabStore && !dom.qeSlabStore.value) {
         dom.qeSlabStore.placeholder = `${structure.name}_slab`;
     }
+}
+
+function syncNbndSuggestion() {
+    const structure = selected();
+    if (!structure || !dom.qeNbnd) return;
+    const base = Number(structure.suggest_nbnd);
+    if (!Number.isFinite(base) || base < 1) return;
+    const soc = Boolean(dom.qeSoc?.checked);
+    const nbnd = Math.min(500, Math.max(1, soc ? base * 2 : base));
+    dom.qeNbnd.value = String(nbnd);
+    const note = soc
+        ? `Suggested nbnd=${nbnd} (${base}×2 SOC)`
+        : `Suggested nbnd=${nbnd}`;
+    setQeStatus(note);
 }
 
 function setSlabStatus(message, isError = false) {
@@ -809,7 +824,11 @@ dom.structures.addEventListener("change", () => {
     renderShells();
     refreshBzNote();
     syncSlabSuggestion();
+    syncNbndSuggestion();
 });
+if (dom.qeSoc) {
+    dom.qeSoc.addEventListener("change", () => syncNbndSuggestion());
+}
 dom.calculate.addEventListener("click", calculate);
 if (dom.gapPredict) dom.gapPredict.addEventListener("click", predictGap);
 if (dom.fat) dom.fat.addEventListener("change", applyFatTarget);

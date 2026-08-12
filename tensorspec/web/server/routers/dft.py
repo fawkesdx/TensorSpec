@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 from tensorspec.core.dft import band_service
 from tensorspec.core.dft import qe_pipeline
 from tensorspec.core.dft import qe_slab
+from tensorspec.core.dft.nbnd_suggest import suggest_nbnd_base
 from tensorspec.core.dft.qe_pipeline import PipelineParams, SolverPaths
 from tensorspec.core.dft_engine import DFTEngineRouter
 from tensorspec.core import mlip_engine
@@ -224,6 +225,7 @@ def list_structures(session: Session = Depends(current_session)) -> list[Structu
             default_hoppings=[float(v) for v in shells.values()],
             suggest_slab_qe=qe_slab.suggest_slab_qe(structure),
             lattice_c=float(structure.lattice.c),
+            suggest_nbnd=suggest_nbnd_base(structure),
         ))
     return options
 

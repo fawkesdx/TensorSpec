@@ -221,6 +221,8 @@ class StructureOption(BaseModel):
     default_hoppings: list[float]
     suggest_slab_qe: bool = False
     lattice_c: float | None = None
+    # Base Wannier/QE band count (no SOC factor); UI may ×2 when SOC on
+    suggest_nbnd: int = 12
 
 
 class QEGenerateResponse(BaseModel):
