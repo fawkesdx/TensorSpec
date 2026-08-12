@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from tensorspec.core.peem_bg import fit_linear_preedge
+from tensorspec.core.peem_bg import fit_background
 
 _R_EPS = np.finfo(float).eps
 
@@ -153,6 +153,9 @@ def ensemble_sumrule(
     window_n: int,
     bg_e0: float | None = None,
     bg_e1: float | None = None,
+    bg_method: str = "linear",
+    bg_post_e0: float | None = None,
+    bg_post_e1: float | None = None,
     bg_delta: float = 0.0,
     bg_n: int = 1,
     seed: int = 0,
@@ -174,6 +177,10 @@ def ensemble_sumrule(
     rng = np.random.default_rng(seed)
 
     bg_active = bg_e0 is not None and bg_e1 is not None
+    bg_method_norm = str(bg_method).strip().lower()
+    two_step_bg = bg_method_norm == "two_step"
+    if two_step_bg and bg_active and (bg_post_e0 is None or bg_post_e1 is None):
+        raise ValueError("two_step background requires bg_post_e0 and bg_post_e1")
 
     p_samples: list[float] = []
     q_samples: list[float] = []
@@ -195,9 +202,21 @@ def ensemble_sumrule(
             if bg_active:
                 e0_j = _jitter_endpoint(bg_e0, bg_delta, rng, e_min, e_max)
                 e1_j = _jitter_endpoint(bg_e1, bg_delta, rng, e_min, e_max)
+                fit_kwargs: dict[str, Any] = {"e0": e0_j, "e1": e1_j}
+                if two_step_bg:
+                    fit_kwargs["post_e0"] = _jitter_endpoint(
+                        bg_post_e0, bg_delta, rng, e_min, e_max
+                    )
+                    fit_kwargs["post_e1"] = _jitter_endpoint(
+                        bg_post_e1, bg_delta, rng, e_min, e_max
+                    )
                 try:
-                    mp = mp - fit_linear_preedge(energy, mp, e0_j, e1_j)["bg"]
-                    mm = mm - fit_linear_preedge(energy, mm, e0_j, e1_j)["bg"]
+                    mp = mp - fit_background(
+                        bg_method_norm, energy, mp, **fit_kwargs
+                    )["bg"]
+                    mm = mm - fit_background(
+                        bg_method_norm, energy, mm, **fit_kwargs
+                    )["bg"]
                     bg_ok = True
                 except ValueError:
                     continue

@@ -265,6 +265,8 @@ def analysis_dataset(
     *,
     e0: float,
     e1: float,
+    post_e0: float | None = None,
+    post_e1: float | None = None,
     energy_source: str,
     source_node: str,
     channel: int = 0,
@@ -277,9 +279,9 @@ def analysis_dataset(
     """Build xarray Dataset for /analysis/background."""
     import xarray as xr
 
+    method = str(fit.get("method", "linear"))
     attrs: dict[str, Any] = {
-        "slope": float(fit["slope"]),
-        "intercept": float(fit["intercept"]),
+        "method": method,
         "e0": float(e0),
         "e1": float(e1),
         "energy_source": energy_source,
@@ -289,6 +291,16 @@ def analysis_dataset(
         "ensemble_n_valid": int(ensemble["n_valid"]),
         "seed": int(seed),
     }
+    if method == "two_step":
+        attrs["post_e0"] = float(post_e0 if post_e0 is not None else fit["post_e0"])
+        attrs["post_e1"] = float(post_e1 if post_e1 is not None else fit["post_e1"])
+        attrs["pre_slope"] = float(fit["pre_slope"])
+        attrs["pre_intercept"] = float(fit["pre_intercept"])
+        attrs["post_slope"] = float(fit["post_slope"])
+        attrs["post_intercept"] = float(fit["post_intercept"])
+    else:
+        attrs["slope"] = float(fit["slope"])
+        attrs["intercept"] = float(fit["intercept"])
     if ensemble_delta is not None:
         attrs["ensemble_delta"] = float(ensemble_delta)
     if ensemble_n is not None:

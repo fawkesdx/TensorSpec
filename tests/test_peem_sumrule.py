@@ -116,6 +116,51 @@ class TestEnsembleSumrule(unittest.TestCase):
         self.assertGreater(out["p_std"], 0.0)
         self.assertGreater(out["m_orb_std"], 0.0)
 
+    def test_two_step_bg_leg(self):
+        energy = np.linspace(700.0, 740.0, 41)
+        mu_plus = 0.01 * energy + 5.0 + 0.5 * np.exp(-((energy - 710.0) ** 2) / 4.0)
+        mu_minus = 0.01 * energy + 5.0 - 0.3 * np.exp(-((energy - 710.0) ** 2) / 4.0)
+        linear = sr.ensemble_sumrule(
+            energy,
+            mu_plus,
+            mu_minus,
+            l3=(708.0, 712.0),
+            l2=(715.0, 720.0),
+            r_win=(700.0, 705.0),
+            nh=1.0,
+            window_delta=1.0,
+            window_n=21,
+            bg_e0=700.0,
+            bg_e1=702.0,
+            bg_method="linear",
+            bg_delta=0.5,
+            bg_n=11,
+            seed=0,
+        )
+        two_step = sr.ensemble_sumrule(
+            energy,
+            mu_plus,
+            mu_minus,
+            l3=(708.0, 712.0),
+            l2=(715.0, 720.0),
+            r_win=(700.0, 705.0),
+            nh=1.0,
+            window_delta=1.0,
+            window_n=21,
+            bg_e0=700.0,
+            bg_e1=702.0,
+            bg_method="two_step",
+            bg_post_e0=730.0,
+            bg_post_e1=735.0,
+            bg_delta=0.5,
+            bg_n=11,
+            seed=0,
+        )
+        self.assertGreater(two_step["n_valid_bg"], 0)
+        self.assertNotAlmostEqual(
+            two_step["m_orb_mean"], linear["m_orb_mean"], places=10
+        )
+
 
 class TestPickSourceKind(unittest.TestCase):
     def test_prefers_bg_pair(self):

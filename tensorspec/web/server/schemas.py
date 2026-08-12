@@ -375,21 +375,32 @@ class PeemSeparateSummary(BaseModel):
 
 
 class PeemBgRequest(BaseModel):
-    """Linear pre-edge background settings for preview or apply."""
+    """Pre-edge background settings for preview or apply."""
 
+    method: Literal["linear", "two_step"] = "linear"
     node: str = "raw"
     channel: int = Field(default=0, ge=0, le=1)
     use_roi: bool = False
     roi: PeemRoi | None = None
     e0: float
     e1: float
+    post_e0: float | None = None
+    post_e1: float | None = None
     ensemble_delta: float | None = None
     ensemble_n: int = Field(default=21, ge=1, le=101)
     seed: int = 0
 
+    @model_validator(mode="after")
+    def _two_step_requires_post_windows(self) -> PeemBgRequest:
+        if self.method == "two_step" and (
+            self.post_e0 is None or self.post_e1 is None
+        ):
+            raise ValueError("two_step requires post_e0 and post_e1")
+        return self
+
 
 class PeemBgPreviewResponse(BaseModel):
-    """Preview curves for linear pre-edge background (no tree write)."""
+    """Preview curves for background fit (no tree write)."""
 
     energy: list[float]
     spectrum: list[float]
@@ -397,11 +408,18 @@ class PeemBgPreviewResponse(BaseModel):
     bg_std: list[float]
     subtracted: list[float]
     subtracted_std: list[float]
-    slope: float
-    intercept: float
+    method: Literal["linear", "two_step"] = "linear"
+    slope: float | None = None
+    intercept: float | None = None
+    pre_slope: float | None = None
+    pre_intercept: float | None = None
+    post_slope: float | None = None
+    post_intercept: float | None = None
     energy_source: str
     e0: float
     e1: float
+    post_e0: float | None = None
+    post_e1: float | None = None
     ensemble_n_valid: int
 
 

@@ -24,9 +24,9 @@ from tensorspec.core.peem_bg import (
     analysis_dataset as bg_analysis_dataset,
     apply_bg_to_stack,
     bg_child_name,
-    ensemble_preedge,
+    ensemble_background,
     extract_spectrum,
-    fit_linear_preedge,
+    fit_background,
     is_bg_output_node,
     resolve_energy,
 )
@@ -408,15 +408,26 @@ def _run_bg_fit(session: Session, name: str, request: PeemBgRequest) -> _BgFitRe
     mask = _bg_roi_mask(request, stack.shape[1], stack.shape[2])
     try:
         spectrum = extract_spectrum(stack, mask)
-        fit = fit_linear_preedge(energy, spectrum, request.e0, request.e1)
+        fit = fit_background(
+            request.method,
+            energy,
+            spectrum,
+            e0=request.e0,
+            e1=request.e1,
+            post_e0=request.post_e0,
+            post_e1=request.post_e1,
+        )
         delta = request.ensemble_delta
         if delta is None:
             delta = _default_ensemble_delta(energy, energy_source)
-        ensemble = ensemble_preedge(
+        ensemble = ensemble_background(
+            request.method,
             energy,
             spectrum,
-            request.e0,
-            request.e1,
+            e0=request.e0,
+            e1=request.e1,
+            post_e0=request.post_e0,
+            post_e1=request.post_e1,
             delta=delta,
             n=request.ensemble_n,
             seed=request.seed,
@@ -441,23 +452,63 @@ def _run_bg_fit(session: Session, name: str, request: PeemBgRequest) -> _BgFitRe
     )
 
 
+def _bg_fit_to_preview(
+    *,
+    energy: np.ndarray,
+    spectrum: np.ndarray,
+    fit: dict,
+    ensemble: dict,
+    energy_source: str,
+    e0: float,
+    e1: float,
+    post_e0: float | None = None,
+    post_e1: float | None = None,
+) -> PeemBgPreviewResponse:
+    method = str(fit.get("method", "linear"))
+    common = dict(
+        energy=[float(v) for v in energy],
+        spectrum=[float(v) for v in spectrum],
+        bg=[float(v) for v in ensemble["bg_mean"]],
+        bg_std=[float(v) for v in ensemble["bg_std"]],
+        subtracted=[float(v) for v in ensemble["subtracted_mean"]],
+        subtracted_std=[float(v) for v in ensemble["subtracted_std"]],
+        method=method,  # type: ignore[arg-type]
+        energy_source=energy_source,
+        e0=float(e0),
+        e1=float(e1),
+        ensemble_n_valid=int(ensemble["n_valid"]),
+    )
+    if method == "two_step":
+        return PeemBgPreviewResponse(
+            **common,
+            post_e0=float(post_e0 if post_e0 is not None else fit["post_e0"]),
+            post_e1=float(post_e1 if post_e1 is not None else fit["post_e1"]),
+            pre_slope=float(fit["pre_slope"]),
+            pre_intercept=float(fit["pre_intercept"]),
+            post_slope=float(fit["post_slope"]),
+            post_intercept=float(fit["post_intercept"]),
+        )
+    return PeemBgPreviewResponse(
+        **common,
+        slope=float(fit["slope"]),
+        intercept=float(fit["intercept"]),
+    )
+
+
 def _compute_bg_preview(
     session: Session, name: str, request: PeemBgRequest
 ) -> PeemBgPreviewResponse:
     result = _run_bg_fit(session, name, request)
-    return PeemBgPreviewResponse(
-        energy=[float(v) for v in result.energy],
-        spectrum=[float(v) for v in result.spectrum],
-        bg=[float(v) for v in result.ensemble["bg_mean"]],
-        bg_std=[float(v) for v in result.ensemble["bg_std"]],
-        subtracted=[float(v) for v in result.ensemble["subtracted_mean"]],
-        subtracted_std=[float(v) for v in result.ensemble["subtracted_std"]],
-        slope=float(result.fit["slope"]),
-        intercept=float(result.fit["intercept"]),
+    return _bg_fit_to_preview(
+        energy=result.energy,
+        spectrum=result.spectrum,
+        fit=result.fit,
+        ensemble=result.ensemble,
         energy_source=result.energy_source,
-        e0=float(request.e0),
-        e1=float(request.e1),
-        ensemble_n_valid=int(result.ensemble["n_valid"]),
+        e0=request.e0,
+        e1=request.e1,
+        post_e0=request.post_e0,
+        post_e1=request.post_e1,
     )
 
 
@@ -503,19 +554,34 @@ def _bg_subtracted_tensor(
 
 def _analysis_to_preview(ds) -> PeemBgPreviewResponse:
     attrs = ds.attrs or {}
-    return PeemBgPreviewResponse(
+    method = str(attrs.get("method", "linear"))
+    common = dict(
         energy=[float(v) for v in ds.coords["energy"].values],
         spectrum=[float(v) for v in ds["raw_spectrum"].values],
         bg=[float(v) for v in ds["bg"].values],
         bg_std=[float(v) for v in ds["bg_std"].values],
         subtracted=[float(v) for v in ds["subtracted"].values],
         subtracted_std=[float(v) for v in ds["subtracted_std"].values],
-        slope=float(attrs["slope"]),
-        intercept=float(attrs["intercept"]),
+        method=method,  # type: ignore[arg-type]
         energy_source=str(attrs["energy_source"]),
         e0=float(attrs["e0"]),
         e1=float(attrs["e1"]),
         ensemble_n_valid=int(attrs["ensemble_n_valid"]),
+    )
+    if method == "two_step":
+        return PeemBgPreviewResponse(
+            **common,
+            post_e0=float(attrs["post_e0"]),
+            post_e1=float(attrs["post_e1"]),
+            pre_slope=float(attrs["pre_slope"]),
+            pre_intercept=float(attrs["pre_intercept"]),
+            post_slope=float(attrs["post_slope"]),
+            post_intercept=float(attrs["post_intercept"]),
+        )
+    return PeemBgPreviewResponse(
+        **common,
+        slope=float(attrs["slope"]),
+        intercept=float(attrs["intercept"]),
     )
 
 
@@ -636,22 +702,27 @@ def _sumrule_i0(
 
 def _sumrule_bg_params(
     session: Session, name: str, energy: np.ndarray, energy_source: str
-) -> tuple[float | None, float | None, float, int]:
+) -> tuple[str, float | None, float | None, float | None, float | None, float, int]:
     analysis = session.workspace.pull_analysis_data(name, "background")
     if analysis is None:
-        return None, None, 0.0, 1
+        return "linear", None, None, None, None, 0.0, 1
     attrs = analysis.attrs or {}
     e0 = attrs.get("e0")
     e1 = attrs.get("e1")
     if e0 is None or e1 is None:
-        return None, None, 0.0, 1
+        return "linear", None, None, None, None, 0.0, 1
     bg_delta = attrs.get("ensemble_delta")
     if bg_delta is None:
         bg_delta = _default_ensemble_delta(energy, energy_source)
     else:
         bg_delta = float(bg_delta)
     bg_n = int(attrs.get("ensemble_n", 21))
-    return float(e0), float(e1), bg_delta, bg_n
+    method = str(attrs.get("method", "linear"))
+    post_e0 = attrs.get("post_e0")
+    post_e1 = attrs.get("post_e1")
+    post_e0_f = float(post_e0) if post_e0 is not None else None
+    post_e1_f = float(post_e1) if post_e1 is not None else None
+    return method, float(e0), float(e1), post_e0_f, post_e1_f, bg_delta, bg_n
 
 
 class _SumruleResult(NamedTuple):
@@ -668,6 +739,9 @@ class _SumruleResult(NamedTuple):
     window_delta: float
     bg_e0: float | None
     bg_e1: float | None
+    bg_method: str
+    bg_post_e0: float | None
+    bg_post_e1: float | None
     bg_delta: float
     bg_n: int
     roi_dict: dict | None
@@ -717,11 +791,11 @@ def _run_sumrule(
     if window_delta is None:
         window_delta = _default_ensemble_delta(energy, energy_source)
 
-    bg_e0, bg_e1, bg_delta_default, bg_n_default = _sumrule_bg_params(
-        session, name, energy, energy_source
+    bg_method, bg_e0, bg_e1, bg_post_e0, bg_post_e1, bg_delta_default, bg_n_default = (
+        _sumrule_bg_params(session, name, energy, energy_source)
     )
     if source_kind == "bg":
-        bg_e0, bg_e1 = None, None
+        bg_e0, bg_e1, bg_post_e0, bg_post_e1 = None, None, None, None
     bg_delta = request.bg_delta if request.bg_delta is not None else bg_delta_default
     bg_n = bg_n_default if bg_e0 is not None else 1
 
@@ -740,6 +814,9 @@ def _run_sumrule(
             window_n=request.window_n,
             bg_e0=bg_e0,
             bg_e1=bg_e1,
+            bg_method=bg_method,
+            bg_post_e0=bg_post_e0,
+            bg_post_e1=bg_post_e1,
             bg_delta=bg_delta,
             bg_n=bg_n,
             seed=request.seed,
@@ -766,6 +843,9 @@ def _run_sumrule(
         window_delta=window_delta,
         bg_e0=bg_e0,
         bg_e1=bg_e1,
+        bg_method=bg_method,
+        bg_post_e0=bg_post_e0,
+        bg_post_e1=bg_post_e1,
         bg_delta=bg_delta,
         bg_n=bg_n,
         roi_dict=roi_dict,
@@ -1165,6 +1245,8 @@ def bg_apply_peem(
         result.ensemble,
         e0=request.e0,
         e1=request.e1,
+        post_e0=request.post_e0,
+        post_e1=request.post_e1,
         energy_source=result.energy_source,
         source_node=request.node,
         channel=request.channel,
