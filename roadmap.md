@@ -142,7 +142,7 @@ Grand App
 	- Simulator: matrix-element Option A + B1 (job queue + log stream)
 	- Deferred (not started): other beamline loaders; sim B2/B3; PEEM domain tools; XAS / Transport (see Grand App vision below)
 
-- [ ] PEEM Suite — load + view shipped; linear pre-edge BG slice shipped; XMCD sum-rule slice shipped (partial); domain analysis deferred
+- [ ] PEEM Suite — load + view shipped; linear + two-step BG slice shipped; XMCD sum-rule slice shipped (partial); domain analysis deferred
 	- [x] loader of tif file stacks
 	- [x] loader of sequences of series of tif files from a folder
 	- [x] accompanying beamline CSV metadata (I0 / beam current and other beamline params), stored for later CP vs CM sum-rule normalization
@@ -156,13 +156,14 @@ Grand App
 	- [x] once stacked, build drift-correction options
 		- [x] ROI NCC drift → `/processed` (POST `/api/peem/{name}/drift`)
 	- [x] separate those CP and CM or LH and LV
-	- [ ] background subtraction (partial — linear pre-edge slice shipped)
+	- [ ] background subtraction (partial — linear + two-step shipped; paper-exact / other models open)
 		- [x] linear pre-edge fit on mean spectrum (picture-wide or ROI); preview + apply `bg(E)` to whole stack
+		- [x] two-step BG: separate pre-edge + post-edge linear fits, connect at midpoint; method picker in suite UI
 		- [x] writes `/analysis/background` + `/processed/bg` (or `{tag}_bg` from separated channel)
-		- [x] light window ensemble (vary e0/e1); spectrum plot with draggable pre-edge window
-		- [x] UI: plot spectrum; toggle raw / bg / band / bg-subtracted overlays
+		- [x] light window ensemble (vary e0/e1 or four endpoints for two-step); spectrum plot with draggable windows
+		- [x] UI: plot spectrum; toggle raw / bg / band / bg-subtracted overlays; linear vs two-step method picker
 		- [ ] make background subtraction applied to all stacks / batch
-		- [ ] document BG function choices for users (Co₃Sn₂S₂ laser ARPES paper reference, etc.)
+		- [ ] document BG function choices for users (Co₃Sn₂S₂ laser ARPES paper reference, etc.) — two-step covers common case; paper-exact / other models still open
 		- [ ] several spectra and their background-related toggles plotted together (multi-spectra)
 	- [x] perform sum rule analysis if it is CP and CM data (partial — picture-wide / ROI mean spectrum; Thole/Carra p/q/r → m_orb, m_spin+dipole; dual L-window + optional BG ensemble)
 		- [x] normalize CP/CM (and similar pairs) using I0 / beam current from accompanying CSV before sum rule (when present and length-aligned)
@@ -183,7 +184,7 @@ Grand App
 	- Load: TIF stack or folder sequence (+ optional companion CSV metadata) via upload / `POST /api/peem/load`
 	- Data Viewer: frame canvas, slider, contrast limits; raw / processed / separated-channel nodes
 	- Process: CP/CM or LH/LV pair stack → `/processed`; ROI NCC drift → `/processed`; separate channels → `/processed/{tag}`
-	- Analysis (partial): linear pre-edge BG — preview/apply on picture-wide or ROI mean spectrum; `/analysis/background` + `/processed/bg`; spectrum plot with draggable e0/e1 window and ensemble band
+	- Analysis (partial): linear or two-step BG — preview/apply on picture-wide or ROI mean spectrum; `/analysis/background` + `/processed/bg`; spectrum plot with draggable pre/post windows and ensemble band; method picker (linear pre-edge vs two-step pre+post + connect)
 	- Analysis (partial): XMCD sum rule — preview/apply on picture-wide or ROI mean spectrum from CP/CM or LH/LV (prefers `*_bg` stacks); optional I0 when CSV length matches; `/analysis/sumrule`; draggable L3/L2/r windows + dual ensemble (L-window ± optional BG jitter)
 	- Deferred: pixel-to-pixel sum rule / BG; multi-spectra BG overlay; magnetic-domain tools
 
