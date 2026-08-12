@@ -850,6 +850,103 @@ class TestPeemApi(unittest.TestCase):
 
             self.assertEqual(response.status_code, 422, response.text)
 
+    def test_bg_two_step_apply_stores_method(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            self._load_ramp_stack(session, tmp, name="bg_two_step")
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            request = PeemBgRequest(
+                method="two_step", e0=0.0, e1=1.0, post_e0=3.0, post_e1=4.0
+            )
+
+            preview = client.post(
+                "/api/peem/bg_two_step/bg/preview", json=request.model_dump()
+            )
+            self.assertEqual(preview.status_code, 200, preview.text)
+            body = preview.json()
+            self.assertEqual(body["method"], "two_step")
+            self.assertAlmostEqual(body["post_e0"], 3.0)
+            self.assertAlmostEqual(body["post_e1"], 4.0)
+            self.assertIsNotNone(body["pre_slope"])
+            self.assertIsNotNone(body["post_slope"])
+            self.assertIsNone(body["slope"])
+            self.assertIsNone(body["intercept"])
+
+            apply = client.post(
+                "/api/peem/bg_two_step/bg/apply", json=request.model_dump()
+            )
+            self.assertEqual(apply.status_code, 200, apply.text)
+
+            stored = session.workspace.pull_analysis_data("bg_two_step", "background")
+            self.assertIsNotNone(stored)
+            self.assertEqual(stored.attrs["method"], "two_step")
+            self.assertAlmostEqual(stored.attrs["post_e0"], 3.0)
+            self.assertAlmostEqual(stored.attrs["post_e1"], 4.0)
+
+            spectrum = client.get("/api/peem/bg_two_step/bg/spectrum")
+            self.assertEqual(spectrum.status_code, 200, spectrum.text)
+            spec_body = spectrum.json()
+            self.assertEqual(spec_body["method"], "two_step")
+
+    def test_bg_two_step_invalid_window_422(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            self._load_ramp_stack(session, tmp, name="bg_two_bad")
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            request = PeemBgRequest(
+                method="two_step", e0=0.0, e1=3.0, post_e0=2.0, post_e1=4.0
+            )
+
+            response = client.post(
+                "/api/peem/bg_two_bad/bg/preview", json=request.model_dump()
+            )
+
+            self.assertEqual(response.status_code, 422, response.text)
+
+    def test_bg_linear_preview_slope_intercept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            self._load_ramp_stack(session, tmp, name="bg_linear")
+            app = create_app()
+            app.dependency_overrides[current_session] = lambda: session
+            client = TestClient(app)
+            request = PeemBgRequest(e0=0.0, e1=4.0)
+
+            response = client.post(
+                "/api/peem/bg_linear/bg/preview", json=request.model_dump()
+            )
+            self.assertEqual(response.status_code, 200, response.text)
+            body = response.json()
+            self.assertEqual(body["method"], "linear")
+            self.assertAlmostEqual(body["slope"], 1.0, places=5)
+            self.assertIsNotNone(body["intercept"])
+
+    def test_sumrule_with_two_step_bg_analysis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = self._session(tmp)
+            client = self._load_cp_cm_pair_separate(
+                session, tmp, name="sumrule_two_bg", n_pairs=5
+            )
+            bg_req = PeemBgRequest(
+                method="two_step", e0=0.0, e1=1.0, post_e0=3.0, post_e1=4.0
+            )
+            bg_apply = client.post(
+                "/api/peem/sumrule_two_bg/bg/apply", json=bg_req.model_dump()
+            )
+            self.assertEqual(bg_apply.status_code, 200, bg_apply.text)
+
+            request = self._sumrule_request()
+            preview = client.post(
+                "/api/peem/sumrule_two_bg/sumrule/preview", json=request.model_dump()
+            )
+            self.assertEqual(preview.status_code, 200, preview.text)
+            self.assertEqual(preview.json()["source_kind"], "separated")
+            self.assertGreater(preview.json()["ensemble_n_valid_bg"], 0)
+
     def test_bg_rejects_bg_output_as_source(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = self._session(tmp)
