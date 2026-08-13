@@ -14,3 +14,9 @@ mock_data_output/
 old_working_py/
 currentproblem
 currentproblem2
+
+# Local-only ML tools (never commit / push). Drop the reference folder here.
+ML_local/
+**/ML_local/
+tensorspec/ml_local/
+docs/ml_local/
