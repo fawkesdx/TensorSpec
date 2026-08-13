@@ -93,7 +93,7 @@ let heatmapCanvas = null;
 let structures = [];
 let activeJobId = null;
 let logSocket = null;
-let maxMpiRanks = 8;
+let maxMpiRanks = 20;
 let lastSolversInfo = null;
 let lastBandResult = null;
 let lastCrystalName = null;
@@ -568,7 +568,7 @@ function readQeParameters() {
         use_soc: dom.qeSoc.checked,
         mlwf_mode: dom.qeWanMode.value === "mlwf",
         use_mpi: dom.qeMpi.checked,
-        mpi_ranks: Number(dom.qeRanks.value) || 4,
+        mpi_ranks: Number(dom.qeRanks.value) || 20,
         slab_mode: slab,
         functional: dom.qeXc?.value || "PBE",
         backend: dom.qeBackend?.value || "local",
@@ -830,9 +830,14 @@ async function refreshSolvers() {
     try {
         const info = await TensorSpecAPI.dftSolvers();
         lastSolversInfo = info;
-        maxMpiRanks = info.max_mpi_ranks || 8;
-        dom.qeRanks.max = maxMpiRanks;
-        if (Number(dom.qeRanks.value) > maxMpiRanks) dom.qeRanks.value = maxMpiRanks;
+        maxMpiRanks = info.max_mpi_ranks || 20;
+        if (dom.qeRanks) {
+            dom.qeRanks.max = maxMpiRanks;
+            const cur = Number(dom.qeRanks.value);
+            if (!Number.isFinite(cur) || cur < 1 || cur > maxMpiRanks) {
+                dom.qeRanks.value = String(maxMpiRanks);
+            }
+        }
         applyQueueEnable(info);
     } catch (err) {
         setQeStatus(err.message, true);
@@ -923,3 +928,11 @@ if (!api) {
         setQeStatus(String(err.message || err), true);
     });
 }
+
+window.addEventListener("pageshow", () => {
+    try {
+        syncNbndSuggestion();
+    } catch (err) {
+        console.error("[dft] pageshow nbnd sync failed", err);
+    }
+});

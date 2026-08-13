@@ -109,7 +109,7 @@ def _solver_status() -> SolverStatus:
     except Exception as exc:
         return SolverStatus(
             available=False,
-            max_mpi_ranks=8,
+            max_mpi_ranks=20,
             detail=str(exc),
         )
 

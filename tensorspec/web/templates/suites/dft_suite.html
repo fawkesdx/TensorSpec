@@ -4,7 +4,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>TensorSpec - DFT &amp; Tight Binding Suite</title>
+    <title>TensorSpec - DFT Suite [mpi20]</title>
     <link rel="stylesheet" href="../../static/css/base.css">
     <link rel="stylesheet" href="../../static/css/layout.css">
     <link rel="stylesheet" href="../../static/css/suite.css">
@@ -104,7 +104,7 @@
                         <div class="form-row">
                             <label for="qe-nbnd">Number of Bands (nbnd):</label>
                             <input class="field" id="qe-nbnd" type="number" min="1" max="2000" step="1" value="12">
-                            <p class="hint" id="qe-nbnd-hint">Auto-fills from crystal sites when you select a structure (SOC doubles).</p>
+                            <p class="hint" id="qe-nbnd-hint">Auto-fills from crystal sites when you select a structure (SOC doubles). build=nbnd4</p>
                         </div>
                         <div class="form-row">
                             <label for="qe-wanmode">Wannier Mode:</label>
@@ -129,7 +129,7 @@
                             <label>Parallel Execution:</label>
                             <div class="inline">
                                 <label class="check" style="margin:0"><input type="checkbox" id="qe-mpi" checked> Use MPI</label>
-                                <input class="field field--num" id="qe-ranks" type="number" min="1" max="8" value="4">
+                                <input class="field field--num" id="qe-ranks" type="number" min="1" max="20" value="20">
                                 <label>Ranks</label>
                             </div>
                         </div>
@@ -320,8 +320,67 @@
 
     </div>
 
-    <script src="../../static/js/api.js?v=20260812-nbnd2"></script>
-    <script type="module" src="../../static/js/dft_suite.js?v=20260812-nbnd2"></script>
+    <script src="../../static/js/api.js?v=mpi20"></script>
+    <script>
+    /* Classic bootstrap: fill nbnd even if the ES module fails to load/parse. */
+    (function () {
+        async function syncNbndBootstrap() {
+            const api = window.TensorSpecAPI;
+            const nbndEl = document.getElementById("qe-nbnd");
+            const sel = document.getElementById("dft-structures");
+            const soc = document.getElementById("qe-soc");
+            const hint = document.getElementById("qe-nbnd-hint");
+            if (!api || !nbndEl) return;
+            try {
+                const list = await api.dftStructures();
+                if (!Array.isArray(list) || !list.length) return;
+                const name = (sel && sel.value) || list[0].name;
+                const structure = list.find(function (s) { return s.name === name; }) || list[0];
+                const base = Number(structure.suggest_nbnd);
+                if (!Number.isFinite(base) || base < 1) return;
+                const nbnd = Math.min(2000, Math.max(1, soc && soc.checked ? base * 2 : base));
+                // Always apply suggestion (HTML default 12 is never intentional for real crystals).
+                nbndEl.value = String(nbnd);
+                if (hint) {
+                    hint.textContent = soc && soc.checked
+                        ? ("Suggested nbnd=" + nbnd + " (" + base + "×2 SOC) for " + structure.name + " · build=nbnd4")
+                        : ("Suggested nbnd=" + nbnd + " for " + structure.name + " (enable SOC → " + Math.min(2000, base * 2) + ") · build=nbnd4");
+                }
+            } catch (err) {
+                console.warn("[dft] nbnd bootstrap failed", err);
+            }
+        }
+        function arm() {
+            syncNbndBootstrap();
+            // Retry: structure list often arrives after first paint / crystal load in another tab.
+            setTimeout(syncNbndBootstrap, 500);
+            setTimeout(syncNbndBootstrap, 1500);
+            setTimeout(syncNbndBootstrap, 3000);
+        }
+        if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", arm);
+        } else {
+            arm();
+        }
+        window.addEventListener("pageshow", syncNbndBootstrap);
+        document.addEventListener("change", function (ev) {
+            const t = ev.target;
+            if (t && (t.id === "qe-soc" || t.id === "dft-structures")) syncNbndBootstrap();
+        });
+        document.addEventListener("click", function (ev) {
+            const t = ev.target;
+            if (t && (t.id === "dft-refresh" || (t.closest && t.closest("#dft-refresh")))) {
+                setTimeout(syncNbndBootstrap, 200);
+                setTimeout(syncNbndBootstrap, 800);
+            }
+        });
+        setInterval(function () {
+            const nbndEl = document.getElementById("qe-nbnd");
+            if (nbndEl && Number(nbndEl.value) === 12) syncNbndBootstrap();
+        }, 2000);
+    })();
+    </script>
+    <script type="module" src="../../static/js/dft_suite.js?v=mpi20"></script>
 </body>
 
 </html>
