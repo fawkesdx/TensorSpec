@@ -826,6 +826,8 @@ class SnapBoard {
 
 /* ---- Simulator ---- */
 
+let arpesEtaKey = null;
+
 const sim = {
     jobId: null,
     eAxis: null,
@@ -981,6 +983,14 @@ function watchSimJob(jobId) {
         if (message.type === "log") appendLog(message.line);
         if (message.type === "status") {
             el("ar-sim-status").textContent = `Job ${message.status}`;
+            const elapsedEl = el("ar-elapsed");
+            if (["succeeded", "failed", "cancelled"].includes(message.status) && window.JobTimer) {
+                if (message.status === "succeeded" && arpesEtaKey) {
+                    window.JobTimer.remember(arpesEtaKey, window.JobTimer.elapsedSeconds(elapsedEl));
+                }
+                window.JobTimer.stop(elapsedEl, message.status);
+                arpesEtaKey = null;
+            }
             if (message.status === "succeeded") {
                 el("ar-run").disabled = false;
                 el("ar-cancel").disabled = true;
@@ -1158,9 +1168,29 @@ el("ar-run").addEventListener("click", async () => {
     el("ar-push").disabled = true;
     el("ar-log").textContent = "";
     try {
-        const job = await TensorSpecAPI.arpesSimulate(simPayload());
+        const payload = simPayload();
+        const job = await TensorSpecAPI.arpesSimulate(payload);
         sim.jobId = job.job_id;
         appendLog(`Queued ${job.job_id}`);
+        if (window.JobTimer) {
+            const nEnergy = payload.energy?.steps || 1;
+            const nKx = payload.kx?.steps || 1;
+            const nKy = payload.ky?.steps || 1;
+            arpesEtaKey = window.JobTimer.arpesKey({
+                model: payload.model,
+                nEnergy,
+                nKx,
+                nKy,
+            });
+            const last = window.JobTimer.lookupLast(arpesEtaKey);
+            const estimateSeconds = last ?? window.JobTimer.estimateArpesSeconds({
+                nEnergy, nKx, nKy,
+            });
+            window.JobTimer.start(el("ar-elapsed"), {
+                estimateSeconds,
+                estimateSource: last != null ? "last run" : "heuristic",
+            });
+        }
         watchSimJob(job.job_id);
     } catch (err) {
         appendLog(err.message);
@@ -1173,6 +1203,10 @@ el("ar-cancel").addEventListener("click", async () => {
     try {
         await TensorSpecAPI.arpesCancelJob(sim.jobId);
         appendLog("Cancel requested");
+        if (window.JobTimer) {
+            window.JobTimer.stop(el("ar-elapsed"), "cancelled");
+        }
+        arpesEtaKey = null;
     } catch (err) {
         appendLog(err.message);
     }
