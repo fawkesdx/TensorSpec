@@ -62,6 +62,7 @@ const dom = {
     qeQueue: el("qe-queue"),
     qeCancel: el("qe-cancel"),
     qeStatus: el("qe-status"),
+    qeElapsed: el("qe-elapsed"),
     qeLog: el("qe-log"),
 
     qeSlabPreset: el("qe-slab-preset"),
@@ -92,6 +93,7 @@ let plot = null;
 let heatmapCanvas = null;
 let structures = [];
 let activeJobId = null;
+let qeEtaKey = null;
 let logSocket = null;
 let maxMpiRanks = 20;
 let lastSolversInfo = null;
@@ -675,6 +677,12 @@ function watchJob(jobId) {
             const job = message.job;
             setQeStatus(`${job.run_name}: ${job.status}` + (job.error ? ` — ${job.error}` : ""));
             if (["succeeded", "failed", "cancelled"].includes(job.status)) {
+                const elapsedEl = dom.qeElapsed || document.getElementById("qe-elapsed");
+                if (job.status === "succeeded" && qeEtaKey && window.JobTimer) {
+                    window.JobTimer.remember(qeEtaKey, window.JobTimer.elapsedSeconds(elapsedEl));
+                }
+                if (window.JobTimer) window.JobTimer.stop(elapsedEl, job.status);
+                qeEtaKey = null;
                 dom.qeCancel.disabled = true;
                 activeJobId = null;
             }
@@ -736,8 +744,33 @@ async function queueRun() {
     }
     dom.qeQueue.disabled = true;
     try {
-        const job = await TensorSpecAPI.qeQueue(structure.name, readQeParameters());
+        const params = readQeParameters();
+        const job = await TensorSpecAPI.qeQueue(structure.name, params);
         setQeStatus(`Queued ${job.run_name} (${job.job_id})`);
+        if (window.JobTimer) {
+            qeEtaKey = window.JobTimer.dftKey({
+                backend: params.backend,
+                soc: params.use_soc,
+                nbnd: params.nbnd,
+                kx: params.kx,
+                ky: params.ky,
+                kz: params.kz,
+            });
+            const last = window.JobTimer.lookupLast(qeEtaKey);
+            const estimateSeconds = last ?? window.JobTimer.estimateDftSeconds({
+                backend: params.backend,
+                nbnd: params.nbnd,
+                kx: params.kx,
+                ky: params.ky,
+                kz: params.kz,
+                soc: params.use_soc,
+                ranks: params.mpi_ranks,
+            });
+            window.JobTimer.start(dom.qeElapsed || document.getElementById("qe-elapsed"), {
+                estimateSeconds,
+                estimateSource: last != null ? "last run" : "heuristic",
+            });
+        }
         watchJob(job.job_id);
     } catch (err) {
         setQeStatus(err.message, true);
@@ -751,6 +784,13 @@ async function cancelRun() {
     try {
         const job = await TensorSpecAPI.qeCancel(activeJobId);
         setQeStatus(`${job.run_name}: ${job.status}`);
+        if (window.JobTimer) {
+            window.JobTimer.stop(
+                dom.qeElapsed || document.getElementById("qe-elapsed"),
+                job.status || "cancelled",
+            );
+        }
+        qeEtaKey = null;
     } catch (err) {
         setQeStatus(err.message, true);
     }
