@@ -263,6 +263,10 @@ echo "PATH=\$PATH"
 command -v pw.x
 command -v mpirun
 
+# 1 OpenMP thread per MPI rank so --np maps to physical cores (Einstein: 20).
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+echo "OMP_NUM_THREADS=$OMP_NUM_THREADS"
+
 echo "--- SCF ---"
 mpirun -np $NP pw.x -in scf.in | tee scf.out
 if ! grep -q "JOB DONE" scf.out; then

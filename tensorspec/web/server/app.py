@@ -37,6 +37,14 @@ def create_app() -> FastAPI:
         version="0.1.0",
     )
 
+    @app.middleware("http")
+    async def no_store_static(request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/static/js/") or path.startswith("/static/css/"):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(workspace_router.router)
     app.include_router(crystal_router.router)

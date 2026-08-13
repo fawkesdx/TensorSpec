@@ -180,7 +180,7 @@ class QERequest(BaseModel):
     use_soc: bool = False
     mlwf_mode: bool = False
     use_mpi: bool = True
-    mpi_ranks: int = Field(default=4, ge=1, le=256)
+    mpi_ranks: int = Field(default=20, ge=1, le=256)
     # Vacuum slab / Tab-3 stack: kz→1 and assume_isolated='2D'
     slab_mode: bool = False
     # XC functional → QE input_dft (no pseudo filtering)

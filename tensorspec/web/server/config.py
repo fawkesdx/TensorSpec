@@ -24,7 +24,7 @@ class SolverConfig:
     pw2wannier90: Path
     mpirun: Path | None
     pseudo_dir: Path
-    max_mpi_ranks: int = 8
+    max_mpi_ranks: int = 20
     max_jobs_per_session: int = 1
     max_global_jobs: int = 4
 
@@ -78,7 +78,9 @@ def load_solver_config(*, require_binaries: bool = True) -> SolverConfig:
         ),
         mpirun=mpirun,
         pseudo_dir=pseudo.resolve(),
-        max_mpi_ranks=int(os.environ.get("TENSORSPEC_MAX_MPI_RANKS", "8")),
+        # Einstein: 2× Xeon Silver 4210 = 20 physical cores / 40 threads.
+        # Default 20 = 1 MPI rank per physical core (HT usually slower for pw.x).
+        max_mpi_ranks=int(os.environ.get("TENSORSPEC_MAX_MPI_RANKS", "20")),
         max_jobs_per_session=int(os.environ.get("TENSORSPEC_MAX_JOBS_PER_SESSION", "1")),
         max_global_jobs=int(os.environ.get("TENSORSPEC_MAX_GLOBAL_JOBS", "4")),
     )
