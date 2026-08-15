@@ -395,6 +395,13 @@ def queue_qe_run(
     return JobInfo(**job.to_dict())
 
 
+@router.get("/jobs", response_model=list[JobInfo])
+def list_jobs(session: Session = Depends(current_session)) -> list[JobInfo]:
+    """List this browser session's DFT/QE jobs (active first)."""
+    queue = get_job_queue()
+    return [JobInfo(**job.to_dict()) for job in queue.list_for_session(session.session_id)]
+
+
 @router.get("/jobs/{job_id}", response_model=JobInfo)
 def get_job(job_id: str, session: Session = Depends(current_session)) -> JobInfo:
     queue = get_job_queue()
