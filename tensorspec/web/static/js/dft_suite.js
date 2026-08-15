@@ -94,6 +94,25 @@ let heatmapCanvas = null;
 let structures = [];
 let activeJobId = null;
 let qeEtaKey = null;
+const QE_JOB_STORAGE_KEY = "tensorspec.dft.activeJobId";
+
+function rememberActiveJob(jobId) {
+    activeJobId = jobId || null;
+    try {
+        if (jobId) sessionStorage.setItem(QE_JOB_STORAGE_KEY, jobId);
+        else sessionStorage.removeItem(QE_JOB_STORAGE_KEY);
+    } catch (err) {
+        /* private mode / quota */
+    }
+}
+
+function storedActiveJobId() {
+    try {
+        return sessionStorage.getItem(QE_JOB_STORAGE_KEY);
+    } catch (err) {
+        return null;
+    }
+}
 let logSocket = null;
 let maxMpiRanks = 20;
 let lastSolversInfo = null;
@@ -661,12 +680,16 @@ function closeLogSocket() {
     }
 }
 
-function watchJob(jobId) {
+function watchJob(jobId, { clearLog = true } = {}) {
     closeLogSocket();
-    activeJobId = jobId;
+    rememberActiveJob(jobId);
     dom.qeCancel.disabled = false;
-    dom.qeLog.textContent = "";
-    dom.qeLog.hidden = false;
+    if (clearLog) {
+        dom.qeLog.textContent = "";
+        dom.qeLog.hidden = false;
+    } else {
+        dom.qeLog.hidden = false;
+    }
 
     const protocol = location.protocol === "https:" ? "wss" : "ws";
     logSocket = new WebSocket(`${protocol}://${location.host}/api/dft/jobs/${encodeURIComponent(jobId)}/logs`);
@@ -684,12 +707,42 @@ function watchJob(jobId) {
                 if (window.JobTimer) window.JobTimer.stop(elapsedEl, job.status);
                 qeEtaKey = null;
                 dom.qeCancel.disabled = true;
-                activeJobId = null;
+                rememberActiveJob(null);
             }
         }
         if (message.type === "error") setQeStatus(message.message, true);
     };
     logSocket.onerror = () => setQeStatus("Log stream disconnected", true);
+}
+
+async function resumeActiveJobIfAny() {
+    if (!globalThis.TensorSpecAPI?.qeJobs) return;
+    let jobs = [];
+    try {
+        jobs = await TensorSpecAPI.qeJobs();
+    } catch (err) {
+        console.error("[dft] qeJobs failed", err);
+        return;
+    }
+    const stored = storedActiveJobId();
+    const active = jobs.find((j) => j.status === "queued" || j.status === "running");
+    const match =
+        (stored && jobs.find((j) => j.job_id === stored && (j.status === "queued" || j.status === "running")))
+        || active
+        || null;
+    if (!match) {
+        if (stored) rememberActiveJob(null);
+        return;
+    }
+    setQeStatus(`Reconnected ${match.run_name}: ${match.status} (${match.job_id})`);
+    if (window.JobTimer) {
+        window.JobTimer.start(dom.qeElapsed || document.getElementById("qe-elapsed"), {
+            estimateSeconds: null,
+            estimateSource: "reconnect",
+        });
+    }
+    watchJob(match.job_id, { clearLog: false });
+    appendLog(`[ui] resumed log stream for ${match.job_id}`);
 }
 
 async function generateInputs() {
@@ -791,6 +844,7 @@ async function cancelRun() {
             );
         }
         qeEtaKey = null;
+        rememberActiveJob(null);
     } catch (err) {
         setQeStatus(err.message, true);
     }
@@ -966,6 +1020,9 @@ if (!api) {
     refreshSolvers().catch((err) => {
         console.error("[dft] refreshSolvers failed", err);
         setQeStatus(String(err.message || err), true);
+    });
+    resumeActiveJobIfAny().catch((err) => {
+        console.error("[dft] resumeActiveJobIfAny failed", err);
     });
 }
 

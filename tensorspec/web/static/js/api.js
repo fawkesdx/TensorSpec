@@ -539,6 +539,7 @@ const TensorSpecAPI = (() => {
                 method: "POST",
                 body: JSON.stringify(payload),
             }),
+        qeJobs: () => request("/api/dft/jobs"),
         qeJob: (jobId) => request(`/api/dft/jobs/${encodeURIComponent(jobId)}`),
         qeCancel: (jobId) =>
             request(`/api/dft/jobs/${encodeURIComponent(jobId)}/cancel`, {

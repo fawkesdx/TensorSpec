@@ -171,6 +171,18 @@ class JobQueue:
         with self._lock:
             return self._jobs.get(job_id)
 
+    def list_for_session(self, session_id: str) -> list[Job]:
+        """Return this session's jobs, active (queued/running) first, then newest."""
+        with self._lock:
+            jobs = [j for j in self._jobs.values() if j.session_id == session_id]
+        active = {JobStatus.QUEUED, JobStatus.RUNNING}
+
+        def sort_key(job: Job) -> tuple:
+            is_active = 0 if job.status in active else 1
+            return (is_active, -(job.created_at or 0.0))
+
+        return sorted(jobs, key=sort_key)
+
     def cancel(self, job_id: str, session_id: str) -> Job:
         run_dir: Path | None = None
         wipe_log: Callable[[str], None] | None = None

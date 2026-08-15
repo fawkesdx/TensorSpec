@@ -41,6 +41,42 @@ class TestJobQueueCancel(unittest.TestCase):
                 self.assertEqual(mock_wipe.call_args[0][0], run_dir)
                 self.assertIn("log", mock_wipe.call_args[1])
 
+    def test_list_for_session_orders_active_first(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            queue = JobQueue(max_global_jobs=2, max_jobs_per_session=2)
+            done = queue.submit(
+                session_id="sessA",
+                run_name="old",
+                run_dir=run_dir,
+                commands=[["true"]],
+            )
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                j = queue.get(done.job_id)
+                if j and j.status in (JobStatus.SUCCEEDED, JobStatus.FAILED):
+                    break
+                time.sleep(0.05)
+            active = queue.submit(
+                session_id="sessA",
+                run_name="live",
+                run_dir=run_dir,
+                commands=[["sleep", "30"]],
+            )
+            other = queue.submit(
+                session_id="sessB",
+                run_name="other",
+                run_dir=run_dir,
+                commands=[["sleep", "30"]],
+            )
+            listed = queue.list_for_session("sessA")
+            ids = [j.job_id for j in listed]
+            self.assertEqual(ids[0], active.job_id)
+            self.assertIn(done.job_id, ids)
+            self.assertNotIn(other.job_id, ids)
+            queue.cancel(active.job_id, "sessA")
+            queue.cancel(other.job_id, "sessB")
+
 
 if __name__ == "__main__":
     unittest.main()
