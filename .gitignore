@@ -20,3 +20,21 @@ GrizzlyME/
 maestroai/
 tensorspec/gui/maestroai/
 AGENT_HANDOFF.md
+
+# Local Daemon / debug scratch (never push)
+check_*.py
+verify_*.py
+test_sprkkr.py
+test_bulk_*.py
+einstein_*.py
+kill_einstein.py
+stop_qe.py
+setup_einstein*.py
+deep_diag.py
+clean_qe.py
+compile_sprkkr*.py
+patch_*.py
+move_mstaab.py
+split_load.py
+add_aspect.py
+bottom.py
