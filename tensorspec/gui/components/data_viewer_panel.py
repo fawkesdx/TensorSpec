@@ -5,7 +5,7 @@ GLOBAL_SYNC_REGISTRY = weakref.WeakSet()
 import numpy as np
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, 
                                QComboBox, QPushButton, QCheckBox, QFrame, QMenu, QSpinBox, 
-                               QFileDialog, QMessageBox, QDoubleSpinBox, QGridLayout, QMainWindow)
+                               QFileDialog, QMessageBox, QDoubleSpinBox, QGridLayout, QMainWindow, QSplitter)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -16,8 +16,11 @@ from tensorspec.core.data_models import TensorData
 
 class MplCanvas(FigureCanvas):
     def __init__(self, parent=None, width=4, height=4, dpi=100):
-        fig = Figure(figsize=(width, height), dpi=dpi, layout='tight')
+        fig = Figure(figsize=(width, height), dpi=dpi, layout='constrained')
         super().__init__(fig)
+        from PySide6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.updateGeometry()
 
 class SliceWidget(QFrame):
     """A modular 2D viewer that synchronizes with the Global N-Dimensional State."""
@@ -28,7 +31,9 @@ class SliceWidget(QFrame):
         
         self.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
         self.setLineWidth(2)
-        self.setMinimumWidth(350)
+        from PySide6.QtWidgets import QSizePolicy
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumSize(200, 150)
         
         self.x_idx = x_idx
         self.y_idx = y_idx
@@ -57,14 +62,23 @@ class SliceWidget(QFrame):
         row1 = QHBoxLayout()
         self.combo_x = QComboBox()
         self.combo_y = QComboBox()
+        self.combo_layer = QComboBox()
         self.combo_x.currentIndexChanged.connect(self._on_dropdown_changed)
         self.combo_y.currentIndexChanged.connect(self._on_dropdown_changed)
+        self.combo_layer.currentIndexChanged.connect(self.redraw)
         
         row1.addWidget(QLabel("X:"))
         row1.addWidget(self.combo_x)
         row1.addWidget(QLabel("Y:"))
         row1.addWidget(self.combo_y)
+        row1.addWidget(QLabel("Layer:"))
+        row1.addWidget(self.combo_layer)
         
+        self.combo_aspect = QComboBox()
+        self.combo_aspect.addItems(["Stretch (Auto)", "Square (Equal)"])
+        self.combo_aspect.currentIndexChanged.connect(self.update_aspect)
+        row1.addWidget(self.combo_aspect)
+
         self.chk_profiles = QCheckBox("XY Profiles")
         self.chk_profiles.stateChanged.connect(self.toggle_profiles)
         row1.addWidget(self.chk_profiles)
@@ -121,7 +135,7 @@ class SliceWidget(QFrame):
         
         # --- Canvas Setup (2x3 Grid) ---
         self.canvas = MplCanvas(self)
-        self.gs = self.canvas.figure.add_gridspec(2, 3, width_ratios=[4, 1, 2], height_ratios=[4, 1], wspace=0.3, hspace=0.1)
+        self.gs = self.canvas.figure.add_gridspec(2, 3, width_ratios=[4, 1, 2], height_ratios=[4, 1])
         
         self.ax_main = self.canvas.figure.add_subplot(self.gs[0, 0])
         self.ax_prof_y = self.canvas.figure.add_subplot(self.gs[0, 1], sharey=self.ax_main)
@@ -145,6 +159,7 @@ class SliceWidget(QFrame):
         self.canvas.mpl_connect('button_press_event', self._on_click)
         self.canvas.mpl_connect('motion_notify_event', self._on_drag) # NEW: Listen for mouse movement
         layout.addWidget(self.canvas)
+        layout.setStretchFactor(self.canvas, 1) # Force canvas to expand vertically!
         
         # --- Sliders Wrapper (Collapsible) ---
         self.sliders_widget = QWidget()
@@ -163,6 +178,14 @@ class SliceWidget(QFrame):
     def _populate_dropdowns(self):
         self.combo_x.blockSignals(True)
         self.combo_y.blockSignals(True)
+        self.combo_layer.blockSignals(True)
+        
+        self.combo_layer.clear()
+        self.combo_layer.addItem("Intensity")
+        layers = self.tensor_data.metadata.get('layers', {}) if hasattr(self.tensor_data, 'metadata') and self.tensor_data.metadata else {}
+        for layer_name in layers:
+            self.combo_layer.addItem(layer_name)
+
         for idx, (label, unit) in enumerate(zip(self.tensor_data.labels, self.tensor_data.units)):
             display = f"{label} ({unit})" if unit else label
             self.combo_x.addItem(display, userData=idx)
@@ -172,6 +195,7 @@ class SliceWidget(QFrame):
         self.combo_y.setCurrentIndex(self.y_idx)
         self.combo_x.blockSignals(False)
         self.combo_y.blockSignals(False)
+        self.combo_layer.blockSignals(False)
         self._update_ortho_combo()
         self._rebuild_sliders()
 
@@ -246,7 +270,7 @@ class SliceWidget(QFrame):
         self.sliders_widget.setVisible(not is_visible)
 
     def toggle_profiles(self):
-        """Toggles profile visibility without resizing the main canvas."""
+        """Toggles profile visibility and reclaims space for the main canvas."""
         vis_xy = self.chk_profiles.isChecked()
         vis_ortho = self.chk_ortho.isChecked()
         
@@ -254,9 +278,28 @@ class SliceWidget(QFrame):
         self.ax_prof_y.set_visible(vis_xy)
         self.ax_prof_ortho.set_visible(vis_ortho)
         
-        # We removed the dynamic gs.set_width_ratios and set_height_ratios 
-        # so the main tensor slice remains perfectly anchored.
-        
+        # Rebuild GridSpec dynamically so constrained_layout works perfectly
+        if vis_xy and vis_ortho:
+            gs = self.canvas.figure.add_gridspec(2, 3, width_ratios=[4, 1, 2], height_ratios=[4, 1])
+            self.ax_main.set_subplotspec(gs[0, 0])
+            self.ax_prof_y.set_subplotspec(gs[0, 1])
+            self.ax_prof_x.set_subplotspec(gs[1, 0])
+            self.ax_prof_ortho.set_subplotspec(gs[:, 2])
+        elif vis_xy:
+            gs = self.canvas.figure.add_gridspec(2, 2, width_ratios=[4, 1], height_ratios=[4, 1])
+            self.ax_main.set_subplotspec(gs[0, 0])
+            self.ax_prof_y.set_subplotspec(gs[0, 1])
+            self.ax_prof_x.set_subplotspec(gs[1, 0])
+        elif vis_ortho:
+            gs = self.canvas.figure.add_gridspec(1, 2, width_ratios=[4, 2])
+            self.ax_main.set_subplotspec(gs[0, 0])
+            self.ax_prof_ortho.set_subplotspec(gs[0, 1])
+        else:
+            gs = self.canvas.figure.add_gridspec(1, 1)
+            self.ax_main.set_subplotspec(gs[0, 0])
+            
+        self.gs = gs
+        self.canvas.draw_idle()
         self.redraw()
 
     def sync_sliders_to_global(self):
@@ -271,6 +314,11 @@ class SliceWidget(QFrame):
             spin.setValue(self.tensor_data.axes[i][val_idx])
             spin.blockSignals(False)
 
+    def update_aspect(self):
+        mode = "equal" if "Square" in self.combo_aspect.currentText() else "auto"
+        self.ax_main.set_aspect(mode)
+        self.canvas.draw_idle()
+
     def redraw(self):
         # --- NEW: Prevent 1D shape crash ---
         if self.x_idx == self.y_idx:
@@ -284,7 +332,14 @@ class SliceWidget(QFrame):
             else:
                 slices.append(self.parent_panel.global_coords[i])
                 
-        sliced = self.tensor_data.value[tuple(slices)]
+        layer_text = self.combo_layer.currentText()
+        layers = self.tensor_data.metadata.get('layers', {}) if self.tensor_data.metadata else {}
+        if layer_text != "Intensity" and layer_text in layers:
+            data_source = layers[layer_text]
+        else:
+            data_source = self.tensor_data.value
+            
+        sliced = data_source[tuple(slices)]
         if self.x_idx < self.y_idx: sliced = sliced.T
         
         x_arr, y_arr = self.tensor_data.axes[self.x_idx], self.tensor_data.axes[self.y_idx]
@@ -294,8 +349,13 @@ class SliceWidget(QFrame):
         
         self.im_main.set_data(sliced)
         self.im_main.set_extent(extent)
-        vmin, vmax = np.nanmin(sliced), np.nanmax(sliced)
-        self.im_main.set_clim(vmin, vmax)
+        if "Labels" in layer_text:
+            self.im_main.set_clim(-0.5, 19.5)
+            self.im_main.set_cmap('tab20')
+        else:
+            vmin, vmax = np.nanmin(sliced), np.nanmax(sliced)
+            self.im_main.set_clim(vmin, vmax)
+            self.im_main.set_cmap('magma')
         
         self.ax_main.set_xlabel(self.combo_x.currentText())
         self.ax_main.set_ylabel(self.combo_y.currentText())
@@ -608,34 +668,69 @@ class DataViewerPanel(QWidget):
         top_bar.addStretch()
         self.main_layout.addLayout(top_bar)
         
-        # --- NEW: QGridLayout Replaces QHBoxLayout ---
-        self.grid_layout = QGridLayout()
-        self.main_layout.addLayout(self.grid_layout)
+        # Root splitter for vertical rows
+        self.v_splitter = QSplitter(Qt.Vertical)
+        self.main_layout.addWidget(self.v_splitter)
+        self.main_layout.setStretch(1, 1)
         
     def load_data(self, tensor_data: TensorData):
         self.tensor_data = tensor_data
         self.global_coords = {i: len(ax)//2 for i, ax in enumerate(self.tensor_data.axes)}
         
-        self._clear_grid()
+        self._clear_tree()
         self.views.clear()
         
         default_x = 1 if self.tensor_data.ndim > 1 else 0
         default_y = 0
         self.spawn_view(default_x, default_y)
 
-    def _clear_grid(self):
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item.widget(): item.widget().setParent(None)
+    def _clear_tree(self):
+        """Safely detach all SliceWidgets and destroy intermediate splitters/spacers."""
+        for w in self.views:
+            w.setParent(None)
+        while self.v_splitter.count():
+            child = self.v_splitter.widget(0)
+            child.setParent(None)
+            if isinstance(child, QSplitter):
+                child.deleteLater()
 
     def _rebuild_grid(self):
-        """Clears and redraws the grid based on the current row/col parameters of the views."""
-        self._clear_grid()
-        for w in self.views:
-            self.grid_layout.addWidget(w, w.grid_row, w.grid_col)
+        """Rebuilds the grid geometry using synchronized QSplitters and spacers."""
+        self._clear_tree()
+        
+        if not self.views:
+            return
+            
+        max_row = max(w.grid_row for w in self.views)
+        max_col = max(w.grid_col for w in self.views)
+        
+        for r in range(max_row + 1):
+            h_splitter = QSplitter(Qt.Horizontal)
+            
+            # Check if this row actually has any widgets
+            row_has_widgets = any(w.grid_row == r for w in self.views)
+            if not row_has_widgets:
+                continue
+                
+            for c in range(max_col + 1):
+                w = next((v for v in self.views if v.grid_row == r and v.grid_col == c), None)
+                if w:
+                    h_splitter.addWidget(w)
+                else:
+                    # Blank space to maintain grid alignment
+                    spacer = QWidget()
+                    spacer.setStyleSheet("background-color: transparent;")
+                    h_splitter.addWidget(spacer)
+            
+            # Distribute width evenly
+            h_splitter.setSizes([1000] * (max_col + 1))
+            self.v_splitter.addWidget(h_splitter)
+            
+        # Distribute height evenly
+        self.v_splitter.setSizes([1000] * self.v_splitter.count())
 
     def spawn_view(self, x_idx: int, y_idx: int, ref_widget: SliceWidget = None, direction: str = None):
-        """Creates a new linked SliceWidget and dynamically places it in the grid."""
+        """Creates a new SliceWidget and places it in the grid relative to ref_widget."""
         row, col = 0, 0
         
         if ref_widget and direction:
@@ -653,28 +748,10 @@ class DataViewerPanel(QWidget):
                 for w in self.views: w.grid_col += 1
                 col = 0
 
-        widget = SliceWidget(self, x_idx, y_idx, row, col)
-        self.views.append(widget)
+        new_widget = SliceWidget(self, x_idx, y_idx, row, col)
+        self.views.append(new_widget)
         self._rebuild_grid()
-        widget.redraw()
-
-    def detach_view(self, widget: SliceWidget):
-        """Rips a view out of the grid and wraps it in an independent floating window."""
-        if len(self.views) <= 1: 
-            QMessageBox.warning(self, "Detach Error", "Cannot detach the last remaining panel.")
-            return 
-            
-        self.views.remove(widget)
-        self._rebuild_grid()
-        
-        detached_win = QMainWindow()
-        detached_win.setWindowTitle(f"Detached View: {self.tensor_data.labels[widget.x_idx]} vs {self.tensor_data.labels[widget.y_idx]}")
-        detached_win.resize(600, 500)
-        detached_win.setCentralWidget(widget)
-        detached_win.show()
-        
-        # Keep reference to prevent garbage collection
-        self.detached_windows.append(detached_win)
+        new_widget.redraw()
 
     def remove_view(self, widget: SliceWidget):
         if len(self.views) <= 1: return 
@@ -683,106 +760,103 @@ class DataViewerPanel(QWidget):
         self._rebuild_grid()
         widget.deleteLater()
 
+    def detach_view(self, widget):
+        """Rips a panel out of the grid and puts it in an independent floating window."""
+        if len(self.views) <= 1:
+            QMessageBox.warning(self, "Detach Error", "Cannot detach the last remaining panel.")
+            return 
+            
+        if widget in self.views:
+            self.views.remove(widget)
+        
+        widget.setParent(None)
+        self._rebuild_grid()
+        
+        floating_window = QWidget()
+        floating_window.setWindowTitle("Detached TensorSpec Panel")
+        floating_window.resize(600, 500)
+        floating_window.setWindowFlags(Qt.Window)
+        layout = QVBoxLayout(floating_window)
+        layout.addWidget(widget)
+        widget.is_detached = True
+        widget.floating_container = floating_window
+        floating_window.show()
+        self.detached_windows.append(floating_window)
+
+    def reattach_view(self, widget):
+        """Pulls a floating panel back into the grid."""
+        if hasattr(widget, 'floating_container'):
+            floating_window = widget.floating_container
+            floating_window.layout().removeWidget(widget)
+            widget.setParent(None)
+            floating_window.close()
+            if floating_window in self.detached_windows:
+                self.detached_windows.remove(floating_window)
+            widget.is_detached = False
+            
+            max_row = max((w.grid_row for w in self.views), default=-1)
+            widget.grid_row = max_row + 1
+            widget.grid_col = 0
+            
+            if widget not in self.views:
+                self.views.append(widget)
+            self._rebuild_grid()
+
     def update_global_coord(self, dim_idx: int, val_idx: int, broadcast=True, cross_sync=True):
         self.global_coords[dim_idx] = val_idx
         
-        # --- NEW: Cross-Dataset Physical Sync Logic ---
         if cross_sync and self.tensor_data is not None:
-            # 1. Get the physical value, label, and unit of the dimension that just moved
             phys_val = self.tensor_data.axes[dim_idx][val_idx]
             target_label = self.tensor_data.labels[dim_idx]
             target_unit = self.tensor_data.units[dim_idx]
             
-            # 2. Broadcast to all other open DataViewerPanels safely
             for peer in list(DataViewerPanel._active_instances):
                 try:
                     if peer is self or peer.tensor_data is None:
                         continue
-                        
-                    # 3. Check if the peer dataset has a matching physical axis
                     for p_dim_idx, (p_label, p_unit) in enumerate(zip(peer.tensor_data.labels, peer.tensor_data.units)):
                         if p_label == target_label and p_unit == target_unit:
                             peer_axis = peer.tensor_data.axes[p_dim_idx]
                             nearest_idx = int(np.argmin(np.abs(peer_axis - phys_val)))
-                            
                             if peer.global_coords.get(p_dim_idx) != nearest_idx:
                                 peer.update_global_coord(p_dim_idx, nearest_idx, broadcast=True, cross_sync=False)
                             break 
                 except RuntimeError:
-                    # The C++ window was closed by the user, remove it from registry
                     DataViewerPanel._active_instances.discard(peer)
         
         if broadcast:
             self.broadcast_redraw()
 
     def get_widget_position(self, widget):
-        """Finds the (row, col) of a specific panel inside the puzzle grid."""
-        idx = self.grid_layout.indexOf(widget)
-        if idx == -1: return None
-        return self.grid_layout.getItemPosition(idx) # Returns (row, col, rowSpan, colSpan)
+        if widget not in self.views:
+            return None
+        return (widget.grid_row, widget.grid_col, 1, 1)
 
     def get_neighbor(self, row, col, direction):
-        """Looks at adjacent grid coordinates to see if a panel is snapped there."""
         if direction == "up": r, c = row - 1, col
         elif direction == "down": r, c = row + 1, col
         elif direction == "left": r, c = row, col - 1
         elif direction == "right": r, c = row, col + 1
         else: return None
         
-        for i in range(self.grid_layout.count()):
-            item = self.grid_layout.itemAt(i)
-            if item and item.widget():
-                pos = self.grid_layout.getItemPosition(i)
-                if pos[0] == r and pos[1] == c:
-                    return item.widget()
+        for w in self.views:
+            if w.grid_row == r and w.grid_col == c:
+                return w
         return None
 
-    def detach_view(self, widget):
-        """Rips a panel out of the grid and puts it in an independent floating window."""
-        # Remove from the grid layout
-        self.grid_layout.removeWidget(widget)
-        widget.setParent(None)
-        
-        # Create a floating wrapper
-        floating_window = QWidget()
-        floating_window.setWindowTitle("Detached TensorSpec Panel")
-        floating_window.resize(600, 500)
-        floating_window.setWindowFlags(Qt.Window)
-        
-        layout = QVBoxLayout(floating_window)
-        layout.addWidget(widget)
-        
-        # Tag the widget so it knows it is floating
-        widget.is_detached = True
-        widget.floating_container = floating_window
-        
-        floating_window.show()
-        self.detached_windows.append(floating_window)
+    def get_current_coords(self):
+        return (self.global_coords.get(1, 0), self.global_coords.get(0, 0))
 
-    def reattach_view(self, widget):
-        """Pulls a floating panel back into the main puzzle grid."""
-        if hasattr(widget, 'floating_container'):
-            floating_window = widget.floating_container
-            
-            # Remove from floating layout
-            floating_window.layout().removeWidget(widget)
-            widget.setParent(self)
-            
-            # Close and clean up the empty floating window
-            floating_window.close()
-            if floating_window in self.detached_windows:
-                self.detached_windows.remove(floating_window)
-                
-            widget.is_detached = False
-            
-            # Find the bottom-most available slot to reattach it
-            max_row = 0
-            for i in range(self.grid_layout.count()):
-                pos = self.grid_layout.getItemPosition(i)
-                if pos and pos[0] > max_row:
-                    max_row = pos[0]
-                    
-            self.grid_layout.addWidget(widget, max_row + 1, 0)
+    def get_slider_values(self):
+        return (0, 0, 0, 0)
+
+    def get_dispersion_contrast(self):
+        return 100
+
+    def add_overlay_mode(self, mode_name):
+        for view in self.views:
+            if hasattr(view, 'combo_layer'):
+                view.combo_layer.addItem(mode_name)
 
     def broadcast_redraw(self):
         for view in self.views:

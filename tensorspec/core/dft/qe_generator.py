@@ -87,7 +87,7 @@ class QEInputGenerator:
         scf_content = f"""&CONTROL
   calculation = 'scf'
   prefix = '{self.prefix}'
-  outdir = '{abs_out}'
+  outdir = './out/'
   pseudo_dir = './pseudo/'
   wf_collect = .true.
 /
@@ -139,7 +139,7 @@ K_POINTS {{automatic}}
         nscf_content = f"""&CONTROL
   calculation = 'nscf'
   prefix = '{self.prefix}'
-  outdir = '{abs_out}'
+  outdir = './out/'
   pseudo_dir = './pseudo/'
   wf_collect = .true.
 /
@@ -255,7 +255,7 @@ end kpoints
         abs_out = os.path.abspath(os.path.join(out_dir, "out")) + "/"
         
         content = f"""&inputpp
-  outdir = '{abs_out}'
+  outdir = './out/'
   prefix = '{self.prefix}'
   seedname = 'wannier90'
   write_mmn = .true.

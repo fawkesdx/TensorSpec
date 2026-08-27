@@ -14,3 +14,9 @@ mock_data_output/
 old_working_py/
 currentproblem
 currentproblem2
+# Local-only / private (never push)
+SPRKKR/
+GrizzlyME/
+maestroai/
+tensorspec/gui/maestroai/
+AGENT_HANDOFF.md

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
 from PySide6.QtCore import Qt
 
 from tensorspec.gui.components.arpes_panel import ARPESPanel
+from PySide6.QtWidgets import QStackedWidget, QGroupBox
 from tensorspec.gui.components.data_viewer_panel import DataViewerPanel
 from tensorspec.core.io.arpes_loader import ARPESLoader
 from tensorspec.core.workspace import global_workspace
@@ -29,8 +30,14 @@ class ARPESSuite(QWidget):
         self.tabs = QTabWidget()
         
         # Tab 1: Hierarchical Simulation Engine
-        self.simulation_tab = ARPESPanel()
-        self.tabs.addTab(self.simulation_tab, "Matrix Element Simulator")
+        self.simulation_tab = QWidget()
+        sim_layout = QVBoxLayout(self.simulation_tab)
+        
+        # Panel 0: Unified ARPES Panel
+        self.arpes_panel = ARPESPanel()
+        sim_layout.addWidget(self.arpes_panel)
+        
+        self.tabs.addTab(self.simulation_tab, "Simulations (Chinook/SPRKKR)")
         
         # Tab 2: Experimental Data Viewer & Loader
         self.init_data_viewer_tab()

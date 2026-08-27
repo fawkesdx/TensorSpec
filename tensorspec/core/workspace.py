@@ -49,6 +49,34 @@ class WorkspaceManager:
             crystals.append(key)
         return crystals
     
+    def push_remote_run(self, name, cluster_name, remote_path, engine):
+        """
+        Stores a pointer to a remote DFT calculation output folder (e.g. on the remote cluster).
+        engine should be 'SPRKKR' or 'QE'.
+        """
+        self._data[name] = {
+            'type': 'remote_run',
+            'cluster': cluster_name,
+            'remote_path': remote_path,
+            'engine': engine
+        }
+
+    def pull_remote_run(self, name):
+        """Retrieves the remote run pointer dictionary."""
+        item = self._data.get(name)
+        if item and item.get('type') == 'remote_run':
+            return item
+        return None
+
+    def list_remote_runs(self, engine=None):
+        """Returns a list of remote DFT vault names, optionally filtered by engine."""
+        runs = []
+        for key, value in self._data.items():
+            if value.get('type') == 'remote_run':
+                if engine is None or value.get('engine') == engine:
+                    runs.append(key)
+        return runs
+
     def push_band_structure(self, name, k_dist, eigenvalues, eigenvectors, k_vecs, node_idx, labels, orbital_positions=None):
         """
         Stores a calculated band structure, its wavefunctions, and basis coordinates.
@@ -138,12 +166,26 @@ class WorkspaceManager:
             return None
             
         tree = item['tree']
-        if node not in tree:
+        
+        # Try multiple access patterns for DataTree compatibility
+        target_node = None
+        for try_node in [node, node.lstrip('/'), f"/{node.lstrip('/')}"]:
+            if try_node in tree:
+                target_node = tree[try_node]
+                break
+        # Fallback: try children dict directly
+        if target_node is None:
+            children = getattr(tree, 'children', {})
+            bare = node.lstrip('/')
+            if bare in children:
+                target_node = children[bare]
+        
+        if target_node is None:
             print(f"Error: Node '{node}' does not exist in dataset '{name}'.")
             return None
             
         # Extract the Dataset from the target node
-        ds = tree[node].to_dataset() if hasattr(tree[node], 'to_dataset') else tree[node]
+        ds = target_node.to_dataset() if hasattr(target_node, 'to_dataset') else target_node
         if "data" not in ds:
             return None
             
@@ -158,6 +200,16 @@ class WorkspaceManager:
             data_type=da.attrs.get("long_name", "Unknown"),
             metadata=ds.attrs
         )
+
+    def get(self, name: str, default=None):
+        """Returns the raw dictionary item for a given name."""
+        return self._data.get(name, default)
+
+    def remove(self, name: str):
+        """Removes an item from the in-memory workspace."""
+        if name in self._data:
+            del self._data[name]
+            print(f"Removed '{name}' from workspace.")
 
 # Instantiate the global singleton to be imported across the application
 global_workspace = WorkspaceManager()

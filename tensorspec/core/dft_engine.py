@@ -2,12 +2,13 @@ import xml.etree.ElementTree as ET
 import numpy as np
 from tensorspec.core.dft.chinook_tb import ChinookTightBindingEngine
 from tensorspec.core.dft.qe_generator import QEInputGenerator
+from tensorspec.core.dft.sprkkr_generator import SPRKKRInputGenerator
 
 class DFTEngineRouter:
     """
     MAIN ROUTER for the DFT Suite. 
     Maintains a single loaded crystal structure and provides unified access 
-    to Tight Binding (Chinook) and Ab Initio (Quantum Espresso) engines.
+    to Tight Binding (Chinook), Quantum Espresso, and SPR-KKR engines.
     """
     def __init__(self):
         # We initialize the old engine so the UI doesn't break. 
@@ -28,6 +29,12 @@ class DFTEngineRouter:
         if not self.crystal_structure:
             raise ValueError("No structure loaded. Cannot initialize QE generator.")
         return QEInputGenerator(self.crystal_structure)
+
+    def get_sprkkr_generator(self):
+        """Returns the SPRKKR Input Generator initialized with the active structure."""
+        if not self.crystal_structure:
+            raise ValueError("No structure loaded. Cannot initialize SPRKKR generator.")
+        return SPRKKRInputGenerator(self.crystal_structure)
 
     # -------------------------------------------------------------
     # Proxy Methods for backward compatibility with dft_suite.py

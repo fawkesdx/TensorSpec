@@ -7,16 +7,19 @@ from PySide6.QtWidgets import (QWidget, QFormLayout, QGroupBox, QComboBox,
 
 from tensorspec.core.dft.qe_generator import QEInputGenerator
 
+
 class QERunnerThread(QThread):
     log_signal = Signal(str)
     finished_signal = Signal(bool, str)
 
-    def __init__(self, script_content, out_dir):
+    def __init__(self, script_content, out_dir, cluster=None):
         super().__init__()
         self.script_content = script_content
         self.out_dir = out_dir
+        self.cluster = cluster
 
     def run(self):
+        import os, subprocess, paramiko
         is_win = os.name == 'nt'
         script_name = "run_pipeline.ps1" if is_win else "run_pipeline.sh"
         script_path = os.path.join(self.out_dir, script_name)
@@ -25,16 +28,93 @@ class QERunnerThread(QThread):
             # 1. Save the GUI text box content as the appropriate script type
             with open(script_path, "w") as f:
                 f.write(self.script_content)
-            
-            # 2. Configure the execution command based on the OS
+                
+            if self.cluster and self.cluster != "local":
+                # --- REMOTE EXECUTION ---
+                self.log_signal.emit(f"Connecting to {self.cluster['host']}...")
+                ssh = paramiko.SSHClient()
+                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                pwd = self.cluster.get('password', '') or None
+                ssh.connect(self.cluster['host'], port=self.cluster.get('port', 22), username=self.cluster['user'], password=pwd, timeout=10)
+                
+                remote_dir = f"/mnt/data/{self.cluster['user']}/tensorspec_heavy/qe_gui_run"
+                
+                sftp = ssh.open_sftp()
+                try:
+                    sftp.mkdir(f"/mnt/data/{self.cluster['user']}/tensorspec_heavy")
+                except:
+                    pass
+                try:
+                    sftp.mkdir(remote_dir)
+                except:
+                    pass
+                
+                # Upload only necessary input files to avoid uploading 10GB+ of old data!
+                self.log_signal.emit(f"Uploading input files to {remote_dir}...")
+                allowed_exts = ['.in', '.win', '.sh', '.ps1']
+                for file_name in os.listdir(self.out_dir):
+                    local_f = os.path.join(self.out_dir, file_name)
+                    if os.path.isfile(local_f) and any(file_name.endswith(ext) for ext in allowed_exts):
+                        sftp.put(local_f, f"{remote_dir}/{file_name}")
+                
+                # Make sure pseudo directory exists and is uploaded
+                pseudo_dir_local = os.path.join(self.out_dir, "pseudo")
+                if os.path.isdir(pseudo_dir_local):
+                    try:
+                        sftp.mkdir(f"{remote_dir}/pseudo")
+                    except:
+                        pass
+                    for p_file in os.listdir(pseudo_dir_local):
+                        p_local = os.path.join(pseudo_dir_local, p_file)
+                        if os.path.isfile(p_local):
+                            sftp.put(p_local, f"{remote_dir}/pseudo/{p_file}")
+
+                        
+                sftp.close()
+                
+                # Execute
+                is_slurm = self.cluster.get('mode', '').upper() == 'SLURM'
+                if is_slurm:
+                    # Modify run_pipeline.sh to be an sbatch script? 
+                    # The script_content already has "#!/bin/bash". We can just submit it if we add SBATCH lines, 
+                    # or just run a wrapper sbatch.
+                    wrapper = f"""#!/bin/bash
+#SBATCH --job-name=qe_pipeline
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --output=sys.out.full
+source ~/miniconda3/etc/profile.d/conda.sh 2>/dev/null
+conda activate qe 2>/dev/null
+bash {script_name}"""
+                    ssh.exec_command(f"echo -e '{wrapper}' > {remote_dir}/job.sbatch")
+                    cmd = f"cd {remote_dir} && sbatch job.sbatch"
+                    msg_type = "via SLURM Queue"
+                else:
+                    cmd = f"bash -lc 'cd {remote_dir} && export OMP_NUM_THREADS=1 && source ~/miniconda3/etc/profile.d/conda.sh 2>/dev/null && conda activate qe 2>/dev/null; nohup bash {script_name} > sys.out.full 2>&1 &'"
+                    msg_type = "via Background Daemon"
+                    
+                self.log_signal.emit(f"Dispatching execution {msg_type}...")
+                stdin, stdout, stderr = ssh.exec_command(cmd)
+                out = stdout.read().decode()
+                err = stderr.read().decode()
+                
+                ssh.close()
+                
+                self.log_signal.emit(out)
+                if err:
+                    self.log_signal.emit(f"STDERR: {err}")
+                    
+                self.finished_signal.emit(True, f"Remote Dispatch Complete! Logs at: {remote_dir}/sys.out.full")
+                return
+
+            # --- LOCAL EXECUTION ---
             if not is_win:
                 os.chmod(script_path, 0o755)
                 cmd = ["/bin/bash", script_name]
             else:
-                # Bypass execution policy locally just for this script run
                 cmd = ["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", script_name]
             
-            # 3. Execute the script inside the target directory
             process = subprocess.Popen(
                 cmd,
                 cwd=self.out_dir,
@@ -56,6 +136,7 @@ class QERunnerThread(QThread):
                 
         except Exception as e:
             self.finished_signal.emit(False, f"An error occurred: {str(e)}")
+
 
 class QEGeneratorPanel(QWidget):
     def __init__(self, engine_reference, parent=None):
@@ -133,12 +214,29 @@ class QEGeneratorPanel(QWidget):
         self.script_editor.setMaximumHeight(150)
         qe_form.addRow("Pipeline Script:", self.script_editor)
 
-        self.btn_run_qe = QPushButton("🚀 Run Script Locally")
+        # Compute Target Dropdown
+        self.combo_cluster = QComboBox()
+        self.combo_cluster.addItem("💻 Local (This Machine)", "local")
+        self.populate_clusters()
+        qe_form.addRow("Compute Target:", self.combo_cluster)
+
+
+
+        self.btn_run_qe = QPushButton("🚀 Run Script")
         self.btn_run_qe.setStyleSheet("""
             QPushButton { background-color: #c82333; color: white; font-weight: bold; padding: 5px; }
             QPushButton:disabled { background-color: #5c161b; color: #888888; }
         """)
         qe_form.addRow(self.btn_run_qe)
+        
+        self.btn_fetch_wan = QPushButton("📥 Fetch Remote Outputs")
+        self.btn_fetch_wan.setStyleSheet("""
+            QPushButton { background-color: #17a2b8; color: white; font-weight: bold; padding: 5px; }
+            QPushButton:disabled { background-color: #0c5460; color: #888888; }
+        """)
+        qe_form.addRow(self.btn_fetch_wan)
+        self.btn_fetch_wan.clicked.connect(self.fetch_remote_outputs)
+
 
         self.main_layout.addWidget(qe_group)
 
@@ -160,6 +258,63 @@ class QEGeneratorPanel(QWidget):
         self.btn_gen_qe.clicked.connect(self.generate_qe_files)
         self.btn_run_qe.clicked.connect(self.run_qe_script)
         self.chk_mpi.stateChanged.connect(lambda: self.spin_cores.setEnabled(self.chk_mpi.isChecked()))
+
+
+    def populate_clusters(self):
+        import json, os
+        config_file = os.path.expanduser('~/.tensorspec_clusters.json')
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, 'r') as f:
+                    clusters = json.load(f)
+                for c in clusters:
+                    self.combo_cluster.addItem(f"🚀 Remote: {c.get('name', c.get('host'))}", c)
+            except Exception as e:
+                print(f"Error reading cluster config: {e}")
+
+    def get_selected_cluster(self):
+        selected_data = self.combo_cluster.currentData()
+        if isinstance(selected_data, dict):
+            return selected_data
+        return None
+
+
+    def fetch_remote_outputs(self):
+        cluster = self.get_selected_cluster()
+        if not cluster or cluster == "local":
+            QMessageBox.information(self, "Info", "Select a remote cluster to fetch from.")
+            return
+            
+        out_dir = self.line_outdir.text()
+        os.makedirs(out_dir, exist_ok=True)
+        
+        try:
+            import paramiko
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            pwd = cluster.get('password', '') or None
+            ssh.connect(cluster['host'], port=cluster.get('port', 22), username=cluster['user'], password=pwd, timeout=10)
+            
+            sftp = ssh.open_sftp()
+            remote_dir = f"/mnt/data/{cluster['user']}/tensorspec_heavy/qe_gui_run"
+            
+            # Fetch only the logs and final Wannier90 tight-binding model to save bandwidth!
+            # Do NOT download .mmn, .amn, .eig, .chk, or .save directories as they are massive (10+ GB).
+            allowed_fetch = ['.out', '.gnu', '.kpt', '.dat', '.xyz', 'sys.out.full', '.wout']
+            
+            for file_attr in sftp.listdir_attr(remote_dir):
+                remote_f = f"{remote_dir}/{file_attr.filename}"
+                local_f = os.path.join(out_dir, file_attr.filename)
+                import stat
+                if stat.S_ISREG(file_attr.st_mode):
+                    if any(file_attr.filename.endswith(ext) for ext in allowed_fetch):
+                        sftp.get(remote_f, local_f)
+            
+            sftp.close()
+            ssh.close()
+            QMessageBox.information(self, "Success", f"Fetched all remote outputs into '{out_dir}'.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to fetch remote outputs:\n{str(e)}")
 
     def generate_qe_files(self):
         if not self.engine.crystal_structure:
@@ -192,7 +347,7 @@ class QEGeneratorPanel(QWidget):
             wan_exec = self.line_wan_cmd.text().strip()
             pw2wan_exec = self.line_pw2wan_cmd.text().strip()
             
-            mpi_cmd = f"mpirun -np {self.spin_cores.value()} " if self.chk_mpi.isChecked() else ""
+            mpi_cmd = f"mpirun --use-hwthread-cpus --oversubscribe -np {self.spin_cores.value()} " if self.chk_mpi.isChecked() else ""
             
             # Auto-populate portable script with exact commands based on Operating System
             if os.name == 'nt':
@@ -206,9 +361,11 @@ class QEGeneratorPanel(QWidget):
                     "# ==================================================================\n"
                     f"# (Get-Content scf.in) -replace '&SYSTEM', \"&SYSTEM`n    input_dft = 'hse',`n    nqx1 = {kmesh[0]}, nqx2 = {kmesh[1]}, nqx3 = {kmesh[2]},\" | Set-Content scf.in\n"
                     f"# (Get-Content nscf.in) -replace '&SYSTEM', \"&SYSTEM`n    input_dft = 'hse',`n    nqx1 = {kmesh[0]}, nqx2 = {kmesh[1]}, nqx3 = {kmesh[2]},\" | Set-Content nscf.in\n\n"
+                    "mkdir -p out tmp\n" 
+                    "export TMPDIR=$(pwd)/tmp\n" 
                     "# Edit this script to run specific parts of the pipeline\n"
-                    f"{mpi_cmd}{pw_exec} -ndiag 1 -in scf.in | Tee-Object -FilePath scf.out\n"
-                    f"{mpi_cmd}{pw_exec} -ndiag 1 -in nscf.in | Tee-Object -FilePath nscf.out\n"
+                    f"{mpi_cmd}{pw_exec} -in scf.in | Tee-Object -FilePath scf.out\n"
+                    f"{mpi_cmd}{pw_exec} -in nscf.in | Tee-Object -FilePath nscf.out\n"
                     f"{wan_exec} -pp wannier90\n"
                     f"{mpi_cmd}{pw2wan_exec} -in pw2wan.in | Tee-Object -FilePath pw2wan.out\n"
                     f"{wan_exec} wannier90\n"
@@ -225,9 +382,11 @@ class QEGeneratorPanel(QWidget):
                     "# To run HSE, just uncomment (remove the '#') from the python command below.\n"
                     "# ==================================================================\n"
                     f"# python -c \"for f in ['scf.in','nscf.in']: d=open(f).read(); open(f,'w').write(d.replace('&SYSTEM','&SYSTEM\\n    input_dft=\\'hse\\',\\n    nqx1={kmesh[0]}, nqx2={kmesh[1]}, nqx3={kmesh[2]},'))\"\n\n"
+                    "mkdir -p out tmp\n" 
+                    "export TMPDIR=$(pwd)/tmp\n" 
                     "# Edit this script to run specific parts of the pipeline\n"
-                    f"{mpi_cmd}{pw_exec} -ndiag 1 -in scf.in | tee scf.out\n"
-                    f"{mpi_cmd}{pw_exec} -ndiag 1 -in nscf.in | tee nscf.out\n"
+                    f"{mpi_cmd}{pw_exec} -in scf.in | tee scf.out\n"
+                    f"{mpi_cmd}{pw_exec} -in nscf.in | tee nscf.out\n"
                     f"{wan_exec} -pp wannier90\n"
                     f"{mpi_cmd}{pw2wan_exec} -in pw2wan.in | tee pw2wan.out\n"
                     f"{wan_exec} wannier90\n"
@@ -257,7 +416,8 @@ class QEGeneratorPanel(QWidget):
         self.toggle_view_btn.setText("⏸ Pause Viewer (Keep Running)")
         self.is_viewing = True
         
-        self.qe_thread = QERunnerThread(script_content, out_dir)
+        cluster = self.get_selected_cluster()
+        self.qe_thread = QERunnerThread(script_content, out_dir, cluster)
         self.qe_thread.log_signal.connect(self.update_log)
         self.qe_thread.finished_signal.connect(self.calculation_finished)
         self.qe_thread.start()

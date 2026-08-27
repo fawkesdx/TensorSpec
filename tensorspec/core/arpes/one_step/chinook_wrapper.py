@@ -191,11 +191,19 @@ class ChinookWrapper:
         R_inv = np.linalg.inv(R_total)
         A_sample = R_inv @ A_lab
 
-        # --- 4. EXACT DETECTOR MESH MAPPING ---
-        # Generate the pixel grid strictly in the detector frame
-        kx_arr = np.linspace(kb['X'][0], kb['X'][1], num_x)
-        ky_arr = np.linspace(kb['Y'][0], kb['Y'][1], num_y)
-        K_SLIT, K_DEFL = np.meshgrid(kx_arr, ky_arr, indexing='ij')
+        # --- 4. EXACT DETECTOR MESH MAPPING (Angles -> Momentum) ---
+        # The UI now passes Theta (Slit) and Phi (Deflect) in degrees.
+        E_kin = max(hv - W, 0.1)
+        k_radius = 0.512316 * np.sqrt(E_kin)
+        
+        theta_arr = np.radians(np.linspace(kb['X'][0], kb['X'][1], num_x))
+        phi_arr = np.radians(np.linspace(kb['Y'][0], kb['Y'][1], num_y))
+        
+        THETA, PHI = np.meshgrid(theta_arr, phi_arr, indexing='ij')
+        
+        # Map Angles to Slit/Deflect Momentums
+        K_SLIT = k_radius * np.sin(THETA)
+        K_DEFL = k_radius * np.sin(PHI)
         
         k_slit_flat = K_SLIT.flatten(order='C')
         k_defl_flat = K_DEFL.flatten(order='C')

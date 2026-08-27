@@ -225,7 +225,9 @@ class TabViewEdit(QWidget):
                 warnings.simplefilter("ignore")
                 self.main_suite.current_structure = Structure.from_file(fname)
             
-            self.lbl_file.setText(fname.split('/')[-1])
+            filename_only = fname.split('/')[-1]
+            self.lbl_file.setText(filename_only)
+            self.main_suite.current_filename = filename_only.replace('.cif', '')
             
             sym_info = CrystalEngine.get_symmetry_info(self.main_suite.current_structure)
             self.lbl_sym.setText(f"Space Group: {sym_info['spacegroup']} | V_conv = {sym_info['volume_ratio']}× V_prim")

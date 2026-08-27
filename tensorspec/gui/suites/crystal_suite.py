@@ -420,7 +420,8 @@ class CrystalViewerSuite(QWidget):
             QMessageBox.warning(self, "Warning", "No active structure to push!")
             return
             
-        name, ok = QInputDialog.getText(self, "Workspace Export", "Enter a variable name for this structure:", text="My_Crystal")
+        default_name = getattr(self, 'current_filename', "My_Crystal")
+        name, ok = QInputDialog.getText(self, "Workspace Export", "Enter a variable name for this structure:", text=default_name)
         if ok and name:
             # Push the FULL PyMatgen object, not just the raw coordinates!
             global_workspace.push_crystal_structure(name, self.current_structure)
@@ -494,6 +495,7 @@ class CrystalViewerSuite(QWidget):
                 mono, gap = CrystalEngine.extract_monolayer_vdw(bulk_struct)
                 name = fname.split('/')[-1].replace('.cif', '') + " (vdW Auto-Mono)"
                 self.append_stack_layer(name, mono)
+                self.current_filename = name
             except Exception as e:
                 QMessageBox.critical(self, "vdW Cleave Error", str(e))
         else:
@@ -581,6 +583,7 @@ class CrystalViewerSuite(QWidget):
                 
                 # --- NEW: Set the tight slab as active so we don't push the 500A dummy box! ---
                 self.current_structure = mono_struct
+                self.current_filename = name
                 self.refresh_render()
             except Exception as e:
                 QMessageBox.critical(self, "Exfoliation Error", str(e))
@@ -613,6 +616,7 @@ class CrystalViewerSuite(QWidget):
         # 1. Build the math supercell
         self.active_supercell = CrystalEngine.build_heterostructure_stack(layers_data)
         self.current_structure = self.active_supercell
+        self.current_filename = "Heterostructure_Stack"
         
         # 2. Extract elements to wake up Tab 1's Color Panel
         if "layer_tag" in self.active_supercell.site_properties:

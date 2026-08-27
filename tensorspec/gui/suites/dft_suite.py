@@ -3,7 +3,7 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QPushButton, QGroupBox, QComboBox, QMessageBox, 
-                               QInputDialog, QSplitter, QScrollArea, QFileDialog)
+                               QInputDialog, QSplitter, QScrollArea, QFileDialog, QLabel, QTextEdit)
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
@@ -13,8 +13,9 @@ from tensorspec.core.workspace import global_workspace
 
 # Import the isolated UI components
 from tensorspec.gui.components.dft_panels import TightBindingPanel
-# Make sure to create this file/class based on our earlier QE Generator step!
 from tensorspec.gui.components.qe_generator_panel import QEGeneratorPanel
+from PySide6.QtWidgets import QStackedWidget
+from tensorspec.gui.components.sprkkr_panels import SPRKKRDftPanel
 
 class DFTSuite(QWidget):
     """
@@ -59,8 +60,28 @@ class DFTSuite(QWidget):
         control_layout.addWidget(ws_group)
 
         # 2. Modular QE Generator Panel
+        # --- Compute Engine Selector ---
+        engine_group = QGroupBox("First Principles Engine")
+        engine_layout = QVBoxLayout(engine_group)
+        self.engine_combo = QComboBox()
+        self.engine_combo.addItems(["Quantum Espresso (Pseudopotential)", "SPRKKR (All-Electron KKR)"])
+        engine_layout.addWidget(self.engine_combo)
+        control_layout.addWidget(engine_group)
+        
+        self.engine_stack = QStackedWidget()
+        
+        # Panel 0: QE
         self.qe_panel = QEGeneratorPanel(self.engine)
-        control_layout.addWidget(self.qe_panel)
+        self.engine_stack.addWidget(self.qe_panel)
+        
+        # Panel 1: SPRKKR
+        self.sprkkr_panel = SPRKKRDftPanel(self.engine)
+        self.engine_stack.addWidget(self.sprkkr_panel)
+        
+        control_layout.addWidget(self.engine_stack)
+        
+        self.engine_combo.currentIndexChanged.connect(self.engine_stack.setCurrentIndex)
+        self.engine_combo.currentIndexChanged.connect(self.on_engine_changed)
         
         # 3. Modular Tight Binding Panel
         self.tb_panel = TightBindingPanel()
@@ -81,12 +102,51 @@ class DFTSuite(QWidget):
         control_layout.addWidget(self.btn_calculate)
         control_layout.addWidget(self.btn_push_bands)
         control_layout.addWidget(self.btn_load_qe_bands)
+        
+        # Container for the right side (canvas)
+        self.right_container = QWidget()
+        self.current_structure_name = "Unknown"
+        right_layout = QVBoxLayout(self.right_container)
+        right_layout.setContentsMargins(0,0,0,0)
+        
+        # Placeholder for SPRKKR info
+        self.lbl_sprkkr_info = QLabel("<h3>SPRKKR Band Structures</h3><br>"
+                                      "SPRKKR computes band structures directly via the <b>Bloch Spectral Function (BSF)</b>.<br><br>"
+                                      "1. Run your SPRKKR SCF here.<br>"
+                                      "2. The job is automatically saved to your Workspace Vault.<br>"
+                                      "3. Switch to the <b>ARPES Suite</b>, select the Vault, choose <b>BSF</b> task, and run it to plot!")
+        self.lbl_sprkkr_info.setWordWrap(True)
+        self.lbl_sprkkr_info.setAlignment(Qt.AlignCenter)
+        self.lbl_sprkkr_info.setStyleSheet("background-color: #1e1e1e; color: #a0a0a0; font-size: 14px; padding: 20px; border-radius: 10px;")
+        self.lbl_sprkkr_info.hide()
+        
+        # --- Live Log Panel ---
+        self.live_log_widget = QWidget()
+        live_log_layout = QVBoxLayout(self.live_log_widget)
+        live_log_layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.btn_start_live = QPushButton("📡 Start Embedded Live Monitor")
+        self.btn_start_live.setStyleSheet("background-color: #d35400; color: white; font-weight: bold; padding: 8px;")
+        self.btn_start_live.clicked.connect(self.start_embedded_monitor)
+        
+        self.txt_live_logs = QTextEdit()
+        self.txt_live_logs.setReadOnly(True)
+        self.txt_live_logs.setStyleSheet("background-color: #0c0c0c; color: #00ff00; font-family: monospace; font-size: 12px;")
+        
+        live_log_layout.addWidget(self.btn_start_live)
+        live_log_layout.addWidget(self.txt_live_logs)
+        self.live_log_widget.hide()
+        
         control_layout.addStretch()
         
         # --- Right Panel: Band Structure Canvas ---
         self.figure = Figure(figsize=(6, 5))
         self.canvas = FigureCanvas(self.figure)
         self.ax = self.figure.add_subplot(111)
+        
+        right_layout.addWidget(self.canvas)
+        right_layout.addWidget(self.lbl_sprkkr_info)
+        right_layout.addWidget(self.live_log_widget)
         
         # Wrap the control panel in a scroll area to fix the vertical lock
         scroll_area = QScrollArea()
@@ -97,12 +157,82 @@ class DFTSuite(QWidget):
         # Create the Draggable Splitter
         main_splitter = QSplitter(Qt.Horizontal)
         main_splitter.addWidget(scroll_area) # Add the scroll area instead of the raw panel
-        main_splitter.addWidget(self.canvas)
+        main_splitter.addWidget(self.right_container)
         
         # Set initial width ratio (380px for the left panel, the rest for the canvas)
         main_splitter.setSizes([380, 520]) 
         
         main_layout.addWidget(main_splitter)
+        
+        self.monitor_thread = None
+
+    def start_embedded_monitor(self, force_start=False):
+        if self.monitor_thread and self.monitor_thread.isRunning():
+            if force_start:
+                return # Already running, do nothing
+            self.monitor_thread.running = False
+            self.monitor_thread.wait()
+            self.btn_start_live.setText("📡 Start Embedded Live Monitor")
+            self.btn_start_live.setStyleSheet("background-color: #d35400; color: white; font-weight: bold; padding: 8px;")
+            self.monitor_thread = None
+            return
+
+        import os, json
+        config_file = os.path.expanduser('~/.tensorspec_clusters.json')
+        if not os.path.exists(config_file):
+            QMessageBox.warning(self, "Error", "No clusters configured. Add one in Cluster Manager first.")
+            return
+            
+        with open(config_file, 'r') as f:
+            clusters = json.load(f)
+            
+        if not clusters:
+            QMessageBox.warning(self, "Error", "No clusters found.")
+            return
+            
+        target = clusters[0] # Default to first for embedded
+        
+        from tensorspec.gui.components.compute_panel import LiveMonitorThread
+        self.monitor_thread = LiveMonitorThread(target)
+        self.monitor_thread.data_ready.connect(self.update_embedded_logs)
+        self.monitor_thread.error_occurred.connect(self.monitor_error)
+        self.monitor_thread.start()
+        
+        self.btn_start_live.setText("🛑 Stop Live Monitor")
+        self.btn_start_live.setStyleSheet("background-color: #c0392b; color: white; font-weight: bold; padding: 8px;")
+        
+    def update_embedded_logs(self, data):
+        content = "=== REMOTE LIVE LOGS ===\n\n"
+        content += data.get('dft_jobs_text', '') + "\n"
+        content += "----------------------------------------\n"
+        content += data.get('full_log_tail', '')
+        
+        # Keep text scrolled to the bottom so newest lines are visible
+        self.txt_live_logs.setPlainText(content)
+        sb = self.txt_live_logs.verticalScrollBar()
+        sb.setValue(sb.maximum())
+            
+    def monitor_error(self, err):
+        self.txt_live_logs.setPlainText(f"MONITOR ERROR:\n{err}")
+
+    def on_engine_changed(self, idx):
+        # If SPRKKR is selected (idx == 1), hide the Tight-Binding panel and plotting tools.
+        if idx == 1:
+            self.tb_panel.hide()
+            self.btn_calculate.hide()
+            self.btn_push_bands.hide()
+            self.btn_load_qe_bands.hide()
+            self.canvas.hide()
+            self.lbl_sprkkr_info.show()
+            self.live_log_widget.show()
+        else:
+            self.tb_panel.show()
+            self.btn_calculate.show()
+            self.btn_push_bands.show()
+            self.btn_load_qe_bands.show()
+            self.lbl_sprkkr_info.hide()
+            self.live_log_widget.hide()
+            self.canvas.show()
 
     def _connect_signals(self):
         self.btn_calculate.clicked.connect(self.calculate_bands)
@@ -111,6 +241,7 @@ class DFTSuite(QWidget):
         self.btn_push_bands.clicked.connect(self.push_bands_to_workspace)
         
         # --- NEW: Connect Ab-Initio Plotter ---
+        self.sprkkr_panel.job_started.connect(lambda: self.start_embedded_monitor(force_start=True))
         self.btn_load_qe_bands.clicked.connect(self.load_qe_xml_bands)
         
         # Connect spin box for live plotting updates using the panel reference
@@ -131,6 +262,7 @@ class DFTSuite(QWidget):
             return
             
         if self.engine.load_structure_from_workspace(target):
+            self.current_structure_name = target
             formula = self.engine.crystal_structure.composition.reduced_formula
             hopping = self.engine.get_default_hopping(formula)
             
@@ -214,7 +346,16 @@ class DFTSuite(QWidget):
                     k_points, k_labels = self.engine.get_kpath_template(temp_key, a=lattice_a, b=lattice_b)
 
                 if hasattr(self.engine.crystal_structure, 'lattice'):
-                    recip_matrix = self.engine.crystal_structure.lattice.reciprocal_lattice.matrix
+                    # --- NEW: Use A_qe reciprocal matrix if loaded from W90 to prevent rotation mismatch ---
+                    if hasattr(self.engine.chinook, 'A_qe') and self.engine.chinook.A_qe is not None:
+                        A_qe = self.engine.chinook.A_qe
+                        # Reciprocal matrix: B = 2*pi * (A^-1)^T
+                        # PyMatgen convention is without 2*pi, chinook also uses without 2*pi here?
+                        # Let's match PyMatgen: 2*pi * np.linalg.inv(A_qe).T
+                        recip_matrix = 2 * np.pi * np.linalg.inv(A_qe).T
+                    else:
+                        recip_matrix = self.engine.crystal_structure.lattice.reciprocal_lattice.matrix
+                        
                     k_points = np.dot(k_points, recip_matrix)
 
                 k_vecs, k_dist, node_idx, labels = self.engine.generate_k_path(
@@ -301,6 +442,9 @@ class DFTSuite(QWidget):
         # Access the underlying chinook engine inside the router
         chinook_engine = self.engine.chinook
         
+        found_basis = getattr(chinook_engine, 'basis', None)
+        found_h_dict = getattr(chinook_engine, 'H_dict', None)
+        
         for attr_name in dir(chinook_engine):
             if attr_name.startswith('__'): continue
             attr_val = getattr(chinook_engine, attr_name)
@@ -308,19 +452,7 @@ class DFTSuite(QWidget):
             
             if 'TB_model' in type_name:
                 found_tb_model = attr_val
-            elif isinstance(attr_val, dict):
-                if 'ham' in attr_name.lower() or 'dict' in attr_name.lower():
-                    found_h_dict = attr_val
-                if 'basis' in attr_val:
-                    found_basis = attr_val['basis']
-            elif isinstance(attr_val, (list, tuple)) or type_name == 'ndarray':
-                try:
-                    if len(attr_val) > 0 and 'orbital' in type(attr_val[0]).__name__.lower():
-                        found_basis = attr_val
-                except Exception:
-                    pass
-            if 'basis' in attr_name.lower() and found_basis is None:
-                found_basis = attr_val
+                break
 
         if found_tb_model is not None:
             if found_basis is None: found_basis = getattr(found_tb_model, 'basis', None)
@@ -498,7 +630,8 @@ class DFTSuite(QWidget):
             return
             
         dim_str = "2D" if self.active_bands_data.get('is_2d') else "1D"
-        default_name = f"TB_Bands_{dim_str}"
+        struct_name = getattr(self, 'current_structure_name', 'Unknown')
+        default_name = f"TB_{struct_name}_{dim_str}"
         
         name, ok = QInputDialog.getText(self, "Save to Workspace", 
                                         "Enter variable name for workspace:", 

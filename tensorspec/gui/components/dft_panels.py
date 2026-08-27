@@ -76,7 +76,12 @@ class TightBindingPanel(QWidget):
         w90_layout = QVBoxLayout(w90_group)
         
         self.btn_load_w90 = QPushButton("📂 Load wannier90_hr.dat")
+        self.btn_load_w90.setToolTip("Select the Wannier90 hopping file. Make sure wannier90.wout or scf.out is in the same folder!")
         self.btn_load_w90.setStyleSheet("background-color: #5cb85c; color: white; font-weight: bold;")
+        
+        self.lbl_w90_warning = QLabel("⚠️ Note: Keep wannier90.wout or scf.out in same folder for lattice alignment!")
+        self.lbl_w90_warning.setStyleSheet("color: #d9534f; font-size: 10px; font-weight: bold;")
+        
         self.lbl_w90_status = QLabel("Status: Using Manual Slater-Koster parameters.")
         self.lbl_w90_status.setStyleSheet("color: gray; font-size: 10px;")
         
@@ -86,6 +91,7 @@ class TightBindingPanel(QWidget):
         self.chk_overlay_w90.setEnabled(False) # Disabled until a file is loaded
         
         w90_layout.addWidget(self.btn_load_w90)
+        w90_layout.addWidget(self.lbl_w90_warning)
         w90_layout.addWidget(self.chk_overlay_w90)
         w90_layout.addWidget(self.lbl_w90_status)
         tb_form.addRow(w90_group)
@@ -192,6 +198,17 @@ class TightBindingPanel(QWidget):
         """Opens a file dialog to load the Wannier90 hopping data."""
         fname, _ = QFileDialog.getOpenFileName(self, 'Open Wannier90 HR File', '', "Data files (*.dat);;All files (*.*)")
         if fname:
+            import os
+            work_dir = os.path.dirname(fname)
+            wout = os.path.join(work_dir, "wannier90.wout")
+            scf_out = os.path.join(work_dir, "scf.out")
+            if not os.path.exists(wout) and not os.path.exists(scf_out):
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Missing Grid Alignment File", 
+                                  "No 'wannier90.wout' or 'scf.out' found in the same folder as the hr.dat file.\n\n"
+                                  "The band structure might look completely wrong because TensorSpec cannot align the crystal lattice.\n"
+                                  "Please place 'wannier90.wout' in the same folder!")
+            
             self.active_w90_file = fname
             filename_short = fname.split('/')[-1]
             self.lbl_w90_status.setText(f"Status: Using {filename_short}")

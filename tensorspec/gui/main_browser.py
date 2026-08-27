@@ -204,12 +204,6 @@ class TensorSpecMainBrowser(QMainWindow):
         self.init_launcher_toolbar()
         self.init_central_layout()
         
-        # Populate with mock data for initial UI demonstration
-        self.load_mock_workspace()
-        self.refresh_workspace_tree()
-
-        # Populate with mock data for initial UI demonstration
-        self.load_mock_workspace()
         self.refresh_workspace_tree()
         
         # NEW: Secret keystroke buffer for the telemetry Easter egg
@@ -278,6 +272,12 @@ class TensorSpecMainBrowser(QMainWindow):
             action = QAction(name, self)
             action.triggered.connect(slot)
             launcher_toolbar.addAction(action)
+            
+        launcher_toolbar.addSeparator()
+        
+        compute_action = QAction("☁️ Remote Compute", self)
+        compute_action.triggered.connect(self.launch_compute_manager)
+        launcher_toolbar.addAction(compute_action)
 
     def init_central_layout(self):
         """Creates the split workspace: Left Data Tree and Right Inspector Panel."""
@@ -334,20 +334,6 @@ class TensorSpecMainBrowser(QMainWindow):
         main_splitter.setSizes([350, 650])
         self.setCentralWidget(main_splitter)
 
-    def load_mock_workspace(self):
-        """Injects baseline samples into memory to verify tree hierarchy behavior."""
-        self.workspace_data["maestro_sample_data"] = {
-            "type": "xarray.DataTree (ARPES)",
-            "dims": "['energy', 'slitangle'] -> (1024, 480)",
-            "metadata": "Facility: Advanced Light Source\nBeamline: MAESTRO (7.0.2.1)\nTemperature: 12 K\nPhoton Energy: 92 eV\nNodes:\n  /raw\n  /processed\n  /analysis"
-        }
-        
-        self.workspace_data["TaIrTe4_monolayer"] = {
-            "type": "Structure (CrystalViewer)",
-            "dims": "Atoms: 12, SpaceGroup: Pmn2_1",
-            "metadata": "Formula: Ta4 Ir4 Te8\nLattice Constants:\n  a: 3.78 Å\n  b: 12.42 Å\n  c: 13.10 Å\nCorrugated Te upper/lower layers configured."
-        }
-
     def refresh_workspace_tree(self):
         """Pulls the actual active data from global_workspace and populates the tree."""
         self.data_tree_widget.clear()
@@ -373,13 +359,36 @@ class TensorSpecMainBrowser(QMainWindow):
             item.setText(1, "Band Structure")
             item.setText(2, "E(k) Dispersion Data")
 
-        # Fetch Real Spectroscopy DataTrees (ARPES Data)
+        # 3. Fetch DataTrees (Spectroscopy)
         for name, item_data in global_workspace._data.items():
             if item_data.get('type') == 'spectroscopy_tree':
                 item = QTreeWidgetItem(self.data_tree_widget)
                 item.setText(0, name)
-                item.setText(1, "Spectroscopy DataTree")
-                item.setText(2, "N-Dimensional Tensor")
+                item.setText(1, "Spectroscopy Dataset")
+                
+                # Try to extract shape/type from the raw node if available
+                try:
+                    raw_node = item_data['tree']['raw']
+                    if 'data' in raw_node:
+                        shape = raw_node['data'].shape
+                        item.setText(2, f"Shape: {shape}")
+                except Exception:
+                    item.setText(2, "DataTree")
+
+        # 4. Fetch Remote DFT Vaults
+        for name in global_workspace.list_remote_runs():
+            vault_info = global_workspace.pull_remote_run(name)
+            item = QTreeWidgetItem(self.data_tree_widget)
+            item.setText(0, name)
+            item.setText(1, f"Remote Vault ({vault_info['engine']})")
+            item.setText(2, f"Cluster: {vault_info['cluster']}")
+            # Give it a special color to stand out as remote!
+            item.setForeground(0, Qt.cyan)
+            item.setForeground(1, Qt.cyan)
+            item.setForeground(2, Qt.cyan)
+
+        # Expand all by default
+        self.data_tree_widget.expandAll()
 
     def on_item_selected(self, current_item, previous_item):
         """Triggers preview update in the Inspector Panel upon selecting a variable."""
@@ -398,9 +407,13 @@ class TensorSpecMainBrowser(QMainWindow):
             ws_item = global_workspace._data.get(var_name)
             if ws_item:
                 item_type = ws_item.get('type', 'Unknown')
-                self.metadata_inspector.setText(f"Workspace Item: {var_name}\nType: {item_type}\n" + "-"*40 + "\nData object ready for inspection.")
-                
-                # Only enable the launch button for supported viewer types
+                if item_type == 'remote_run':
+                    meta = f"Remote Engine: {ws_item.get('engine')}\nCluster: {ws_item.get('cluster')}\nPath: {ws_item.get('remote_path')}"
+                    self.metadata_inspector.setText(f"Workspace Item: {var_name}\nType: Remote DFT Vault\n" + "-"*40 + f"\n{meta}")
+                    self.btn_launch_viewer.setEnabled(False)
+                else:
+                    self.metadata_inspector.setText(f"Workspace Item: {var_name}\nType: {item_type}\n" + "-"*40 + "\nData object ready for inspection.")
+                    
                 if item_type == 'spectroscopy_tree':
                     self.btn_launch_viewer.setEnabled(True)
                 else:
@@ -473,10 +486,19 @@ class TensorSpecMainBrowser(QMainWindow):
             self.window_tracker_list.takeItem(self.window_tracker_list.row(items[0]))
 
     def launch_dft_suite(self):
-        self.dft_window = DFTSuite()
-        self.dft_window.resize(900, 600)
-        self.dft_window.setWindowTitle("TensorSpec - DFT Suite")
-        self.dft_window.show()
+        win_id = "DFT Suite"
+        if win_id in self.active_windows:
+            items = self.window_tracker_list.findItems(win_id, Qt.MatchExactly)
+            if items: self.bring_window_to_front(items[0])
+            return
+            
+        dft_widget = DFTSuite()
+        wrapper = FloatingViewerWindow(win_id=win_id, title="TensorSpec - DFT Suite", inner_widget=dft_widget, parent=self)
+        wrapper.window_closed.connect(self.unregister_window)
+        wrapper.resize(900, 600)
+        self.active_windows[win_id] = wrapper
+        self.window_tracker_list.addItem(win_id)
+        wrapper.show()
 
     def launch_arpes_suite(self):
         self.arpes_window = ARPESSuite()
@@ -493,8 +515,24 @@ class TensorSpecMainBrowser(QMainWindow):
     def launch_transport_suite(self):
         print("Launching Transport Suite Window...")
 
+    def launch_compute_manager(self):
+        try:
+            from tensorspec.gui.components.compute_panel import ComputeManagerPanel
+            self.compute_window = ComputeManagerPanel(self)
+            self.compute_window.show()
+        except Exception as e:
+            print(f"Failed to launch Compute Manager: {e}")
+
     def launch_ml_suite(self):
         print("Launching Machine Learning Suite Window...")
+        try:
+            from tensorspec.gui.maestroai.maestroai_gui import MaestroAIApp
+            self.ml_window = MaestroAIApp()
+            self.ml_window.resize(1100, 700)
+            self.ml_window.setWindowTitle("TensorSpec - Machine Learning Suite")
+            self.ml_window.show()
+        except Exception as e:
+            print(f"Failed to launch ML Suite: {e}")
     
     def launch_crystal_suite(self):
         if hasattr(self, 'crystal_window'):

@@ -17,6 +17,7 @@ class ChinookTightBindingEngine:
     """
     def __init__(self):
         self.crystal_structure = None
+        self.A_qe = None
         
         # Materials Database for Slater-Koster hopping parameters
         self.materials_db = {
@@ -229,9 +230,12 @@ class ChinookTightBindingEngine:
             raise ImportError("Chinook is not installed properly. Cannot calculate bands.")
         if not self.crystal_structure:
             raise ValueError("No structure loaded.")
+            
+        if not w90_filepath:
+            self.A_qe = None # Clear A_qe if running manual TB builder
 
         if w90_filepath:
-            tb_dict, basis_args = self.export_wannier_dictionary(w90_filepath, use_soc)
+            tb_dict, basis_args = self.export_wannier_dictionary(w90_filepath, use_soc, onsite_e)
         else:
             shells = []
             if custom_hopping:
@@ -409,7 +413,7 @@ class ChinookTightBindingEngine:
             node_idx.append(len(np.vstack(k_vecs)) - 1)
         return np.vstack(k_vecs), np.concatenate(k_dist), node_idx, labels
 
-    def export_wannier_dictionary(self, w90_filepath, use_soc=False):
+    def export_wannier_dictionary(self, w90_filepath, use_soc=False, onsite_e=0.0):
         """
         Parses wannier90_hr.dat natively to bypass Chinook's strict/buggy W90 importer.
         Dynamically extracts QE's lattice to reverse basis-vector rotation.
@@ -465,24 +469,71 @@ class ChinookTightBindingEngine:
                         break
                 if len(qe_a) == 3:
                     A_qe = np.array(qe_a)
+                    self.A_qe = A_qe # SAVE TO SELF FOR K-PATH CALCULATION
                     A_pm_inv = np.linalg.inv(a_mat)
                     T_mat = np.round(np.dot(A_qe, A_pm_inv)).astype(int)
             except Exception as e:
                 print(f"Lattice alignment failed: {e}")
+                
+        # --- FALLBACK: Use wannier90.wout if scf.out is missing ---
+        wout_files = [f for f in os.listdir(work_dir) if f.endswith(".wout") or f.endswith(".out")]
+        wout = os.path.join(work_dir, wout_files[0]) if wout_files else os.path.join(work_dir, "wannier90.wout")
         
+        if (not os.path.exists(scf_out) or 'A_qe' not in locals()) and os.path.exists(wout):
+            try:
+                qe_a = []
+                with open(wout, 'r') as f:
+                    lines_wout = f.readlines()
+                for i, line in enumerate(lines_wout):
+                    if "Lattice Vectors" in line:
+                        for j in range(2, 5):
+                            parts = lines_wout[i+j].replace('|', '').split()
+                            if len(parts) >= 4 and parts[0].startswith('a_'):
+                                qe_a.append([float(parts[1]), float(parts[2]), float(parts[3])])
+                        break
+                if len(qe_a) == 3:
+                    A_qe = np.array(qe_a)
+                    self.A_qe = A_qe # SAVE TO SELF FOR K-PATH CALCULATION
+                    A_pm_inv = np.linalg.inv(a_mat)
+                    T_mat = np.round(np.dot(A_qe, A_pm_inv)).astype(int)
+            except Exception as e:
+                print(f"wout lattice alignment failed: {e}")
+                
         flat_atoms = []
         flat_Z = {}
         flat_pos = []
         flat_orbs = []
         
-        idx = 0
-        for i, site in enumerate(self.crystal_structure):
-            for orb in self._get_orbital_basis(site.species_string):
-                flat_atoms.append(idx)
-                flat_Z[idx] = site.specie.number
-                flat_pos.append(np.array(site.coords, dtype=float))
-                flat_orbs.append([orb]) 
-                idx += 1
+        # --- EXTRACT EXACT WANNIER CENTERS FROM wout ---
+        centers = []
+        if os.path.exists(wout):
+            try:
+                with open(wout, 'r') as f:
+                    lines_wout = f.readlines()
+                for line in lines_wout:
+                    if "WF centre and spread" in line:
+                        parts = line.split('(')[1].split(')')[0].split(',')
+                        centers.append([float(x) for x in parts])
+            except Exception as e:
+                print(f"Failed to read Wannier centers: {e}")
+
+        if len(centers) > 0:
+            print(f"Found {len(centers)} exact Wannier centers from .wout!")
+            for i in range(num_wann):
+                flat_atoms.append(i)
+                flat_Z[i] = 1 # Dummy element
+                flat_pos.append(np.array(centers[i % len(centers)]))
+                flat_orbs.append(['10'])
+        else:
+            print("Warning: No Wannier centers found. Falling back to CIF projection guess.")
+            idx = 0
+            for i, site in enumerate(self.crystal_structure):
+                for orb in self._get_orbital_basis(site.species_string):
+                    flat_atoms.append(idx)
+                    flat_Z[idx] = site.specie.number
+                    flat_pos.append(np.array(site.coords, dtype=float))
+                    flat_orbs.append([orb]) 
+                    idx += 1
 
         explicit_hopping = []
         data_start = 3 + deg_lines
@@ -501,7 +552,7 @@ class ChinookTightBindingEngine:
             
             # --- NEW: Shift on-site energies so Fermi Level is exactly 0.0 eV ---
             if rx == 0 and ry == 0 and rz == 0 and i == j:
-                t_real -= ef
+                t_real = t_real - ef + onsite_e
             
             # --- 2. APPLY DEGENERACY WEIGHT ---
             t_ij = complex(t_real, t_imag) / float(weight)
