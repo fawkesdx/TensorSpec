@@ -37,7 +37,18 @@ run_chinook_arpes = _kmesh.run_chinook_arpes
 run_grizzly_arpes = _kmesh.run_grizzly_arpes
 apply_chinook_runtime_patches = _kmesh.apply_chinook_runtime_patches
 
-apply_chinook_runtime_patches()
+_SCHEDULE_PATH = os.path.join(_RUNNER_DIR, "grizzly_cuda_schedule.py")
+if not os.path.isfile(_SCHEDULE_PATH):
+    print(f"FATAL: missing {_SCHEDULE_PATH} — re-submit from GUI to upload schedule module.", flush=True)
+    sys.exit(1)
+_sched_spec = importlib.util.spec_from_file_location("grizzly_cuda_schedule", _SCHEDULE_PATH)
+_sched = importlib.util.module_from_spec(_sched_spec)
+_sched_spec.loader.exec_module(_sched)
+format_device_summary = _sched.format_device_summary
+plan_theta_chunk = _sched.plan_theta_chunk
+probe_cuda_devices = _sched.probe_cuda_devices
+resolve_gpu_ids = _sched.resolve_gpu_ids
+shrink_chunk_schedule = _sched.shrink_chunk_schedule
 
 # Set in main() before ProcessPoolExecutor (inherited by fork workers).
 USE_GRIZZLY = False
@@ -101,6 +112,202 @@ def _cuda_empty_cache():
         pass
 
 
+def load_tb_model_from_npz(tb_file: str, e_fermi: float = 0.0):
+    """Rebuild chinook TB_model from GUI-uploaded npz (remote runner + GPU workers)."""
+    data = np.load(tb_file, allow_pickle=True)
+    indices = data["indices"]
+    values = data["values"]
+    basis_list = data["basis_list"]
+    a_mat = data["a_mat"].tolist() if "a_mat" in data else np.eye(3).tolist()
+
+    explicit_hopping = []
+    for i in range(len(indices)):
+        explicit_hopping.append([
+            int(indices[i, 0]),
+            int(indices[i, 1]),
+            float(indices[i, 2]),
+            float(indices[i, 3]),
+            float(indices[i, 4]),
+            complex(values[i]),
+        ])
+
+    if e_fermi is None or (isinstance(e_fermi, float) and abs(e_fermi) < 1e-12):
+        e_fermi = float(data["e_fermi"] if "e_fermi" in data else 0.0)
+
+    tb_dict = {
+        "type": "list",
+        "list": explicit_hopping,
+        "H": explicit_hopping,
+        "a": a_mat,
+        "spin": {"bool": False, "soc": False},
+    }
+    bulk_basis = []
+    for i, b in enumerate(basis_list):
+        bulk_basis.append(
+            olib.orbital(
+                i, i, str(b["label"]), b["pos"], int(b.get("Z", 1)), spin=b.get("spin", 1.0)
+            )
+        )
+    tb_model = tb_lib.TB_model(bulk_basis, tb_dict, klib.kpath(np.array([[0, 0, 0]])))
+    if abs(float(e_fermi)) > 1e-12:
+        _orig_solve_h = tb_model.solve_H
+
+        def _solve_h_ef(Eonly=False, _orig=_orig_solve_h, _ef=float(e_fermi)):
+            Eband, Evec = _orig(Eonly=Eonly)
+            Eband = np.asarray(Eband) - _ef
+            return Eband, Evec
+
+        tb_model.solve_H = _solve_h_ef
+    return tb_model
+
+
+def _multigpu_theta_worker(gpu_id: int, task_queue, result_queue, payload: dict) -> None:
+    """One process per GPU; pull θ-blocks until queue sentinel."""
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        pass
+
+    runner_dir = payload["runner_dir"]
+    if runner_dir not in sys.path:
+        sys.path.insert(0, runner_dir)
+
+    kmesh_path = os.path.join(runner_dir, "chinook_arpes_kmesh.py")
+    spec = importlib.util.spec_from_file_location("chinook_arpes_kmesh", kmesh_path)
+    kmesh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(kmesh)
+    kmesh.apply_chinook_runtime_patches()
+    run_grizzly = kmesh.run_grizzly_arpes
+
+    tb_model = load_tb_model_from_npz(payload["tb_file"], payload.get("e_fermi", 0.0))
+    physics = payload["physics"]
+    b_matrix = np.asarray(payload["b_matrix"], dtype=float)
+    phis = np.asarray(payload["phis"], dtype=float)
+    e_axis = np.asarray(payload["e_axis"], dtype=float)
+
+    while True:
+        item = task_queue.get()
+        if item is None:
+            break
+        bi, i0, i1, th_list = item
+        th = np.asarray(th_list, dtype=float)
+        k_bounds = {
+            "X": [float(th[0]), float(th[-1]), len(th)],
+            "Y": [float(phis[0]), float(phis[-1]), len(phis)],
+            "E": [float(e_axis[0]), float(e_axis[-1]), len(e_axis)],
+        }
+        t0 = time.perf_counter()
+        try:
+            Ig = run_grizzly(
+                tb_model,
+                k_bounds,
+                physics,
+                b_matrix,
+                fermi_shift=0.0,
+                device="cuda",
+                profile_stages=True,
+            )
+        except RuntimeError as exc:
+            result_queue.put(("error", bi, i0, str(exc)))
+            continue
+        result_queue.put(("ok", bi, i0, i1, np.asarray(Ig, dtype=np.float32), time.perf_counter() - t0))
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+
+
+def _run_full_cube_multigpu(
+    thetas,
+    phis,
+    e_axis,
+    physics,
+    B_matrix,
+    theta_chunk: int,
+    gpu_ids: list,
+    tb_file: str,
+    e_fermi: float,
+):
+    from multiprocessing import Process, Queue, get_context
+
+    ntheta, nphi, ne = len(thetas), len(phis), len(e_axis)
+    cube = np.zeros((ntheta, nphi, ne), dtype=np.float32)
+    blocks = []
+    for bi, i0 in enumerate(range(0, ntheta, theta_chunk)):
+        i1 = min(i0 + theta_chunk, ntheta)
+        blocks.append((bi, i0, i1, thetas[i0:i1].tolist()))
+
+    n_blocks = len(blocks)
+    print(
+        f"FULL layout MULTI-GPU (θ-chunk={theta_chunk}, gpus={gpu_ids}): "
+        f"{ntheta} x {nphi} x {ne}, {n_blocks} blocks",
+        flush=True,
+    )
+
+    ctx = get_context("spawn")
+    task_q: Queue = ctx.Queue()
+    result_q: Queue = ctx.Queue()
+    payload = {
+        "runner_dir": _RUNNER_DIR,
+        "tb_file": os.path.abspath(tb_file),
+        "e_fermi": float(e_fermi),
+        "physics": physics,
+        "b_matrix": np.asarray(B_matrix, dtype=float),
+        "phis": np.asarray(phis, dtype=float),
+        "e_axis": np.asarray(e_axis, dtype=float),
+    }
+
+    for block in blocks:
+        task_q.put(block)
+    for _ in gpu_ids:
+        task_q.put(None)
+
+    procs = [
+        ctx.Process(
+            target=_multigpu_theta_worker,
+            args=(gid, task_q, result_q, payload),
+            daemon=True,
+        )
+        for gid in gpu_ids
+    ]
+    t_all = time.perf_counter()
+    for p in procs:
+        p.start()
+
+    done = 0
+    errors = []
+    while done < n_blocks:
+        msg = result_q.get()
+        if msg[0] == "error":
+            _, bi, i0, err = msg
+            errors.append((bi, i0, err))
+            done += 1
+            print(f"  GPU block {bi} idx[{i0}:?] ERROR: {err[:200]}", flush=True)
+            continue
+        _, bi, i0, i1, Ig, wall = msg
+        cube[i0:i1, :, :] = _normalize_full_cube(Ig, i1 - i0, nphi, ne)
+        done += 1
+        print(f"  block {bi + 1}/{n_blocks} idx[{i0}:{i1}] wall={wall:.2f}s", flush=True)
+
+    for p in procs:
+        p.join(timeout=30)
+
+    if errors:
+        first_err = errors[0][2]
+        if _is_oom_error(RuntimeError(first_err)):
+            raise RuntimeError(first_err)
+        raise RuntimeError(
+            f"{len(errors)} θ-block(s) failed on multi-GPU path; first: {first_err}"
+        )
+
+    print(f"  full-cube wall (multi-GPU): {time.perf_counter() - t_all:.2f}s", flush=True)
+    return cube
+
+
 def run_full_cube_grizzly(
     tb_model,
     thetas,
@@ -110,6 +317,9 @@ def run_full_cube_grizzly(
     B_matrix,
     device,
     theta_chunk: int = 0,
+    gpu_ids: list | None = None,
+    tb_file: str | None = None,
+    e_fermi: float = 0.0,
 ):
     """Single-process full (θ,φ,E) cube on GrizzlyME + kmesh.
 
@@ -121,6 +331,26 @@ def run_full_cube_grizzly(
     """
     ntheta, nphi, ne = len(thetas), len(phis), len(e_axis)
     t_all = time.perf_counter()
+
+    if (
+        gpu_ids
+        and len(gpu_ids) > 1
+        and str(device).lower() == "cuda"
+        and theta_chunk
+        and theta_chunk > 0
+        and tb_file
+    ):
+        return _run_full_cube_multigpu(
+            thetas,
+            phis,
+            e_axis,
+            physics,
+            B_matrix,
+            theta_chunk,
+            gpu_ids,
+            tb_file,
+            e_fermi,
+        )
 
     if theta_chunk and theta_chunk > 0 and theta_chunk < ntheta:
         print(
@@ -319,8 +549,13 @@ def main():
         "--theta_chunk",
         type=int,
         default=0,
-        help="FULL layout only: sequential θ-block size (0=one-shot). "
-        "On CUDA OOM, runner also auto-retries with shrinking chunks.",
+        help="FULL layout: θ-block size (0=auto from free VRAM). On OOM, halves until 1.",
+    )
+    parser.add_argument(
+        "--ngpus",
+        type=int,
+        default=0,
+        help="FULL layout CUDA: GPUs to use (0=all visible). θ-blocks run in parallel.",
     )
     parser.add_argument("--out_file", type=str, default="chinook_arpes_cube.npz")
     parser.add_argument(
@@ -382,18 +617,28 @@ def main():
         print("NOTE: SARPES requested — GrizzlyME skipped (spinless v0.1); using chinook.", flush=True)
 
     # --- LOAD TB DATA ---
-    data = np.load(args.tb_file, allow_pickle=True)
-    indices = data['indices']
-    values = data['values']
-    basis_list = data['basis_list']
-    a_mat = data['a_mat'].tolist() if 'a_mat' in data else np.eye(3).tolist()
+    tb_path = args.tb_file if os.path.isabs(args.tb_file) else os.path.join(_RUNNER_DIR, args.tb_file)
+    data = np.load(tb_path, allow_pickle=True)
+    if args.e_fermi is not None:
+        e_fermi = float(args.e_fermi)
+    else:
+        e_fermi = float(data["e_fermi"] if "e_fermi" in data else 0.0)
 
-    if 'b_matrix' in data:
-        b_matrix = np.asarray(data['b_matrix'], dtype=float)
+    global global_tb_model
+    global_tb_model = load_tb_model_from_npz(tb_path, e_fermi)
+    indices = data["indices"]
+    a_mat = data["a_mat"].tolist() if "a_mat" in data else np.eye(3).tolist()
+    num_hoppings = len(indices)
+
+    if "b_matrix" in data:
+        b_matrix = np.asarray(data["b_matrix"], dtype=float)
     else:
         A = np.asarray(a_mat, dtype=float)
         b_matrix = 2 * np.pi * np.linalg.inv(A).T
         print("NOTE: b_matrix missing in tb_file; derived from a_mat.", flush=True)
+
+    print(f"e_fermi for eigenvalue shift: {e_fermi} eV", flush=True)
+    print("Successfully reconstructed TB Model with", num_hoppings, "hoppings!")
 
     physics_path = args.physics_file
     if not os.path.isabs(physics_path):
@@ -428,52 +673,6 @@ def main():
             flush=True,
         )
 
-    # Orbital indices are ints; R (cols 2:5) must remain float (Cartesian Å).
-    explicit_hopping = []
-    for i in range(len(indices)):
-        explicit_hopping.append([
-            int(indices[i, 0]),
-            int(indices[i, 1]),
-            float(indices[i, 2]),
-            float(indices[i, 3]),
-            float(indices[i, 4]),
-            complex(values[i]),
-        ])
-
-    e_fermi = float(args.e_fermi) if args.e_fermi is not None else float(
-        data['e_fermi'] if 'e_fermi' in data else 0.0
-    )
-    print(f"e_fermi for eigenvalue shift: {e_fermi} eV", flush=True)
-
-    tb_dict = {
-        'type': 'list',
-        'list': explicit_hopping,
-        'H': explicit_hopping,
-        'a': a_mat,
-        'spin': {'bool': False, 'soc': False}
-    }
-
-    bulk_basis = []
-    for i, b in enumerate(basis_list):
-        orb = olib.orbital(i, i, str(b['label']), b['pos'], int(b.get('Z', 1)), spin=b.get('spin', 1.0))
-        bulk_basis.append(orb)
-
-    global global_tb_model
-    global_tb_model = tb_lib.TB_model(bulk_basis, tb_dict, klib.kpath(np.array([[0,0,0]])))
-    print("Successfully reconstructed TB Model with", len(explicit_hopping), "hoppings!")
-
-    # Match local chinook_wrapper: shift eigenvalues so EF sits at 0.
-    if abs(e_fermi) > 1e-12:
-        _orig_solve_h = global_tb_model.solve_H
-
-        def _solve_h_ef(Eonly=False, _orig=_orig_solve_h, _ef=e_fermi):
-            Eband, Evec = _orig(Eonly=Eonly)
-            Eband = np.asarray(Eband) - _ef
-            return Eband, Evec
-
-        global_tb_model.solve_H = _solve_h_ef
-        print(f"Patched TB.solve_H to subtract e_fermi={e_fermi} eV", flush=True)
-
     e_kin = max(args.hv - args.workf, 0.1)
     k_radius = 0.512316 * np.sqrt(e_kin)
 
@@ -497,11 +696,7 @@ def main():
     args.nphi = len(phis)
     args.ne = len(e_axis)
 
-    num_hoppings = len(explicit_hopping)
-    del tb_dict
-    del explicit_hopping
-    del indices
-    del values
+    num_hoppings = len(indices)
     del data
     import gc
     gc.collect()
@@ -557,14 +752,34 @@ def main():
         return cube_out
 
     used_layout = layout
-    used_theta_chunk = int(args.theta_chunk) if args.theta_chunk else 0
+    cuda_devices = probe_cuda_devices() if (USE_GRIZZLY and GRIZZLY_DEVICE == "cuda") else []
+    gpu_ids = resolve_gpu_ids(int(args.ngpus), cuda_devices) if cuda_devices else []
+    if cuda_devices:
+        print(f"CUDA devices: {format_device_summary(cuda_devices)}", flush=True)
+        if gpu_ids:
+            print(f"Using GPU ids: {gpu_ids}", flush=True)
+
+    requested_chunk = int(args.theta_chunk) if args.theta_chunk else 0
     if layout == "full":
-        chunk_try = used_theta_chunk
-        chunk_schedule = [chunk_try]
-        # Auto OOM ladder: one-shot → half θ → 20 → 10 → 5 → 1, then slices.
-        for c in (max(1, args.ntheta // 2), 20, 10, 5, 1):
-            if c not in chunk_schedule and c < args.ntheta:
-                chunk_schedule.append(c)
+        if requested_chunk > 0:
+            first_chunk = requested_chunk
+        elif GRIZZLY_DEVICE == "cuda" and cuda_devices:
+            ref_dev = next((d for d in cuda_devices if d.index == gpu_ids[0]), cuda_devices[0])
+            first_chunk = plan_theta_chunk(
+                global_tb_model, args.ntheta, args.nphi, args.ne, ref_dev
+            )
+            print(
+                f"Auto θ-chunk={first_chunk} (VRAM plan on gpu{ref_dev.index}, "
+                f"free={ref_dev.free_bytes / 1024**3:.1f} GiB)",
+                flush=True,
+            )
+        else:
+            first_chunk = max(1, min(args.ntheta, 20))
+
+        chunk_schedule = shrink_chunk_schedule(
+            first_chunk, args.ntheta, include_one_shot=(requested_chunk <= 0 and not cuda_devices)
+        )
+        used_theta_chunk = first_chunk
         cube = None
         last_exc = None
         for chunk_try in chunk_schedule:
@@ -578,6 +793,9 @@ def main():
                     global_B_matrix,
                     GRIZZLY_DEVICE,
                     theta_chunk=chunk_try,
+                    gpu_ids=gpu_ids if chunk_try > 0 else None,
+                    tb_file=tb_path,
+                    e_fermi=e_fermi,
                 )
                 used_theta_chunk = chunk_try
                 last_exc = None

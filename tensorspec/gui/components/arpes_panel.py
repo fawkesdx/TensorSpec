@@ -740,8 +740,10 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                 # Upload runner + shared kmesh module
                 local_template = "tensorspec/core/arpes/one_step/chinook_remote_runner_template.py"
                 local_kmesh = "tensorspec/core/arpes/one_step/chinook_arpes_kmesh.py"
+                local_schedule = "tensorspec/core/arpes/one_step/grizzly_cuda_schedule.py"
                 sftp.put(local_template, f"{remote_dir}/chinook_remote_runner.py")
                 sftp.put(local_kmesh, f"{remote_dir}/chinook_arpes_kmesh.py")
+                sftp.put(local_schedule, f"{remote_dir}/grizzly_cuda_schedule.py")
                 
                 # Save and upload TB data
                 os.makedirs("scratch/chinook_gui_run", exist_ok=True)
@@ -883,14 +885,8 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                     f"--e_min {e_min} --e_max {e_max} --ne {e_steps} "
                     f"--hv {hv} --workf {workf} --v0 {v0} --temp {temp} --polar {polar} "
                     f"--cores {cores} --engine {me_engine} --device {me_device} "
-                    f"--layout {me_layout} --e_fermi {e_fermi}"
+                    f"--layout {me_layout} --e_fermi {e_fermi} --theta_chunk 0 --ngpus 0"
                 )
-                if (
-                    me_engine == "grizzly"
-                    and me_device == "cuda"
-                    and me_layout in ("auto", "full")
-                ):
-                    run_args += " --theta_chunk 20"
 
                 # SARPES Args (forces chinook fallback inside runner; GrizzlyME v0.1 is spinless)
                 if self.chk_enable_sarpes.isChecked():

@@ -348,6 +348,19 @@ def _apply_dipole(intensity_3d, K_BULK, A_bulk, num_x, num_y):
     return intensity_3d * dipole_factor[:, :, np.newaxis]
 
 
+def _diag_phase_budget_bytes(device: str) -> int:
+    """VRAM budget for inner diag Fourier phase buffer (per batch)."""
+    try:
+        import torch
+
+        if str(device).startswith("cuda") and torch.cuda.is_available():
+            free_b, _ = torch.cuda.mem_get_info()
+            return max(256 * 1024**2, int(free_b * 0.35))
+    except Exception:
+        pass
+    return 2 * 1024**3
+
+
 def _grizzly_diagonalize_tb(tb_model, device: str, nk: int):
     """GPU/CPU batched diag via GrizzlyME (replaces chinook TB.solve_H on large kmesh)."""
     from grizzly.hamiltonian import solve_H as grizzly_solve_H
@@ -355,8 +368,7 @@ def _grizzly_diagonalize_tb(tb_model, device: str, nk: int):
 
     n_hops = sum(len(me.H) for me in tb_model.mat_els)
     n_hops = max(int(n_hops), 1)
-    # Fourier phases are (chunk, Nh) complex128 — dominates VRAM when Nh is huge.
-    phase_budget_bytes = 2 * 1024**3
+    phase_budget_bytes = _diag_phase_budget_bytes(device)
     hop_limited = max(1, phase_budget_bytes // (n_hops * 16))
     nk_limited = max(256, (nk + 39) // 40) if nk > 2048 else nk
     chunk_size = min(hop_limited, nk_limited)
@@ -364,7 +376,8 @@ def _grizzly_diagonalize_tb(tb_model, device: str, nk: int):
         chunk_size = 0
     if chunk_size > 1:
         print(
-            f"GrizzlyME diag chunk: nk={nk} n_hops={n_hops} chunk_size={chunk_size}",
+            f"GrizzlyME diag chunk: nk={nk} n_hops={n_hops} "
+            f"chunk_size={chunk_size} phase_budget_MiB={phase_budget_bytes // (1024 * 1024)}",
             flush=True,
         )
     Eband, Evec = grizzly_solve_H(
