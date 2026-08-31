@@ -193,6 +193,28 @@ class QEGeneratorPanel(QWidget):
         parallel_layout.addWidget(self.chk_mpi); parallel_layout.addWidget(self.spin_cores); parallel_layout.addWidget(QLabel("Cores")); parallel_layout.addStretch() 
         qe_form.addRow("Parallel Execution:", parallel_layout)
 
+        # --- PWscf backend: CPU MPI (default) or QE-native CUDA ---
+        self.combo_pw_backend = QComboBox()
+        self.combo_pw_backend.addItem("CPU (MPI pw.x)", "cpu")
+        self.combo_pw_backend.addItem("GPU (CUDA pw.x)", "gpu")
+        self.combo_pw_backend.setToolTip(
+            "GPU uses Quantum ESPRESSO use_gpu=.true. (not GrizzlyME). "
+            "Requires pw.x built with CUDA (remote-cluster qe conda env). "
+            "Mac/local conda pw.x is usually CPU-only."
+        )
+        self.combo_gpu_device = QComboBox()
+        self.combo_gpu_device.addItem("GPU 0", "0")
+        self.combo_gpu_device.addItem("GPU 1", "1")
+        self.combo_gpu_device.addItem("Both GPUs (0+1)", "0,1")
+        self.combo_gpu_device.setEnabled(False)
+        self.combo_gpu_device.setToolTip(
+            "CUDA_VISIBLE_DEVICES for pw.x. MPI ranks should match GPU count."
+        )
+        self.combo_pw_backend.currentIndexChanged.connect(self._sync_pw_backend_ui)
+        self.combo_gpu_device.currentIndexChanged.connect(self._sync_pw_backend_ui)
+        qe_form.addRow("PWscf backend:", self.combo_pw_backend)
+        qe_form.addRow("CUDA device(s):", self.combo_gpu_device)
+
         # --- MACHINE AGNOSTIC EXECUTABLES ---
         self.line_pw_cmd = QLineEdit("pw.x")
         qe_form.addRow("pw.x Command:", self.line_pw_cmd)
@@ -259,6 +281,34 @@ class QEGeneratorPanel(QWidget):
         self.btn_run_qe.clicked.connect(self.run_qe_script)
         self.chk_mpi.stateChanged.connect(lambda: self.spin_cores.setEnabled(self.chk_mpi.isChecked()))
 
+
+    def _sync_pw_backend_ui(self, _index=None):
+        use_gpu = self.combo_pw_backend.currentData() == "gpu"
+        self.combo_gpu_device.setEnabled(use_gpu)
+        if use_gpu and self.chk_mpi.isChecked():
+            dev = self.combo_gpu_device.currentData() or "0"
+            n_ranks = 2 if "," in str(dev) else 1
+            if self.spin_cores.value() != n_ranks:
+                self.spin_cores.setValue(n_ranks)
+
+    def _pw_backend_flags(self):
+        """Return (use_gpu, cuda_devices, mpi_ranks) for script / input generation."""
+        use_gpu = self.combo_pw_backend.currentData() == "gpu"
+        if not use_gpu:
+            ranks = self.spin_cores.value() if self.chk_mpi.isChecked() else 1
+            return False, "", ranks
+        dev = str(self.combo_gpu_device.currentData() or "0")
+        ranks = dev.count(",") + 1
+        return True, dev, ranks
+
+    def _pipeline_env_header(self, use_gpu: bool, cuda_devices: str) -> str:
+        if not use_gpu:
+            return "export OMP_NUM_THREADS=1\n\n"
+        return (
+            "export OMP_NUM_THREADS=1\n"
+            f"export CUDA_VISIBLE_DEVICES={cuda_devices}\n"
+            "# QE GPU: pw.x must be CUDA build; MPI ranks ≈ number of GPUs\n\n"
+        )
 
     def populate_clusters(self):
         import json, os
@@ -331,10 +381,27 @@ class QEGeneratorPanel(QWidget):
         try:
             # Grab the SOC state directly from this QE panel!
             is_soc_enabled = self.chk_soc.isChecked()
+            use_gpu, cuda_devices, mpi_ranks = self._pw_backend_flags()
+            if use_gpu and is_soc_enabled:
+                QMessageBox.warning(
+                    self,
+                    "GPU + SOC",
+                    "QE GPU + noncollinear SOC can be slow or unsupported on some builds. "
+                    "Verify on your cluster before long runs.",
+                )
 
             # Generate all 4 configuration files, passing the SOC state
-            qe_gen.write_scf_input(out_dir, ecutwfc=ecut, kmesh=kmesh, use_soc=is_soc_enabled)
-            qe_gen.write_nscf_input(out_dir, ecutwfc=ecut, kmesh=kmesh, nbnd=nbnd, use_soc=is_soc_enabled)
+            qe_gen.write_scf_input(
+                out_dir, ecutwfc=ecut, kmesh=kmesh, use_soc=is_soc_enabled, use_gpu=use_gpu
+            )
+            qe_gen.write_nscf_input(
+                out_dir,
+                ecutwfc=ecut,
+                kmesh=kmesh,
+                nbnd=nbnd,
+                use_soc=is_soc_enabled,
+                use_gpu=use_gpu,
+            )
             
             # Pass the MLWF mode toggle 
             is_mlwf = (self.combo_wannier_mode.currentIndex() == 1)
@@ -347,13 +414,24 @@ class QEGeneratorPanel(QWidget):
             wan_exec = self.line_wan_cmd.text().strip()
             pw2wan_exec = self.line_pw2wan_cmd.text().strip()
             
-            mpi_cmd = f"mpirun --use-hwthread-cpus --oversubscribe -np {self.spin_cores.value()} " if self.chk_mpi.isChecked() else ""
+            mpi_cmd = (
+                f"mpirun --use-hwthread-cpus --oversubscribe -np {mpi_ranks} "
+                if self.chk_mpi.isChecked()
+                else ""
+            )
+            env_header = self._pipeline_env_header(use_gpu, cuda_devices)
             
             # Auto-populate portable script with exact commands based on Operating System
             if os.name == 'nt':
                 # Windows native PowerShell formatting
                 script_text = (
-                    "$env:OMP_NUM_THREADS=1\n\n"
+                    "$env:OMP_NUM_THREADS=1\n"
+                    + (
+                        f"$env:CUDA_VISIBLE_DEVICES='{cuda_devices}'\n"
+                        if use_gpu
+                        else ""
+                    )
+                    + "\n"
                     "# ==================================================================\n"
                     "# ADVANCED: HSE HYBRID FUNCTIONAL SWITCH\n"
                     "# By default, this script runs a standard PBE calculation.\n"
@@ -375,21 +453,21 @@ class QEGeneratorPanel(QWidget):
                 script_text = (
                     "#!/bin/bash\n"
                     "set -e\n"
-                    "export OMP_NUM_THREADS=1\n\n"
-                    "# ==================================================================\n"
-                    "# ADVANCED: HSE HYBRID FUNCTIONAL SWITCH\n"
-                    "# By default, this script runs a standard PBE calculation.\n"
-                    "# To run HSE, just uncomment (remove the '#') from the python command below.\n"
-                    "# ==================================================================\n"
-                    f"# python -c \"for f in ['scf.in','nscf.in']: d=open(f).read(); open(f,'w').write(d.replace('&SYSTEM','&SYSTEM\\n    input_dft=\\'hse\\',\\n    nqx1={kmesh[0]}, nqx2={kmesh[1]}, nqx3={kmesh[2]},'))\"\n\n"
-                    "mkdir -p out tmp\n" 
-                    "export TMPDIR=$(pwd)/tmp\n" 
-                    "# Edit this script to run specific parts of the pipeline\n"
-                    f"{mpi_cmd}{pw_exec} -in scf.in | tee scf.out\n"
-                    f"{mpi_cmd}{pw_exec} -in nscf.in | tee nscf.out\n"
-                    f"{wan_exec} -pp wannier90\n"
-                    f"{mpi_cmd}{pw2wan_exec} -in pw2wan.in | tee pw2wan.out\n"
-                    f"{wan_exec} wannier90\n"
+                    + env_header
+                    + "# ==================================================================\n"
+                    + "# ADVANCED: HSE HYBRID FUNCTIONAL SWITCH\n"
+                    + "# By default, this script runs a standard PBE calculation.\n"
+                    + "# To run HSE, just uncomment (remove the '#') from the python command below.\n"
+                    + "# ==================================================================\n"
+                    + f"# python -c \"for f in ['scf.in','nscf.in']: d=open(f).read(); open(f,'w').write(d.replace('&SYSTEM','&SYSTEM\\n    input_dft=\\'hse\\',\\n    nqx1={kmesh[0]}, nqx2={kmesh[1]}, nqx3={kmesh[2]},'))\"\n\n"
+                    + "mkdir -p out tmp\n"
+                    + "export TMPDIR=$(pwd)/tmp\n"
+                    + "# Edit this script to run specific parts of the pipeline\n"
+                    + f"{mpi_cmd}{pw_exec} -in scf.in | tee scf.out\n"
+                    + f"{mpi_cmd}{pw_exec} -in nscf.in | tee nscf.out\n"
+                    + f"{wan_exec} -pp wannier90\n"
+                    + f"{mpi_cmd}{pw2wan_exec} -in pw2wan.in | tee pw2wan.out\n"
+                    + f"{wan_exec} wannier90\n"
                 )
             
             self.script_editor.setPlainText(script_text)

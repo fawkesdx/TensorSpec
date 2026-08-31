@@ -361,28 +361,73 @@ def _diag_phase_budget_bytes(device: str) -> int:
     return 2 * 1024**3
 
 
-def _grizzly_diagonalize_tb(tb_model, device: str, nk: int):
+def _grizzly_diagonalize_tb(
+    tb_model, device: str, nk: int, *, Eonly: bool = False
+):
     """GPU/CPU batched diag via GrizzlyME (replaces chinook TB.solve_H on large kmesh)."""
     from grizzly.hamiltonian import solve_H as grizzly_solve_H
     from grizzly.utils import to_numpy
 
     n_hops = sum(len(me.H) for me in tb_model.mat_els)
     n_hops = max(int(n_hops), 1)
+    n_basis = int(getattr(tb_model, "n_basis", 0) or 0)
+    if n_basis <= 0 and getattr(tb_model, "basis", None) is not None:
+        n_basis = len(tb_model.basis)
+    n_basis = max(n_basis, 1)
+
     phase_budget_bytes = _diag_phase_budget_bytes(device)
-    hop_limited = max(1, phase_budget_bytes // (n_hops * 16))
+    # phases + contrib are both (Nk, Nh); add H(k) storage per k-point.
+    bytes_per_k = n_hops * 16 * 2 + n_basis * n_basis * 16
+    hop_limited = max(1, phase_budget_bytes // max(bytes_per_k, 1))
     nk_limited = max(256, (nk + 39) // 40) if nk > 2048 else nk
     chunk_size = min(hop_limited, nk_limited)
+    if str(device).startswith("cuda"):
+        if n_hops > 2_000_000:
+            chunk_size = min(chunk_size, 4)
+        elif n_hops > 500_000:
+            chunk_size = min(chunk_size, 12)
     if chunk_size >= nk:
         chunk_size = 0
     if chunk_size > 1:
         print(
-            f"GrizzlyME diag chunk: nk={nk} n_hops={n_hops} "
+            f"GrizzlyME diag chunk: nk={nk} n_hops={n_hops} n_basis={n_basis} "
             f"chunk_size={chunk_size} phase_budget_MiB={phase_budget_bytes // (1024 * 1024)}",
             flush=True,
         )
-    Eband, Evec = grizzly_solve_H(
-        tb_model, device=device, chunk_size=chunk_size, Eonly=False
-    )
+
+    def _run(dev: str, cs: int):
+        return grizzly_solve_H(tb_model, device=dev, chunk_size=cs, Eonly=Eonly)
+
+    try:
+        Eband, Evec = _run(device, chunk_size)
+    except Exception as exc:
+        oom = "out of memory" in str(exc).lower()
+        if not (str(device).startswith("cuda") and oom):
+            raise
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        if chunk_size > 1:
+            cs_retry = max(1, chunk_size // 4)
+            print(
+                f"WARN: CUDA OOM at chunk_size={chunk_size}; retry chunk_size={cs_retry}",
+                flush=True,
+            )
+            try:
+                Eband, Evec = _run(device, cs_retry)
+            except Exception:
+                print("WARN: CUDA OOM — falling back to Grizzly CPU", flush=True)
+                Eband, Evec = _run("cpu", 0)
+        else:
+            print("WARN: CUDA OOM — falling back to Grizzly CPU", flush=True)
+            Eband, Evec = _run("cpu", 0)
+
+    if Eonly:
+        return to_numpy(Eband), None
     return to_numpy(Eband), to_numpy(Evec)
 
 

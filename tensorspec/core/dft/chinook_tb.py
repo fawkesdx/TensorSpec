@@ -12,6 +12,8 @@ except ImportError:
     build_lib = None
     klib = None
 
+from tensorspec.core.arpes.one_step.chinook_arpes_kmesh import _grizzly_diagonalize_tb
+
 class ChinookTightBindingEngine:
     """
     Core engine for Tight Binding calculations using the Chinook backend.
@@ -322,9 +324,20 @@ class ChinookTightBindingEngine:
         self.tb_model = tb_model
         return basis, tb_model
 
-    def _diagonalize_tb(self, tb_model, k_points):
-        """Chinook-only diag. Do not call GrizzlyME from DFT suite — that API still moves."""
+    def _diagonalize_tb(
+        self,
+        tb_model,
+        k_points,
+        *,
+        need_eigenvectors: bool = True,
+        use_soc: bool = False,
+        w90_filepath=None,
+        diag_engine: str = "chinook",
+        diag_device: str = "cpu",
+    ):
+        """Diagonalize H(k). GrizzlyME only when explicitly requested in UI."""
         tb_model.Kobj = klib.kpath(k_points)
+        nk = len(k_points)
         if self._tb_debug:
             print("3. Successfully built K-path!")
             print("\n--- K-PATH & BASIS DEBUG ---")
@@ -333,10 +346,55 @@ class ChinookTightBindingEngine:
                 print(f"  {kp}")
             print("----------------------------\n")
 
+        eonly = not need_eigenvectors
+        engine = str(diag_engine or "chinook").strip().lower()
+        device = str(diag_device or "cpu").strip().lower()
+
+        if engine == "grizzly":
+            if use_soc and not w90_filepath:
+                raise ValueError(
+                    "GrizzlyME band diag does not support native Chinook SOC. "
+                    "Select Chinook, or use a Wannier90 spinor hr.dat."
+                )
+            try:
+                import grizzly.hamiltonian  # noqa: F401
+            except ImportError as exc:
+                raise ImportError(
+                    "GrizzlyME is not installed (pip install grizzlyme). "
+                    "Select Chinook in Band diag engine."
+                ) from exc
+            Eband, Evec = _grizzly_diagonalize_tb(
+                tb_model, device, nk, Eonly=eonly
+            )
+            tb_model.Eband = Eband
+            tb_model.Evec = Evec
+            tag = f"grizzly/{device}"
+            if eonly:
+                tag += "+eonly"
+            return tag
+
+        if eonly:
+            tb_model.solve_H(Eonly=True)
+            tb_model.Evec = None
+            return "chinook+eonly"
         tb_model.solve_H()
         return "chinook"
 
-    def solve_bands(self, k_points, custom_hopping=None, onsite_e=0.0, use_soc=False, soc_strength=0.5, w90_filepath=None, cutoffs=None, tb_mode="Simple Scalar", orbital_shifts=None):
+    def solve_bands(
+        self,
+        k_points,
+        custom_hopping=None,
+        onsite_e=0.0,
+        use_soc=False,
+        soc_strength=0.5,
+        w90_filepath=None,
+        cutoffs=None,
+        tb_mode="Simple Scalar",
+        orbital_shifts=None,
+        need_eigenvectors: bool = True,
+        diag_engine: str = "chinook",
+        diag_device: str = "cpu",
+    ):
         if build_lib is None or klib is None:
             raise ImportError("Chinook is not installed properly. Cannot calculate bands.")
         if not self.crystal_structure:
@@ -421,7 +479,15 @@ class ChinookTightBindingEngine:
                 raise RuntimeError(f"Chinook crashed during initialization: {e}") from e
 
         t_build = time.perf_counter()
-        backend = self._diagonalize_tb(tb_model, k_points)
+        backend = self._diagonalize_tb(
+            tb_model,
+            k_points,
+            need_eigenvectors=need_eigenvectors,
+            use_soc=use_soc,
+            w90_filepath=w90_filepath,
+            diag_engine=diag_engine,
+            diag_device=diag_device,
+        )
         t_diag = time.perf_counter()
 
         parse_s = t_parse - t_total
@@ -441,7 +507,7 @@ class ChinookTightBindingEngine:
         )
 
         eigenvalues = np.real(tb_model.Eband)
-        eigenvectors = tb_model.Evec
+        eigenvectors = tb_model.Evec if need_eigenvectors else None
 
         raw_labels = []
         for site in self.crystal_structure:

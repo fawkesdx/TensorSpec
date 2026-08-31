@@ -69,7 +69,7 @@ class QEInputGenerator:
                     kpts.append(f"  {x/kmesh[0]:.10f}  {y/kmesh[1]:.10f}  {z/kmesh[2]:.10f}")
         return kpts
 
-    def write_scf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), use_soc: bool = False):
+    def write_scf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), use_soc: bool = False, use_gpu: bool = False):
         """Generates the main self-consistent field (SCF) input file."""
         os.makedirs(out_dir, exist_ok=True)
         scf_path = os.path.join(out_dir, "scf.in")
@@ -81,8 +81,9 @@ class QEInputGenerator:
 
         atomic_species_str = self._generate_atomic_species(out_dir, use_soc)
         
-        # Use the UI toggle to inject SOC
+        # Use the UI toggle to inject SOC / optional QE CUDA offload
         soc_flags = "\n  noncolin = .true.\n  lspinorb = .true." if use_soc else ""
+        gpu_flags = "\n  use_gpu = .true." if use_gpu else ""
 
         scf_content = f"""&CONTROL
   calculation = 'scf'
@@ -99,7 +100,7 @@ class QEInputGenerator:
   ecutrho = {ecutrho}
   occupations = 'smearing'
   smearing = 'marzari-vanderbilt'
-  degauss = 0.01{soc_flags}
+  degauss = 0.01{soc_flags}{gpu_flags}
 /
 &ELECTRONS
   conv_thr = 1.0d-8
@@ -119,7 +120,7 @@ K_POINTS {{automatic}}
             f.write(scf_content)
         return scf_path
 
-    def write_nscf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), nbnd: int = 12, use_soc: bool = False):
+    def write_nscf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), nbnd: int = 12, use_soc: bool = False, use_gpu: bool = False):
         """Generates the non-self-consistent field (NSCF) input file with explicit k-points."""
         nscf_path = os.path.join(out_dir, "nscf.in")
         abs_out = os.path.abspath(os.path.join(out_dir, "out")) + "/"
@@ -133,8 +134,9 @@ K_POINTS {{automatic}}
         kpts = self._generate_explicit_kpoints(kmesh)
         kpts_qe = "\n".join([f"{k}  1.0" for k in kpts])
         
-        # Use the UI toggle to inject SOC
+        # Use the UI toggle to inject SOC / optional QE CUDA offload
         soc_flags = "\n  noncolin = .true.\n  lspinorb = .true." if use_soc else ""
+        gpu_flags = "\n  use_gpu = .true." if use_gpu else ""
 
         nscf_content = f"""&CONTROL
   calculation = 'nscf'
@@ -154,7 +156,7 @@ K_POINTS {{automatic}}
   ecutrho = {ecutrho}
   occupations = 'smearing'
   smearing = 'marzari-vanderbilt'
-  degauss = 0.01{soc_flags}
+  degauss = 0.01{soc_flags}{gpu_flags}
 /
 &ELECTRONS
   conv_thr = 1.0d-8

@@ -3,6 +3,13 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
                                QDoubleSpinBox, QPushButton, QGroupBox, QLabel, 
                                QSpinBox, QLineEdit, QComboBox, QCheckBox, QFileDialog)
 
+from tensorspec.gui.cluster_utils import (
+    cluster_display_name,
+    is_remote_target,
+    populate_compute_target_combo,
+    selected_cluster,
+)
+
 class TightBindingPanel(QWidget):
     """
     Isolated UI Component containing all inputs for the Tight Binding engine.
@@ -18,6 +25,20 @@ class TightBindingPanel(QWidget):
 
         tb_group = QGroupBox("Tight Binding Parameters")
         tb_form = QFormLayout(tb_group)
+
+        # --- Compute target (same cluster list as QE / ARPES) ---
+        self.combo_tb_target = QComboBox()
+        populate_compute_target_combo(self.combo_tb_target)
+        self.combo_tb_target.setToolTip(
+            "Local = calculate on this Mac. Remote = one click: upload, "
+            "run on cluster, download result, plot here."
+        )
+        self.lbl_tb_exec = QLabel("")
+        self.lbl_tb_exec.setWordWrap(True)
+        self.lbl_tb_exec.setStyleSheet("color: #666; font-size: 10px;")
+        tb_form.addRow("Compute target:", self.combo_tb_target)
+        tb_form.addRow(self.lbl_tb_exec)
+        self.combo_tb_target.currentIndexChanged.connect(self._sync_tb_target)
         
         # --- Dimension Toggle ---
         self.combo_k_mode = QComboBox()
@@ -126,9 +147,32 @@ class TightBindingPanel(QWidget):
         self.spin_k_res.setValue(100)
         self.spin_k_res.setSingleStep(50)
         tb_form.addRow("Points per Segment:", self.spin_k_res)
-        
+
+        # --- Band diagonalization backend (explicit; default Chinook CPU) ---
+        self.combo_band_diag = QComboBox()
+        self.combo_band_diag.addItem("Chinook (CPU)", "chinook")
+        self.combo_band_diag.addItem("GrizzlyME", "grizzly")
+        self.combo_band_diag.setToolTip(
+            "Chinook = default CPU reference. GrizzlyME = optional PyTorch accel "
+            "(pick CPU or CUDA below; requires pip install grizzlyme)."
+        )
+        self.combo_band_device = QComboBox()
+        self.combo_band_device.addItem("CPU", "cpu")
+        self.combo_band_device.addItem("CUDA (GPU)", "cuda")
+        self.combo_band_device.setEnabled(False)
+        self.combo_band_device.setToolTip(
+            "GrizzlyME only. Default CPU; pick CUDA for GPU clusters."
+        )
+        self.combo_band_diag.currentIndexChanged.connect(self._sync_band_diag_device)
+        self.combo_band_device.currentIndexChanged.connect(self._sync_band_diag_device)
+        tb_form.addRow("Band diag engine:", self.combo_band_diag)
+        tb_form.addRow("Grizzly device:", self.combo_band_device)
+
         self.spin_onsite = QDoubleSpinBox()
-        self.spin_onsite.setRange(-10.0, 10.0); self.spin_onsite.setValue(0.0); self.spin_onsite.setSingleStep(0.1)
+        self._sync_tb_target()
+        self.spin_onsite.setRange(-10.0, 10.0)
+        self.spin_onsite.setValue(0.0)
+        self.spin_onsite.setSingleStep(0.1)
         tb_form.addRow("On-site E (eV):", self.spin_onsite)
 
         # --- NEW: Orbital-Specific Energy Shifts ---
@@ -193,6 +237,35 @@ class TightBindingPanel(QWidget):
             tb_form.addRow(f"Hopping t{i}:", row)
 
         main_layout.addWidget(tb_group)
+
+    def is_remote_target(self) -> bool:
+        return is_remote_target(self.combo_tb_target)
+
+    def get_selected_cluster(self):
+        return selected_cluster(self.combo_tb_target)
+
+    def _sync_tb_target(self, _index=None) -> None:
+        if is_remote_target(self.combo_tb_target):
+            cluster = selected_cluster(self.combo_tb_target) or {}
+            self.lbl_tb_exec.setText(
+                f"Remote: {cluster_display_name(cluster)} — "
+                "Calculate = upload, run on server, download, plot here "
+                "(no separate Fetch button)."
+            )
+        else:
+            self.lbl_tb_exec.setText("Local: calculate and plot on this machine.")
+
+    def band_diag_settings(self) -> tuple[str, str]:
+        """(diag_engine, device) exactly as selected in the UI."""
+        engine = str(self.combo_band_diag.currentData() or "chinook")
+        if engine != "grizzly":
+            return engine, "cpu"
+        device = str(self.combo_band_device.currentData() or "cpu")
+        return engine, device
+
+    def _sync_band_diag_device(self, _index=None):
+        use_grizzly = self.combo_band_diag.currentData() == "grizzly"
+        self.combo_band_device.setEnabled(use_grizzly)
 
     def load_w90_file(self):
         """Opens a file dialog to load the Wannier90 hopping data."""

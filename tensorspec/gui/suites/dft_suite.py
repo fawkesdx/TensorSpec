@@ -1,6 +1,7 @@
 import sys
+import os
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QPushButton, QGroupBox, QComboBox, QMessageBox, 
                                QInputDialog, QSplitter, QScrollArea, QFileDialog, QLabel, QTextEdit)
@@ -16,6 +17,34 @@ from tensorspec.gui.components.dft_panels import TightBindingPanel
 from tensorspec.gui.components.qe_generator_panel import QEGeneratorPanel
 from PySide6.QtWidgets import QStackedWidget
 from tensorspec.gui.components.sprkkr_panels import SPRKKRDftPanel
+from tensorspec.core.dft.tb_remote_client import build_job_payload, run_remote_tb_bands
+from tensorspec.gui.cluster_utils import cluster_display_name
+
+
+class TBBandRunnerThread(QThread):
+    """Run TB band diag on remote cluster; download tb_bands_result.npz."""
+
+    log_signal = Signal(str)
+    finished_signal = Signal(bool, str, object)
+
+    def __init__(self, cluster, job, w90_filepath, parent=None):
+        super().__init__(parent)
+        self.cluster = cluster
+        self.job = job
+        self.w90_filepath = w90_filepath
+
+    def run(self):
+        try:
+            result = run_remote_tb_bands(
+                self.cluster,
+                self.job,
+                self.w90_filepath,
+                log_fn=self.log_signal.emit,
+            )
+            self.finished_signal.emit(True, "Remote bands downloaded.", result)
+        except Exception as exc:
+            self.finished_signal.emit(False, str(exc), None)
+
 
 class DFTSuite(QWidget):
     """
@@ -390,21 +419,12 @@ class DFTSuite(QWidget):
                 self.tb_panel.spin_r4.value()
             ]
             
-            eigenvalues, eigenvectors, orb_labels = self.engine.solve_bands(
-                k_vecs,
-                custom_hopping=custom_hopping,
-                onsite_e=self.tb_panel.spin_onsite.value(),
-                use_soc=is_soc,
-                soc_strength=soc_val,
-                w90_filepath=w90_file,
-                cutoffs=ui_cutoffs,
-                tb_mode=self.tb_panel.combo_tb_mode.currentText(),
-                orbital_shifts={
-                    '0': self.tb_panel.spin_onsite_s.value(),
-                    '1': self.tb_panel.spin_onsite_p.value(),
-                    '2': self.tb_panel.spin_onsite_d.value()
-                }
+            need_evecs = (
+                not is_2d
+                and self.tb_panel.combo_projection.currentText()
+                != "None (Standard Lines)"
             )
+            diag_engine, diag_device = self.tb_panel.band_diag_settings()
             onsite_e = float(self.tb_panel.spin_onsite.value())
             orbital_shifts = {
                 '0': float(self.tb_panel.spin_onsite_s.value()),
@@ -412,33 +432,178 @@ class DFTSuite(QWidget):
                 '2': float(self.tb_panel.spin_onsite_d.value()),
             }
             tb_mode = self.tb_panel.combo_tb_mode.currentText()
-            # --- UNIVERSAL FERMI ENERGY SHIFT ---
-            fermi_energy = 0.0
-            if w90_file:
-                import os
-                work_dir = os.path.dirname(w90_file)
-                # Hunt for the Fermi energy in the QE output logs
-                for out_name in ["nscf.out", "scf.out"]:
-                    out_path = os.path.join(work_dir, out_name)
-                    if os.path.exists(out_path):
-                        with open(out_path, 'r') as f:
-                            for line in f:
-                                if "the Fermi energy is" in line:
-                                    # Extracts the number from "the Fermi energy is     6.4404 ev"
-                                    fermi_energy = float(line.split()[4])
-                        if fermi_energy != 0.0:
-                            break
-            eigenvalues = eigenvalues - fermi_energy
-            
-            soc_title_tag = " (with SOC)" if is_soc and not w90_file else ""
-            mode_tag = "Wannier90" if w90_file else "Chinook"
-            title = f"{mode_tag} 2D Mesh" if is_2d else f"{mode_tag} Bands ({template_name.split()[0]} Path){soc_title_tag}"
+            fermi_energy = self._fermi_energy_from_w90(w90_file)
+
+            ctx = {
+                "is_2d": is_2d,
+                "k_vecs": k_vecs,
+                "k_dist": k_dist,
+                "node_idx": node_idx,
+                "labels": labels,
+                "template_name": template_name if not is_2d else "2D",
+                "w90_file": w90_file,
+                "is_soc": is_soc,
+                "soc_val": soc_val,
+                "onsite_e": onsite_e,
+                "orbital_shifts": orbital_shifts,
+                "tb_mode": tb_mode,
+                "fermi_energy": fermi_energy,
+                "custom_hopping": custom_hopping,
+                "ui_cutoffs": ui_cutoffs,
+                "need_evecs": need_evecs,
+                "diag_engine": diag_engine,
+                "diag_device": diag_device,
+            }
+
+            if self.tb_panel.is_remote_target():
+                cluster = self.tb_panel.get_selected_cluster()
+                if not cluster:
+                    raise ValueError(
+                        "Select a remote cluster under Compute target (Tight Binding panel)."
+                    )
+                job = build_job_payload(
+                    self.engine.crystal_structure,
+                    k_vecs,
+                    fermi_energy=fermi_energy,
+                    need_eigenvectors=need_evecs,
+                    diag_engine=diag_engine,
+                    diag_device=diag_device,
+                    use_soc=is_soc,
+                    soc_strength=soc_val,
+                    onsite_e=onsite_e,
+                    orbital_shifts=orbital_shifts,
+                    custom_hopping=custom_hopping,
+                    cutoffs=ui_cutoffs,
+                    tb_mode=tb_mode,
+                    w90_basename="wannier90_hr.dat" if w90_file else None,
+                )
+                self._pending_band_ctx = ctx
+                self.btn_calculate.setEnabled(False)
+                self.btn_calculate.setText("⏳ Remote: run + download...")
+                print(
+                    f"TB bands: remote submit -> {cluster_display_name(cluster)}",
+                    flush=True,
+                )
+                self._tb_band_thread = TBBandRunnerThread(
+                    cluster, job, w90_file, parent=self
+                )
+                self._tb_band_thread.log_signal.connect(
+                    lambda m: print(m, flush=True)
+                )
+                self._tb_band_thread.finished_signal.connect(self._on_tb_remote_done)
+                self._tb_band_thread.start()
+                return
+
+            eigenvalues, eigenvectors, orb_labels = self.engine.solve_bands(
+                k_vecs,
+                custom_hopping=custom_hopping,
+                onsite_e=onsite_e,
+                use_soc=is_soc,
+                soc_strength=soc_val,
+                w90_filepath=w90_file,
+                cutoffs=ui_cutoffs,
+                tb_mode=tb_mode,
+                orbital_shifts=orbital_shifts,
+                need_eigenvectors=need_evecs,
+                diag_engine=diag_engine,
+                diag_device=diag_device,
+            )
+            ctx["eigenvalues"] = eigenvalues - fermi_energy
+            ctx["eigenvectors"] = eigenvectors
+            ctx["orb_labels"] = orb_labels
+            self._finalize_and_plot_bands(ctx)
             
         except Exception as e:
             QMessageBox.warning(self, "Calculation Error", str(e))
             return
 
-        # Extract Basis Coordinates for ARPES
+    def _fermi_energy_from_w90(self, w90_file):
+        fermi_energy = 0.0
+        if not w90_file:
+            return fermi_energy
+        work_dir = os.path.dirname(w90_file)
+        for out_name in ("nscf.out", "scf.out"):
+            out_path = os.path.join(work_dir, out_name)
+            if os.path.exists(out_path):
+                with open(out_path, "r") as f:
+                    for line in f:
+                        if "the Fermi energy is" in line:
+                            fermi_energy = float(line.split()[4])
+                if fermi_energy != 0.0:
+                    break
+        return fermi_energy
+
+    def _on_tb_remote_done(self, success, message, result):
+        self.btn_calculate.setEnabled(True)
+        self.btn_calculate.setText("⚙️ Calculate Band Structure")
+        if not success:
+            QMessageBox.warning(self, "Remote TB bands", message)
+            return
+        eigenvalues, eigenvectors, orb_labels, fermi_energy = result
+        ctx = getattr(self, "_pending_band_ctx", None)
+        if not ctx:
+            QMessageBox.warning(self, "Remote TB bands", "Internal state lost.")
+            return
+        ctx = dict(ctx)
+        ctx["eigenvalues"] = eigenvalues
+        ctx["eigenvectors"] = eigenvectors
+        ctx["orb_labels"] = orb_labels
+        ctx["fermi_energy"] = fermi_energy
+        self._warm_local_tb_for_push(ctx)
+        self._finalize_and_plot_bands(ctx)
+        QMessageBox.information(
+            self,
+            "Remote TB bands",
+            f"{message}\nPlotted locally.",
+        )
+
+    def _warm_local_tb_for_push(self, ctx):
+        """Build local Chinook TB cache after remote-only diag (for Push to Workspace)."""
+        w90_file = ctx.get("w90_file")
+        if not w90_file or getattr(self.engine.chinook, "tb_model", None) is not None:
+            return
+        try:
+            k_one = np.asarray(ctx["k_vecs"][:1], dtype=float)
+            self.engine.solve_bands(
+                k_one,
+                onsite_e=ctx["onsite_e"],
+                use_soc=ctx["is_soc"],
+                soc_strength=ctx["soc_val"],
+                w90_filepath=w90_file,
+                cutoffs=ctx["ui_cutoffs"],
+                tb_mode=ctx["tb_mode"],
+                orbital_shifts=ctx["orbital_shifts"],
+                need_eigenvectors=False,
+                diag_engine="chinook",
+                diag_device="cpu",
+            )
+        except Exception as exc:
+            print(f"WARN: local TB warm-build skipped: {exc}", flush=True)
+
+    def _finalize_and_plot_bands(self, ctx):
+        is_2d = ctx["is_2d"]
+        k_vecs = ctx["k_vecs"]
+        k_dist = ctx.get("k_dist")
+        node_idx = ctx.get("node_idx")
+        labels = ctx.get("labels")
+        w90_file = ctx.get("w90_file")
+        is_soc = ctx["is_soc"]
+        onsite_e = ctx["onsite_e"]
+        orbital_shifts = ctx["orbital_shifts"]
+        tb_mode = ctx["tb_mode"]
+        fermi_energy = ctx["fermi_energy"]
+        eigenvalues = ctx["eigenvalues"]
+        eigenvectors = ctx.get("eigenvectors")
+        orb_labels = ctx["orb_labels"]
+        template_name = ctx.get("template_name", "Path")
+
+        soc_title_tag = " (with SOC)" if is_soc and not w90_file else ""
+        mode_tag = "Wannier90" if w90_file else "Chinook"
+        title = (
+            f"{mode_tag} 2D Mesh"
+            if is_2d
+            else f"{mode_tag} Bands ({template_name.split()[0]} Path){soc_title_tag}"
+        )
         basis_coords = []
         if self.engine.crystal_structure is not None:
             basis_coords = [site.coords.tolist() for site in self.engine.crystal_structure]
@@ -529,6 +694,14 @@ class DFTSuite(QWidget):
             projection_mode = self.tb_panel.combo_projection.currentText()
             
             if projection_mode != "None (Standard Lines)":
+                if eigenvectors is None:
+                    QMessageBox.warning(
+                        self,
+                        "Fat bands",
+                        "Eigenvectors were skipped (fast line mode). "
+                        "Re-calculate with fat-band target selected.",
+                    )
+                    return
                 target_el = projection_mode.replace("Element: ", "")
                 target_indices = [i for i, lbl in enumerate(orb_labels) if lbl.startswith(target_el)]
                 

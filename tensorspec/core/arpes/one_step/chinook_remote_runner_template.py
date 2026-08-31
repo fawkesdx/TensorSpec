@@ -24,15 +24,25 @@ except ImportError as e:
     print(f"FATAL: Chinook import failed!\n{traceback.format_exc()}")
     sys.exit(1)
 
+
+def _load_runner_module(module_name: str, path: str):
+    """Load a co-uploaded .py module (dataclasses need sys.modules pre-registration)."""
+    if module_name in sys.modules:
+        return sys.modules[module_name]
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 # Load shared kmesh module (uploaded beside this script on the remote cluster).
 _RUNNER_DIR = os.path.dirname(os.path.abspath(__file__))
 _KMESH_PATH = os.path.join(_RUNNER_DIR, "chinook_arpes_kmesh.py")
 if not os.path.isfile(_KMESH_PATH):
     print(f"FATAL: missing {_KMESH_PATH} — re-submit from GUI to upload kmesh module.", flush=True)
     sys.exit(1)
-_kmesh_spec = importlib.util.spec_from_file_location("chinook_arpes_kmesh", _KMESH_PATH)
-_kmesh = importlib.util.module_from_spec(_kmesh_spec)
-_kmesh_spec.loader.exec_module(_kmesh)
+_kmesh = _load_runner_module("chinook_arpes_kmesh", _KMESH_PATH)
 run_chinook_arpes = _kmesh.run_chinook_arpes
 run_grizzly_arpes = _kmesh.run_grizzly_arpes
 apply_chinook_runtime_patches = _kmesh.apply_chinook_runtime_patches
@@ -41,9 +51,7 @@ _SCHEDULE_PATH = os.path.join(_RUNNER_DIR, "grizzly_cuda_schedule.py")
 if not os.path.isfile(_SCHEDULE_PATH):
     print(f"FATAL: missing {_SCHEDULE_PATH} — re-submit from GUI to upload schedule module.", flush=True)
     sys.exit(1)
-_sched_spec = importlib.util.spec_from_file_location("grizzly_cuda_schedule", _SCHEDULE_PATH)
-_sched = importlib.util.module_from_spec(_sched_spec)
-_sched_spec.loader.exec_module(_sched)
+_sched = _load_runner_module("grizzly_cuda_schedule", _SCHEDULE_PATH)
 format_device_summary = _sched.format_device_summary
 plan_theta_chunk = _sched.plan_theta_chunk
 probe_cuda_devices = _sched.probe_cuda_devices
@@ -174,9 +182,7 @@ def _multigpu_theta_worker(gpu_id: int, task_queue, result_queue, payload: dict)
         sys.path.insert(0, runner_dir)
 
     kmesh_path = os.path.join(runner_dir, "chinook_arpes_kmesh.py")
-    spec = importlib.util.spec_from_file_location("chinook_arpes_kmesh", kmesh_path)
-    kmesh = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(kmesh)
+    kmesh = _load_runner_module("chinook_arpes_kmesh", kmesh_path)
     kmesh.apply_chinook_runtime_patches()
     run_grizzly = kmesh.run_grizzly_arpes
 
