@@ -218,8 +218,11 @@ class DFTSuite(QWidget):
         if not clusters:
             QMessageBox.warning(self, "Error", "No clusters found.")
             return
-            
-        target = clusters[0] # Default to first for embedded
+
+        target = None
+        if hasattr(self, "tb_panel") and self.tb_panel.is_remote_target():
+            target = self.tb_panel.get_selected_cluster()
+        target = target or clusters[0]
         
         from tensorspec.gui.components.compute_panel import LiveMonitorThread
         self.monitor_thread = LiveMonitorThread(target)
@@ -227,17 +230,20 @@ class DFTSuite(QWidget):
         self.monitor_thread.error_occurred.connect(self.monitor_error)
         self.monitor_thread.start()
         
+        self.live_log_widget.show()
         self.btn_start_live.setText("🛑 Stop Live Monitor")
         self.btn_start_live.setStyleSheet("background-color: #c0392b; color: white; font-weight: bold; padding: 8px;")
         
     def update_embedded_logs(self, data):
-        content = "=== REMOTE LIVE LOGS ===\n\n"
-        content += data.get('dft_jobs_text', '') + "\n"
-        content += "----------------------------------------\n"
+        content = "=== LIVE TASK MANAGER ===\n\n"
+        content += data.get('text_info', '')
+        if not content.strip().endswith("==="):
+            content += "\n----------------------------------------\n"
         content += data.get('full_log_tail', '')
         
-        # Keep text scrolled to the bottom so newest lines are visible
         self.txt_live_logs.setPlainText(content)
+        sb = self.txt_live_logs.verticalScrollBar()
+        sb.setValue(sb.maximum())
         sb = self.txt_live_logs.verticalScrollBar()
         sb.setValue(sb.maximum())
             
@@ -492,6 +498,7 @@ class DFTSuite(QWidget):
                 )
                 self._tb_band_thread.finished_signal.connect(self._on_tb_remote_done)
                 self._tb_band_thread.start()
+                self.start_embedded_monitor(force_start=True)
                 return
 
             eigenvalues, eigenvectors, orb_labels = self.engine.solve_bands(

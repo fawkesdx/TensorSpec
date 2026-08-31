@@ -11,6 +11,8 @@ from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
+from tensorspec.core.compute.cluster_live_monitor import fetch_cluster_snapshot
+
 CONFIG_FILE = os.path.expanduser('~/.tensorspec_clusters.json')
 
 class LiveMonitorThread(QThread):
@@ -57,63 +59,14 @@ class LiveMonitorThread(QThread):
                                 cpu_usage = float(parts[idx-1])
                             else:
                                 cpu_usage = float(parts[1])
-                        except:
+                        except Exception:
                             cpu_usage = 10.0
-                            
-                    # Fetch Text Info
-                    text_info = ""
-                    
-                    # Check GPU
-                    stdin, stdout, stderr = self.ssh.exec_command("nvidia-smi --query-gpu=name,utilization.gpu,memory.used,memory.total --format=csv,noheader", timeout=5)
-                    gpu_out = stdout.read().decode().strip()
-                    gpu_err = stderr.read().decode().strip()
-                    
-                    if gpu_err:
-                        text_info += "[ GPU Status ]\n" + gpu_err + "\n(Found 2x Tesla V100 but driver is crashed!)\n\n"
-                    elif gpu_out:
-                        text_info += "[ GPU Status ]\n" + gpu_out + "\n\n"
-                        
-                    stdin, stdout, stderr = self.ssh.exec_command("who", timeout=5)
-                    text_info += "[ Active Users Connected ]\n" + stdout.read().decode() + "\n"
-                    
-                    stdin, stdout, stderr = self.ssh.exec_command("ps -eo user,pid,stat,%cpu,%mem,command --sort=-%cpu | head -n 10", timeout=5)
-                    text_info += "[ Top Resource Hogs (All Users) ]\n" + stdout.read().decode() + "\n"
-                    
-                    # Check SPRKKR and QE jobs and exact elapsed time in seconds (etimes)
-                    stdin, stdout, stderr = self.ssh.exec_command("ps -u $USER -o pid,etimes,stat,%cpu,%mem,command | grep -E 'kkrscf|kkrspec|kkrgen|pw.x|wannier90|pw2wannier|run_pipeline' | grep -v grep", timeout=5)
-                    dft_jobs_raw = stdout.read().decode().strip().split('\n')
-                    
-                    dft_jobs_text = ""
-                    max_elapsed = 0
-                    if dft_jobs_raw and dft_jobs_raw[0]:
-                        for line in dft_jobs_raw:
-                            parts = line.split(maxsplit=5)
-                            if len(parts) >= 6:
-                                pid, etimes, stat, cpu_p, mem_p, cmd = parts
-                                dft_jobs_text += f"PID: {pid} | Time: {etimes}s | CPU: {cpu_p}% | MEM: {mem_p}%\n"
-                                try:
-                                    max_elapsed = max(max_elapsed, int(etimes))
-                                except:
-                                    pass
-                        text_info += "[ Running Ab-Initio Jobs ]\n" + dft_jobs_text + "\n"
-                    else:
-                        text_info += "[ Running Ab-Initio Jobs ]\nNo active SPRKKR or QE processes found.\n\n"
-                    
-                    # Dynamically find the most recently modified log file across QE, SPRKKR, and Chinook!
-                    find_cmd = f"ls -t /mnt/data/{self.cluster['user']}/tensorspec_heavy/*/*.full /mnt/data/{self.cluster['user']}/tensorspec_heavy/*/*.out 2>/dev/null | head -n 1"
-                    stdin, stdout, stderr = self.ssh.exec_command(find_cmd, timeout=5)
-                    latest_log = stdout.read().decode().strip()
-                    
-                    full_log_tail = ""
-                    if latest_log:
-                        stdin, stdout, stderr = self.ssh.exec_command(f"tail -n 50 {latest_log} 2>/dev/null", timeout=5)
-                        full_log_tail = f"=== Tailing Latest Log: {latest_log} ===\n\n" + stdout.read().decode()
-                    
-                    # Keep small tail for the hardware tab
-                    if full_log_tail.strip():
-                        small_tail = "\n".join(full_log_tail.split('\n')[-15:])
-                        text_info += f"[ Last 15 Lines of {latest_log} ]\n" + small_tail + "\n"
-                    
+
+                    snap = fetch_cluster_snapshot(self.ssh, self.cluster)
+                    text_info = snap["text_info"]
+                    full_log_tail = snap.get("full_log_tail", "")
+                    max_elapsed = snap.get("kkr_elapsed_seconds", 0)
+
                     self.data_ready.emit({
                         'cpu': min(100.0, cpu_usage * 2),
                         'mem_percent': (mem_used / mem_total) * 100 if mem_total > 0 else 0,
@@ -121,7 +74,10 @@ class LiveMonitorThread(QThread):
                         'mem_total': mem_total / 1024,
                         'text_info': text_info,
                         'full_log_tail': full_log_tail,
-                        'kkr_elapsed_seconds': max_elapsed
+                        'dft_jobs_text': snap.get("dft_jobs_text", ""),
+                        'kkr_elapsed_seconds': max_elapsed,
+                        'my_gpu_count': snap.get("my_gpu_count", 0),
+                        'other_gpu_users': snap.get("other_gpu_users", []),
                     })
                 except Exception as e:
                     self.error_occurred.emit(f"Fetch loop error: {e}")
@@ -208,7 +164,7 @@ class LiveClusterMonitor(QMainWindow):
         
         splitter.setSizes([350, 400])
         hw_layout.addWidget(splitter)
-        self.tabs.addTab(self.tab_hw, "📊 Hardware Performance")
+        self.tabs.addTab(self.tab_hw, "📊 Hardware & Tasks")
         
         # TAB 2: DFT Live Log Viewer
         self.tab_logs = QWidget()
@@ -260,15 +216,27 @@ class LiveClusterMonitor(QMainWindow):
         self.text_feed.setText(data['text_info'])
         self.log_feed.setText(data.get('full_log_tail', ''))
         
-        # Update timer
+        # Update timer / task summary
         elapsed_sec = data.get('kkr_elapsed_seconds', 0)
+        my_gpus = data.get('my_gpu_count', 0)
+        others = data.get('other_gpu_users', [])
         if elapsed_sec > 0:
             m, s = divmod(elapsed_sec, 60)
             h, m = divmod(m, 60)
-            self.timer_lbl.setText(f"⏱ Calculation Elapsed Time: {h:02d}:{m:02d}:{s:02d}")
+            extra = f" | your GPUs in use: {my_gpus}" if my_gpus else ""
+            if others:
+                extra += f" | other GPU users: {', '.join(others)}"
+            self.timer_lbl.setText(
+                f"⏱ Active job: {h:02d}:{m:02d}:{s:02d}{extra}"
+            )
             self.timer_lbl.setStyleSheet("font-weight: bold; color: #28a745; font-size: 18px;")
+        elif others:
+            self.timer_lbl.setText(
+                f"⏱ No your jobs — other GPU users: {', '.join(others)}"
+            )
+            self.timer_lbl.setStyleSheet("font-weight: bold; color: #e67e22; font-size: 18px;")
         else:
-            self.timer_lbl.setText("⏱ Calculation Elapsed Time: Not Running")
+            self.timer_lbl.setText("⏱ No active TensorSpec / GPU jobs detected")
             self.timer_lbl.setStyleSheet("font-weight: bold; color: #007bff; font-size: 18px;")
         
         if not self.is_recording:
@@ -373,25 +341,11 @@ class StatusFetchThread(QThread):
             
             stdin, stdout, stderr = ssh.exec_command("uptime", timeout=10)
             output_text += "[ System Uptime & Load ]\n" + stdout.read().decode() + "\n"
-            
-            stdin, stdout, stderr = ssh.exec_command("who", timeout=10)
-            output_text += "[ Active Users Connected ]\n" + stdout.read().decode() + "\n"
-            
-            stdin, stdout, stderr = ssh.exec_command("ps -eo user,pid,stat,%cpu,%mem,command --sort=-%cpu | head -n 10", timeout=10)
-            output_text += "[ Top Resource Hogs (All Users) ]\n" + stdout.read().decode() + "\n"
-            
-            stdin, stdout, stderr = ssh.exec_command("ps -u $USER -o pid,stat,%cpu,%mem,command | grep kkr | grep -v grep", timeout=10)
-            kkr_jobs = stdout.read().decode()
-            if kkr_jobs.strip():
-                output_text += "[ Running SPRKKR Jobs ]\n" + kkr_jobs + "\n"
-            else:
-                output_text += "[ Running SPRKKR Jobs ]\nNo active SPRKKR processes found.\n\n"
-                
-            log_path = f"/mnt/data/{self.cluster['user']}/tensorspec_heavy/sprkkr_gui_run/scf.out.full"
-            stdin, stdout, stderr = ssh.exec_command(f"tail -n 15 {log_path}", timeout=10)
-            log_tail = stdout.read().decode()
-            if log_tail.strip():
-                output_text += f"[ Last 15 Lines of {log_path} ]\n" + log_tail + "\n"
+
+            snap = fetch_cluster_snapshot(ssh, self.cluster)
+            output_text += snap["text_info"]
+            if snap.get("full_log_tail"):
+                output_text += "\n" + snap["full_log_tail"] + "\n"
                 
             ssh.close()
             self.result_ready.emit(output_text)

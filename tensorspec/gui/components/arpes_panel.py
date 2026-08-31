@@ -1216,7 +1216,7 @@ export OPENBLAS_NUM_THREADS=1
         self.btn_start_live.setStyleSheet("background-color: #c0392b; color: white; font-weight: bold; padding: 4px;")
 
     def update_embedded_logs(self, data):
-        content = "=== REMOTE LIVE LOGS ===\n\n"
+        content = "=== LIVE TASK MANAGER ===\n\n"
         content += data.get('text_info', '') + "\n"
         content += "----------------------------------------\n"
         content += data.get('full_log_tail', '')
