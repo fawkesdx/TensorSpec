@@ -72,14 +72,56 @@ class ARPESPanel(QWidget):
         engine_layout.addRow(QLabel("Compute Target:"), self.target_dropdown)
         control_layout.addWidget(engine_group)
 
+        # Remote Chinook/Grizzly debug toggles (shown for B1/B2/A + Remote)
+        self.remote_tb_opts = QGroupBox("1b. Remote TB backend (Chinook ↔ Grizzly debug)")
+        remote_tb_form = QFormLayout(self.remote_tb_opts)
+        self.combo_remote_me = QComboBox()
+        self.combo_remote_me.addItem("Chinook (CPU reference)", "chinook")
+        self.combo_remote_me.addItem("GrizzlyME", "grizzly")
+        self.combo_remote_me.addItem("Auto (Grizzly if installed)", "auto")
+        self.combo_remote_me.setCurrentIndex(0)  # default chinook while debugging
+        self.combo_remote_device = QComboBox()
+        self.combo_remote_device.addItem("CUDA", "cuda")
+        self.combo_remote_device.addItem("CPU", "cpu")
+        self.combo_remote_layout = QComboBox()
+        self.combo_remote_layout.addItem("θ-slices (safe; large TB)", "slices")
+        self.combo_remote_layout.addItem("Full cube (1 GPU job; may OOM)", "full")
+        self.combo_remote_layout.addItem("Auto (full if CUDA Grizzly)", "auto")
+        self.combo_remote_layout.setCurrentIndex(0)
+        self.remote_tb_cores_spin = QSpinBox()
+        self.remote_tb_cores_spin.setRange(1, 128)
+        self.remote_tb_cores_spin.setValue(40)
+        self.remote_tb_cores_spin.setPrefix("Cores: ")
+        remote_tb_form.addRow("ME engine:", self.combo_remote_me)
+        remote_tb_form.addRow("Grizzly device:", self.combo_remote_device)
+        remote_tb_form.addRow("Layout:", self.combo_remote_layout)
+        remote_tb_form.addRow("CPU workers:", self.remote_tb_cores_spin)
+        self.combo_remote_me.setToolTip(
+            "Chinook = reference CPU path. GrizzlyME = GPU/CPU accelerated ME. "
+            "Toggle to A/B debug intensity and speed."
+        )
+        self.combo_remote_layout.setToolTip(
+            "Full cube feeds one GPU job (fast when it fits VRAM). "
+            "Large Wannier TB often OOMs on full — use θ-slices then."
+        )
+        control_layout.addWidget(self.remote_tb_opts)
+        self.remote_tb_opts.hide()
+
         # Workspace & SOC Settings
         self.ws_group = QGroupBox("0. Crystal Structure & Bands (Workspace)")
-        ws_layout = QHBoxLayout(self.ws_group)
+        ws_layout = QVBoxLayout(self.ws_group)
+        ws_row = QHBoxLayout()
         self.ws_combo = QComboBox()
         self.btn_ws_refresh = QPushButton("🔄 Refresh")
         self.btn_ws_refresh.clicked.connect(self.refresh_workspace)
-        ws_layout.addWidget(self.ws_combo)
-        ws_layout.addWidget(self.btn_ws_refresh)
+        ws_row.addWidget(self.ws_combo)
+        ws_row.addWidget(self.btn_ws_refresh)
+        ws_layout.addLayout(ws_row)
+        self.lbl_band_energy_meta = QLabel("onsite / EF: (select a pushed band structure)")
+        self.lbl_band_energy_meta.setWordWrap(True)
+        self.lbl_band_energy_meta.setStyleSheet("color: #9ad; font-size: 11px;")
+        ws_layout.addWidget(self.lbl_band_energy_meta)
+        self.ws_combo.currentIndexChanged.connect(self._update_band_energy_meta_label)
         control_layout.addWidget(self.ws_group)
         
         # --- Remote Vaults for SPRKKR ---
@@ -104,6 +146,7 @@ class ARPESPanel(QWidget):
         self.vault_group.hide()
         
         self.engine_dropdown.currentIndexChanged.connect(self.on_engine_changed)
+        self.target_dropdown.currentIndexChanged.connect(self.on_target_changed)
         
         # 2. Final State & Thermodynamics
         param_group = QGroupBox("2. Final State & Thermodynamics")
@@ -173,6 +216,27 @@ class ARPESPanel(QWidget):
         beam_layout.addRow("Pol. Angle (Arbitrary):", self.lin_pol_angle_spin)
         beam_layout.addRow("Intensity Mode:", self.matrix_element_combo)
         control_layout.addWidget(beam_group)
+
+        # --- SARPES CONFIGURATION ---
+        self.group_sarpes = QGroupBox("Spin-Resolved ARPES (SARPES)")
+        sarpes_layout = QFormLayout()
+        
+        self.chk_enable_sarpes = QCheckBox("Enable SARPES Filter")
+        self.chk_enable_sarpes.setChecked(False)
+        
+        self.combo_spin_axis = QComboBox()
+        self.combo_spin_axis.addItems(["Sz (Z-Axis)", "Sx (X-Axis)", "Sy (Y-Axis)"])
+        
+        self.combo_spin_comp = QComboBox()
+        self.combo_spin_comp.addItems(["Spin Up (+)", "Spin Down (-)"])
+        
+        sarpes_layout.addRow(self.chk_enable_sarpes)
+        sarpes_layout.addRow("Projection Axis:", self.combo_spin_axis)
+        sarpes_layout.addRow("Spin Filter:", self.combo_spin_comp)
+        self.group_sarpes.setLayout(sarpes_layout)
+        
+        control_layout.addWidget(self.group_sarpes)
+
 
         
         
@@ -315,10 +379,14 @@ class ARPESPanel(QWidget):
         self.btn_start_live.setStyleSheet("background-color: #d35400; color: white; font-weight: bold; padding: 4px;")
         self.btn_start_live.clicked.connect(self.toggle_embedded_monitor)
         
-        self.btn_fetch_results = QPushButton("📥 Fetch SPRKKR Results")
+        self.btn_fetch_results = QPushButton("📥 Fetch Remote Results")
         self.btn_fetch_results.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; padding: 4px;")
-        self.btn_fetch_results.clicked.connect(self.fetch_sprkkr_results)
+        self.btn_fetch_results.clicked.connect(self.fetch_remote_results)
         self.btn_fetch_results.setEnabled(False)
+        self.btn_fetch_results.setToolTip(
+            "Pull finished cube from the selected remote cluster. Enabled whenever "
+            "Compute Target is Remote (Chinook → chinook_gui_run; SPR-KKR → vault / sprkkr_gui_run)."
+        )
         
         self.txt_live_logs = QTextEdit()
         self.txt_live_logs.setReadOnly(True)
@@ -335,6 +403,9 @@ class ARPESPanel(QWidget):
         self.live_log_widget.hide()
         
         self.live_monitor = None
+
+        # After remote widgets exist: sync Fetch/Monitor vs Physics×Target.
+        self._sync_remote_ui()
         
         self.main_splitter.addWidget(plot_panel)
         
@@ -521,10 +592,7 @@ class ARPESPanel(QWidget):
                     remote_dir = vault.get('remote_path') if vault else f"/mnt/data/{cluster['user']}/tensorspec_heavy/sprkkr_gui_run"
                     cluster_name = vault.get('cluster_name', vault.get('cluster', cluster.get('name', cluster['host'])))
 
-                ssh = paramiko.SSHClient()
-                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                pwd = cluster.get('password', '') or None
-                ssh.connect(cluster['host'], port=cluster.get('port', 22), username=cluster['user'], password=pwd, timeout=10)
+                ssh = self._ssh_connect(cluster)
                 
                 task_str = "ARPES"
                 polar = self.polarization_combo.currentText()
@@ -562,6 +630,13 @@ class ARPESPanel(QWidget):
                 
                 bin_path = f"/mnt/data/{cluster['user']}/tensorspec_heavy/SPRKKR/bin/kkrspec9.7"
                 run_args = f"--theta_min {kx_min} --theta_max {kx_max} --ntheta {kx_steps} --phi_min {ky_min} --phi_max {ky_max} --nphi {ky_steps} --bin {bin_path} --cores {cores}"
+
+                # SARPES Args
+                if self.chk_enable_sarpes.isChecked():
+                    axis_map = {"Sz (Z-Axis)": "Z", "Sx (X-Axis)": "X", "Sy (Y-Axis)": "Y"}
+                    comp_map = {"Spin Up (+)": 1, "Spin Down (-)": -1}
+                    run_args += f" --sarpes True --spin_axis {axis_map[self.combo_spin_axis.currentText()]} --spin_comp {comp_map[self.combo_spin_comp.currentText()]}"
+
                 
                 is_slurm = cluster.get('mode', '').upper() == 'SLURM'
                 if is_slurm:
@@ -605,7 +680,7 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                 QMessageBox.critical(self, "Error", f"Failed to run SPRKKR ARPES:\n{str(e)}")
             return
             
-        # --- CHINOOK EXECUTION (LOCAL OR REMOTE EINSTEIN) ---
+        # --- CHINOOK EXECUTION (LOCAL OR REMOTE CLUSTER) ---
         target_crystal = self.ws_combo.currentText()
         me_mode = self.matrix_element_combo.currentText()
 
@@ -622,6 +697,13 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
         e_min, e_max, e_steps = self.spin_e_min.value(), self.spin_e_max.value(), self.spin_e_steps.value()
         kx_min, kx_max, kx_steps = self.spin_kx_min.value(), self.spin_kx_max.value(), self.spin_kx_steps.value()
         ky_min, ky_max, ky_steps = self.spin_ky_min.value(), self.spin_ky_max.value(), self.spin_ky_steps.value()
+        # Same as local chinook_wrapper: min==max → 1 sample (avoid linspace(0,0,40) waste).
+        if kx_min == kx_max:
+            kx_steps = 1
+        if ky_min == ky_max:
+            ky_steps = 1
+        if e_min == e_max:
+            e_steps = 1
 
         band_data = global_workspace.pull_band_structure(target_crystal)
 
@@ -643,10 +725,7 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                     return
                 
                 remote_dir = f"/mnt/data/{cluster['user']}/tensorspec_heavy/chinook_gui_run"
-                ssh = paramiko.SSHClient()
-                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                pwd = cluster.get('password', '') or None
-                ssh.connect(cluster['host'], port=cluster.get('port', 22), username=cluster['user'], password=pwd, timeout=10)
+                ssh = self._ssh_connect(cluster)
                 sftp = ssh.open_sftp()
                 
                 try:
@@ -658,21 +737,29 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                 except:
                     pass
                     
-                # Upload runner template and tight-binding data
+                # Upload runner + shared kmesh module
                 local_template = "tensorspec/core/arpes/one_step/chinook_remote_runner_template.py"
+                local_kmesh = "tensorspec/core/arpes/one_step/chinook_arpes_kmesh.py"
                 sftp.put(local_template, f"{remote_dir}/chinook_remote_runner.py")
+                sftp.put(local_kmesh, f"{remote_dir}/chinook_arpes_kmesh.py")
                 
                 # Save and upload TB data
                 os.makedirs("scratch/chinook_gui_run", exist_ok=True)
                 tb_path_local = "scratch/chinook_gui_run/tb_data.npz"
+                physics_path_local = "scratch/chinook_gui_run/arpes_physics.json"
                 
-                # Compress massive H_dict into binary arrays
+                # Compress massive H_dict into binary arrays.
+                # R vectors are Cartesian floats (Wannier/SK) — must stay float64.
+                # (int32 truncation zeroed remote ARPES intensity at finite angle.)
                 h_list = band_data.get('H_dict', {}).get('list', [])
                 if len(h_list) > 0:
-                    indices = np.array([[h[0], h[1], h[2], h[3], h[4]] for h in h_list], dtype=np.int32)
+                    indices = np.array(
+                        [[h[0], h[1], h[2], h[3], h[4]] for h in h_list],
+                        dtype=np.float64,
+                    )
                     values = np.array([h[5] for h in h_list], dtype=np.complex128)
                 else:
-                    indices = np.empty((0, 5), dtype=np.int32)
+                    indices = np.empty((0, 5), dtype=np.float64)
                     values = np.empty(0, dtype=np.complex128)
                 
 
@@ -695,24 +782,122 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                                 'Z': getattr(b, 'Z', 1)
                             })
                 
-                np.savez_compressed(tb_path_local, 
-                                    indices=indices, 
-                                    values=values, 
-                                    basis_list=basis_list,
-                                    a_mat=band_data.get('H_dict', {}).get('a', []),
-                                    e_fermi=band_data.get('fermi_energy', 0.0))
+                b_matrix = band_data.get("recip_matrix")
+                if b_matrix is None and band_data.get("structure") is not None:
+                    b_matrix = band_data["structure"].lattice.reciprocal_lattice.matrix
+                elif b_matrix is None:
+                    a_list = band_data.get("H_dict", {}).get("a")
+                    if a_list is not None:
+                        A = np.array(a_list, dtype=float)
+                        b_matrix = 2 * np.pi * np.linalg.inv(A).T
+                if b_matrix is None:
+                    b_matrix = 2 * np.pi * np.eye(3)
+
+                np.savez_compressed(
+                    tb_path_local,
+                    indices=indices,
+                    values=values,
+                    basis_list=basis_list,
+                    a_mat=band_data.get('H_dict', {}).get('a', []),
+                    b_matrix=np.asarray(b_matrix, dtype=float),
+                    e_fermi=float(
+                        band_data.get(
+                            'arpes_e_fermi_shift',
+                            band_data.get('fermi_energy', 0.0),
+                        )
+                        or 0.0
+                    ),
+                    onsite_e=float(band_data.get('onsite_e', 0.0) or 0.0),
+                    fermi_energy_qe=float(band_data.get('fermi_energy', 0.0) or 0.0),
+                    h_includes_onsite=bool(band_data.get('h_includes_onsite', False)),
+                )
+                print(
+                    f"[ARPES remote] TB upload: hops={len(indices)} "
+                    f"indices.dtype={indices.dtype} "
+                    f"onsite_e={band_data.get('onsite_e', 'MISSING')} "
+                    f"QE_fermi={band_data.get('fermi_energy', 'MISSING')} "
+                    f"arpes_e_shift={band_data.get('arpes_e_fermi_shift', band_data.get('fermi_energy', 0.0))} "
+                    f"R_sample={indices[0, 2:5] if len(indices) else 'n/a'}",
+                    flush=True,
+                )
+
+                from tensorspec.core.arpes.one_step.chinook_arpes_kmesh import (
+                    physics_from_experiment_kwargs,
+                )
+
+                remote_physics = physics_from_experiment_kwargs(
+                    {
+                        "photon_energy": self.photon_energy_spin.value(),
+                        "work_function": self.work_function_spin.value(),
+                        "inner_potential": self.inner_potential_spin.value(),
+                        "temperature": self.temperature_spin.value(),
+                        "incidence_angle": self.incidence_angle_spin.value(),
+                        "polarization": self.polarization_combo.currentText(),
+                        "lin_pol_angle": self.lin_pol_angle_spin.value(),
+                        "matrix_element_mode": me_mode,
+                        "manip_theta": self.manip_theta_spin.value(),
+                        "manip_azimuth": self.manip_azi_spin.value(),
+                        "manip_tilt": self.manip_tilt_spin.value(),
+                        "hkl": (
+                            self.spin_h.value(),
+                            self.spin_k.value(),
+                            self.spin_l.value(),
+                        ),
+                        "slit_angle": self.slit_angle_spin.value(),
+                        "se_width": self.ui_se_spinbox.value(),
+                        "res_E": self.ui_res_e_spinbox.value(),
+                        "res_k": self.ui_res_k_spinbox.value(),
+                    }
+                )
+                with open(physics_path_local, "w") as pf:
+                    json.dump(
+                        {**remote_physics, "hkl": list(remote_physics["hkl"])},
+                        pf,
+                        indent=2,
+                    )
                     
                 sftp.put(tb_path_local, f"{remote_dir}/tb_data.npz")
+                sftp.put(physics_path_local, f"{remote_dir}/arpes_physics.json")
                 sftp.close()
                 
-                cores = self.remote_cores_spin.value()
+                cores = self.remote_tb_cores_spin.value()
                 hv = self.photon_energy_spin.value()
                 workf = self.work_function_spin.value()
                 v0 = self.inner_potential_spin.value()
                 temp = self.temperature_spin.value()
                 polar = "P" if "Linear" in self.polarization_combo.currentText() else "S"
-                
-                run_args = f"--tb_file tb_data.npz --theta_min {kx_min} --theta_max {kx_max} --ntheta {kx_steps} --phi_min {ky_min} --phi_max {ky_max} --nphi {ky_steps} --e_min {e_min} --e_max {e_max} --ne {e_steps} --hv {hv} --workf {workf} --v0 {v0} --temp {temp} --polar {polar} --cores {cores}"
+                e_fermi = float(
+                    band_data.get(
+                        'arpes_e_fermi_shift',
+                        band_data.get('fermi_energy', 0.0),
+                    )
+                    or 0.0
+                )
+                me_engine = self.combo_remote_me.currentData()
+                me_device = self.combo_remote_device.currentData()
+                me_layout = self.combo_remote_layout.currentData()
+
+                run_args = (
+                    f"--tb_file tb_data.npz --theta_min {kx_min} --theta_max {kx_max} --ntheta {kx_steps} "
+                    f"--phi_min {ky_min} --phi_max {ky_max} --nphi {ky_steps} "
+                    f"--e_min {e_min} --e_max {e_max} --ne {e_steps} "
+                    f"--hv {hv} --workf {workf} --v0 {v0} --temp {temp} --polar {polar} "
+                    f"--cores {cores} --engine {me_engine} --device {me_device} "
+                    f"--layout {me_layout} --e_fermi {e_fermi}"
+                )
+                if (
+                    me_engine == "grizzly"
+                    and me_device == "cuda"
+                    and me_layout in ("auto", "full")
+                ):
+                    run_args += " --theta_chunk 20"
+
+                # SARPES Args (forces chinook fallback inside runner; GrizzlyME v0.1 is spinless)
+                if self.chk_enable_sarpes.isChecked():
+                    axis_map = {"Sz (Z-Axis)": "Z", "Sx (X-Axis)": "X", "Sy (Y-Axis)": "Y"}
+                    comp_map = {"Spin Up (+)": 1, "Spin Down (-)": -1}
+                    run_args += f" --sarpes True --spin_axis {axis_map[self.combo_spin_axis.currentText()]} --spin_comp {comp_map[self.combo_spin_comp.currentText()]}"
+
                 
                 is_slurm = cluster.get('mode', '').upper() == 'SLURM'
                 if is_slurm:
@@ -751,7 +936,11 @@ export OPENBLAS_NUM_THREADS=1
                 self.toggle_embedded_monitor(force_start=True)
                 return
             except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to dispatch CHINOOK to the remote cluster:\n{str(e)}")
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to dispatch CHINOOK to {cluster_label}:\n{str(e)}",
+                )
                 return
         
         # --- LOCAL EXECUTION ---
@@ -802,30 +991,51 @@ export OPENBLAS_NUM_THREADS=1
             e_min, e_max, e_steps = self.spin_e_min.value(), self.spin_e_max.value(), self.spin_e_steps.value()
             kx_min, kx_max, kx_steps = self.spin_kx_min.value(), self.spin_kx_max.value(), self.spin_kx_steps.value()
             ky_min, ky_max, ky_steps = self.spin_ky_min.value(), self.spin_ky_max.value(), self.spin_ky_steps.value()
+            if kx_min == kx_max:
+                kx_steps = 1
+            if ky_min == ky_max:
+                ky_steps = 1
+            if e_min == e_max:
+                e_steps = 1
 
             self.sim_intensity = results['intensity_broadened']
             
-            # --- PATCH: DYNAMIC DIMENSION DETECTION ---
-            # Read the actual dimensions returned by the backend, ignoring UI spinboxes if they were bypassed
+            # Prefer axes from remote npz when present (truth for remote fetches).
             nx, ny, ne = self.sim_intensity.shape
+            if results.get('energy') is not None:
+                self.sim_E_axis = np.asarray(results['energy'], dtype=float)
+            else:
+                self.sim_E_axis = np.linspace(e_min, e_max, ne)
+            if results.get('theta') is not None:
+                self.sim_kx = np.asarray(results['theta'], dtype=float)
+            else:
+                self.sim_kx = np.linspace(kx_min, kx_max, nx)
+            if results.get('phi') is not None:
+                self.sim_ky = np.asarray(results['phi'], dtype=float)
+            else:
+                self.sim_ky = np.linspace(ky_min, ky_max, ny)
+
+            # Remote/UI grids are emission angles (deg), not Å⁻¹.
+            self.sim_axes_are_angles = True
             
-            self.sim_E_axis = np.linspace(e_min, e_max, ne)
-            self.sim_kx = np.linspace(kx_min, kx_max, nx)
-            self.sim_ky = np.linspace(ky_min, ky_max, ny)
-            
-            if ny == 1 or nx == 1:
-                # It is a 2D Band Dispersion Map (Energy vs Momentum)
+            if (
+                ny == 1
+                or nx == 1
+                or self._axis_degenerate(self.sim_ky)
+                or self._axis_degenerate(self.sim_kx)
+            ):
+                # 2D Band Dispersion Map (Energy vs angle)
                 self.energy_slider.setEnabled(False)
                 self.energy_spinbox.setEnabled(False)
                 self.update_plot_slice(index=None)
             else:
-                # It is a 3D Cube (Constant Energy Contours)
+                # 3D Cube (Constant Energy Contours)
                 self.energy_slider.setRange(0, ne - 1)
                 
                 # Setup Spinbox Range
-                self.energy_spinbox.setRange(self.sim_E_axis[0], self.sim_E_axis[-1])
+                self.energy_spinbox.setRange(float(self.sim_E_axis[0]), float(self.sim_E_axis[-1]))
                 
-                fermi_idx = np.abs(self.sim_E_axis).argmin()
+                fermi_idx = int(np.abs(self.sim_E_axis).argmin())
                 self.energy_slider.setEnabled(True)
                 self.energy_spinbox.setEnabled(True)
                 
@@ -867,18 +1077,26 @@ export OPENBLAS_NUM_THREADS=1
         nx, ny, ne = self.sim_intensity.shape
         self.ax.clear()
 
-        # --- ROUTE 1: PLOT BAND DISPERSION (E vs k) ---
-        if ny == 1 or nx == 1:
-            self.energy_label.setText(f"Band Dispersion Map")
+        use_angles = getattr(self, 'sim_axes_are_angles', True)
+        x_lab = r"$\Theta$ (slit) [deg]" if use_angles else r"$k_x$ ($\mathrm{\AA}^{-1}$)"
+        y_lab = r"$\Phi$ (deflect) [deg]" if use_angles else r"$k_y$ ($\mathrm{\AA}^{-1}$)"
+
+        # Degenerate φ=0…0 (or θ) → band map, not a squeezed contour.
+        deg_y = ny == 1 or self._axis_degenerate(self.sim_ky)
+        deg_x = nx == 1 or self._axis_degenerate(self.sim_kx)
+
+        # --- ROUTE 1: PLOT BAND DISPERSION (E vs angle) ---
+        if deg_y or deg_x:
+            self.energy_label.setText("Band Dispersion Map")
             
-            if ny == 1:
-                slice_2d = self.sim_intensity[:, 0, :].T  
+            if deg_y:
+                slice_2d = self.sim_intensity[:, 0, :].T
                 x_axis = self.sim_kx
-                x_label = r"$k_x$ ($\mathrm{\AA}^{-1}$)"
+                x_label = x_lab
             else:
-                slice_2d = self.sim_intensity[0, :, :].T  
+                slice_2d = self.sim_intensity[0, :, :].T
                 x_axis = self.sim_ky
-                x_label = r"$k_y$ ($\mathrm{\AA}^{-1}$)"
+                x_label = y_lab
                 
             slice_max = np.max(slice_2d) if np.max(slice_2d) > 0 else 1.0
             norm_slice = slice_2d / slice_max
@@ -887,12 +1105,12 @@ export OPENBLAS_NUM_THREADS=1
             self.ax.pcolormesh(x_axis, self.sim_E_axis, gamma_corrected, shading='auto', cmap='afmhot', 
                                vmin=self.vmin_spin.value(), vmax=self.vmax_spin.value())
             
-            self.ax.set_aspect('auto')  # Free the aspect ratio for bands
+            self.ax.set_aspect('auto')
             self.ax.set_title("Simulated ARPES Band Dispersion")
             self.ax.set_xlabel(x_label)
-            self.ax.set_ylabel("Binding Energy (eV)")
+            self.ax.set_ylabel(r"$E - E_F$ [eV]")
 
-        # --- ROUTE 2: PLOT CONSTANT ENERGY CONTOUR (kx vs ky) ---
+        # --- ROUTE 2: PLOT CONSTANT ENERGY CONTOUR ---
         else:
             if index is None: 
                 index = self.energy_slider.value()
@@ -907,16 +1125,19 @@ export OPENBLAS_NUM_THREADS=1
             
             self.ax.pcolormesh(self.sim_kx, self.sim_ky, gamma_corrected, shading='auto', cmap='afmhot', 
                                vmin=self.vmin_spin.value(), vmax=self.vmax_spin.value())
-            
-            self.ax.set_aspect('equal') # Lock aspect ratio for Fermi surfaces
+
+            span_x = float(np.ptp(self.sim_kx))
+            span_y = float(np.ptp(self.sim_ky))
+            if span_x > 1e-9 and span_y > 1e-9 and 0.05 < (span_y / span_x) < 20:
+                self.ax.set_aspect('equal')
+            else:
+                self.ax.set_aspect('auto')
             self.ax.set_title(f"Constant Energy Contour: {E_val:.2f} eV")
-            self.ax.set_xlabel(r"$k_x$ ($\mathrm{\AA}^{-1}$)")
-            self.ax.set_ylabel(r"$k_y$ ($\mathrm{\AA}^{-1}$)")
+            self.ax.set_xlabel(x_lab)
+            self.ax.set_ylabel(y_lab)
             
-            # --- NEW: TRIGGER BZ OVERLAY ---
             if getattr(self, 'chk_overlay_bz', None) and self.chk_overlay_bz.isChecked():
                 self._draw_bz_overlay()
-            # -------------------------------
             
         self.figure.subplots_adjust(left=0.15, right=0.9, top=0.9, bottom=0.15)
         self.canvas.draw()
@@ -949,6 +1170,31 @@ export OPENBLAS_NUM_THREADS=1
             except:
                 pass
         return None
+
+    def _ssh_connect(self, cluster):
+        """Paramiko connect with longer banner/kex timeouts (slow remote hosts)."""
+        import paramiko
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        pwd = cluster.get('password', '') or None
+        # banner_timeout / auth_timeout matter more than connect timeout for kex stalls
+        ssh.connect(
+            cluster['host'],
+            port=cluster.get('port', 22),
+            username=cluster['user'],
+            password=pwd,
+            timeout=30,
+            banner_timeout=90,
+            auth_timeout=60,
+            allow_agent=True,
+            look_for_keys=True,
+        )
+        return ssh
+
+    @staticmethod
+    def _axis_degenerate(axis) -> bool:
+        axis = np.asarray(axis, dtype=float)
+        return axis.size <= 1 or float(np.ptp(axis)) < 1e-9
 
     def toggle_embedded_monitor(self, force_start=False):
         if self.live_monitor and self.live_monitor.isRunning():
@@ -998,6 +1244,10 @@ export OPENBLAS_NUM_THREADS=1
 
 
 
+    def fetch_remote_results(self):
+        """Fetch remote ARPES cube (Chinook or SPR-KKR)."""
+        return self.fetch_sprkkr_results()
+
     def fetch_sprkkr_results(self):
         vault_name = self.vault_combo.currentText()
         model_choice = self.engine_dropdown.currentData()
@@ -1009,6 +1259,8 @@ export OPENBLAS_NUM_THREADS=1
         cluster = self.get_selected_cluster()
         if not cluster: return
         
+        # Chinook / bare / three-step remote → chinook_gui_run.
+        # Only SPR-KKR (B3) uses SPRKKR vault paths.
         is_chinook_remote = (model_choice != "B3" and self.target_dropdown.currentData() != "local")
         
         if is_chinook_remote:
@@ -1023,10 +1275,7 @@ export OPENBLAS_NUM_THREADS=1
             target_cube_name = "arpes_cube.npz"
 
         try:
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            pwd = cluster.get('password', '') or None
-            ssh.connect(cluster['host'], port=cluster.get('port', 22), username=cluster['user'], password=pwd, timeout=10)
+            ssh = self._ssh_connect(cluster)
             
             sftp = ssh.open_sftp()
             os.makedirs("scratch", exist_ok=True)
@@ -1039,24 +1288,31 @@ export OPENBLAS_NUM_THREADS=1
             data = np.load(local_path, allow_pickle=True)
             if 'cube' in data:
                 intensity_3d = data['cube']
-                e_axis = data['energy']
-                kxs = data['theta']
-                kys = data['phi']
+                results = {
+                    'intensity_broadened': intensity_3d,
+                    'energy': data['energy'] if 'energy' in data else None,
+                    'theta': data['theta'] if 'theta' in data else None,
+                    'phi': data['phi'] if 'phi' in data else None,
+                }
             else:
                 intensity_3d = data['intensity']
-                e_axis = data['e_axis']
-                kxs = data['kx']
-                kys = data['ky']
+                results = {
+                    'intensity_broadened': intensity_3d,
+                    'energy': data['e_axis'] if 'e_axis' in data else None,
+                    'theta': data['kx'] if 'kx' in data else None,
+                    'phi': data['ky'] if 'ky' in data else None,
+                }
             
-            # Ensure intensity is correct shape (nx, ny, ne)
-            results = {'intensity_broadened': intensity_3d}
-            
-            # Note: The existing on_simulation_finished logic reads nx,ny,ne from the spinboxes!
-            # It will match the array shape if the spinboxes haven't been touched since running.
             self.on_simulation_finished(True, results, "Fetched successfully")
             
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to fetch results:\n{str(e)}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to fetch results:\n{str(e)}\n\n"
+                "If this is a Paramiko key-exchange timeout, retry Fetch "
+                "(slow network / VPN). Connect timeout was increased to 90s banner.",
+            )
 
     def push_arpes_to_workspace(self):
         if not hasattr(self, 'sim_intensity'): return
@@ -1099,26 +1355,80 @@ export OPENBLAS_NUM_THREADS=1
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save data:\n{e}")
     
-    def on_engine_changed(self):
-        if self.engine_dropdown.currentData() == "B3":
+
+    def _is_remote_target(self) -> bool:
+        return self.target_dropdown.currentData() != "local"
+
+    def _sync_remote_ui(self):
+        """Show/enable live-monitor + fetch from Physics Model × Compute Target.
+
+        Rules:
+        - Local + (B1/B2/A): hide remote panel; fetch off.
+        - Remote + (B1/B2/A): show panel; fetch on → chinook_gui_run cube.
+        - B3 (SPR-KKR): always show panel + vault; fetch on (vault / sprkkr path).
+        Fetch must NOT require a fresh submit this session (finished jobs on remote cluster).
+        """
+        model = self.engine_dropdown.currentData()
+        remote = self._is_remote_target()
+
+        if model == "B3":
             self.ws_group.hide()
             self.vault_group.show()
+            self.remote_tb_opts.hide()
+            self.matrix_element_combo.hide()
             self.live_log_widget.show()
-            self.matrix_element_combo.hide() # SPRKKR handles ME natively
-            self.refresh_workspace()
+            self.btn_fetch_results.setEnabled(True)
+            self.btn_start_live.setEnabled(True)
         else:
             self.ws_group.show()
             self.vault_group.hide()
-            self.live_log_widget.hide()
             self.matrix_element_combo.show()
+            if remote:
+                self.remote_tb_opts.show()
+                self.live_log_widget.show()
+                self.btn_fetch_results.setEnabled(True)
+                self.btn_start_live.setEnabled(True)
+            else:
+                self.remote_tb_opts.hide()
+                self.live_log_widget.hide()
+                self.btn_fetch_results.setEnabled(False)
+                self.btn_start_live.setEnabled(False)
+
+    def on_target_changed(self):
+        self._sync_remote_ui()
+
+    def on_engine_changed(self):
+        self._sync_remote_ui()
+
+
+    def _update_band_energy_meta_label(self):
+        name = self.ws_combo.currentText()
+        if not name or name == "No band structures found":
+            self.lbl_band_energy_meta.setText("onsite / EF: (select a pushed band structure)")
+            return
+        band = global_workspace.pull_band_structure(name)
+        if not band:
+            self.lbl_band_energy_meta.setText("onsite / EF: (not found in workspace)")
+            return
+        onsite = band.get('onsite_e', 'MISSING')
+        ef = band.get('fermi_energy', band.get('e_fermi', 'MISSING'))
+        shift = band.get('arpes_e_fermi_shift', ef)
+        baked = band.get('h_includes_onsite', False)
+        self.lbl_band_energy_meta.setText(
+            f"From DFT push: onsite_e={onsite} eV | QE Fermi={ef} eV | "
+            f"ARPES E-shift={shift} eV | onsite baked in H={baked}"
+        )
 
     def refresh_workspace(self):
         bands = global_workspace.list_band_structures()
+        self.ws_combo.blockSignals(True)
         self.ws_combo.clear()
         if not bands:
             self.ws_combo.addItem("No band structures found")
         else:
             self.ws_combo.addItems(bands)
+        self.ws_combo.blockSignals(False)
+        self._update_band_energy_meta_label()
             
         vaults = global_workspace.list_remote_runs(engine="SPRKKR")
         self.vault_combo.clear()
@@ -1135,7 +1445,14 @@ export OPENBLAS_NUM_THREADS=1
             QMessageBox.warning(self, "Invalid", "You cannot delete the temporary scratch run or an empty vault.")
             return
             
-        reply = QMessageBox.question(self, 'Delete Vault', f"Are you sure you want to delete '{vault_name}' from the Workspace?\n\n(This will also SSH into the remote cluster and delete the remote folder!)", QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        reply = QMessageBox.question(
+            self,
+            'Delete Vault',
+            f"Are you sure you want to delete '{vault_name}' from the Workspace?\n\n"
+            "(This will also SSH into the remote cluster and delete the remote folder!)",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
         
         if reply == QMessageBox.Yes:
             vault = global_workspace.get(vault_name)

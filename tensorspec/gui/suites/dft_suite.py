@@ -405,6 +405,13 @@ class DFTSuite(QWidget):
                     '2': self.tb_panel.spin_onsite_d.value()
                 }
             )
+            onsite_e = float(self.tb_panel.spin_onsite.value())
+            orbital_shifts = {
+                '0': float(self.tb_panel.spin_onsite_s.value()),
+                '1': float(self.tb_panel.spin_onsite_p.value()),
+                '2': float(self.tb_panel.spin_onsite_d.value()),
+            }
+            tb_mode = self.tb_panel.combo_tb_mode.currentText()
             # --- UNIVERSAL FERMI ENERGY SHIFT ---
             fermi_energy = 0.0
             if w90_file:
@@ -459,7 +466,11 @@ class DFTSuite(QWidget):
             if found_h_dict is None: found_h_dict = getattr(found_tb_model, 'H_dict', None)
             
 
-        # 4. Cache data for pushing
+        # 4. Cache data for pushing (onsite/EF must travel to ARPES)
+        # Wannier/SK solve already folds onsite_e into H_dict diagonals.
+        # Wannier also folds QE EF into those diagonals → ARPES must NOT
+        # subtract fermi_energy again (would double-shift → empty window).
+        is_w90 = bool(w90_file)
         self.active_bands_data = {
             'type': 'band_structure',
             'is_2d': is_2d,
@@ -471,6 +482,16 @@ class DFTSuite(QWidget):
             'H_dict': found_h_dict,
             'tb_model': found_tb_model,
             'fermi_energy': fermi_energy,
+            'e_fermi': fermi_energy,
+            'onsite_e': onsite_e,
+            'orbital_shifts': orbital_shifts,
+            'tb_mode': tb_mode,
+            'w90_filepath': w90_file or '',
+            'h_includes_onsite': True,
+            'h_includes_qe_fermi_shift': is_w90,
+            # Eigenvalue shift applied inside remote/local ARPES solve_H:
+            # 0 for Wannier (already in H); QE EF for non-W90 if needed later.
+            'arpes_e_fermi_shift': 0.0 if is_w90 else float(fermi_energy),
             'title': title,
             # --- NEW: EXPLICITLY PACK LATTICE VECTORS ---
             'structure': self.engine.crystal_structure,
@@ -486,6 +507,9 @@ class DFTSuite(QWidget):
         # --- ADD THESE DEBUG LINES ---
         print("\n[LOG 1 - DFT SUITE]")
         print(f"Fermi Energy packed into dict: {self.active_bands_data.get('fermi_energy')}")
+        print(f"onsite_e packed: {self.active_bands_data.get('onsite_e')}")
+        print(f"orbital_shifts packed: {self.active_bands_data.get('orbital_shifts')}")
+        print(f"arpes_e_fermi_shift: {self.active_bands_data.get('arpes_e_fermi_shift')}")
         print(f"e_fermi packed into dict: {self.active_bands_data.get('e_fermi', 'NOT DEFINED')}")
         # -----------------------------
 
@@ -641,10 +665,28 @@ class DFTSuite(QWidget):
             return
             
         name = name.strip()
-        global_workspace._data[name] = self.active_bands_data
+        # Re-assert energy metadata so older in-memory calcs still get keys if patched mid-session
+        payload = dict(self.active_bands_data)
+        payload.setdefault('onsite_e', float(self.tb_panel.spin_onsite.value()))
+        payload.setdefault('orbital_shifts', {
+            '0': float(self.tb_panel.spin_onsite_s.value()),
+            '1': float(self.tb_panel.spin_onsite_p.value()),
+            '2': float(self.tb_panel.spin_onsite_d.value()),
+        })
+        payload.setdefault('e_fermi', payload.get('fermi_energy', 0.0))
+        global_workspace._data[name] = payload
         
-        dim_str_display = "2D Mesh" if self.active_bands_data.get('is_2d') else "1D Path"
-        QMessageBox.information(self, "Success", f"Band structure '{name}' ({dim_str_display}) pushed to Workspace!\nYou can now load it in the ARPES Suite.")
+        dim_str_display = "2D Mesh" if payload.get('is_2d') else "1D Path"
+        QMessageBox.information(
+            self,
+            "Success",
+            f"Band structure '{name}' ({dim_str_display}) pushed to Workspace!\n\n"
+            f"onsite_e = {payload.get('onsite_e')} eV\n"
+            f"QE Fermi = {payload.get('fermi_energy')} eV\n"
+            f"ARPES eigenvalue shift = {payload.get('arpes_e_fermi_shift', 0.0)} eV\n"
+            f"(onsite is baked into H_dict for ARPES)\n\n"
+            f"Load it in the ARPES Suite.",
+        )
 
     def load_qe_xml_bands(self):
         """Loads and overlays raw Quantum ESPRESSO bands onto the current plot."""
