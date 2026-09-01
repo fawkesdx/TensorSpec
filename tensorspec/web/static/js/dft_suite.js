@@ -684,9 +684,11 @@ function watchJob(jobId, { clearLog = true } = {}) {
     closeLogSocket();
     rememberActiveJob(jobId);
     dom.qeCancel.disabled = false;
+    if (dom.qeQueue) dom.qeQueue.disabled = true;
     if (clearLog) {
         dom.qeLog.textContent = "";
         dom.qeLog.hidden = false;
+        appendLog(`[ui] watching ${jobId} — solver stdout appears here`);
     } else {
         dom.qeLog.hidden = false;
     }
@@ -698,7 +700,14 @@ function watchJob(jobId, { clearLog = true } = {}) {
         if (message.type === "log") appendLog(message.line);
         if (message.type === "status") {
             const job = message.job;
-            setQeStatus(`${job.run_name}: ${job.status}` + (job.error ? ` — ${job.error}` : ""));
+            const step =
+                job.total_steps > 0
+                    ? ` · step ${job.current_step}/${job.total_steps}`
+                    : "";
+            setQeStatus(
+                `${job.run_name}: ${job.status}${step}`
+                + (job.error ? ` — ${job.error}` : "")
+            );
             if (["succeeded", "failed", "cancelled"].includes(job.status)) {
                 const elapsedEl = dom.qeElapsed || document.getElementById("qe-elapsed");
                 if (job.status === "succeeded" && qeEtaKey && window.JobTimer) {
@@ -708,6 +717,7 @@ function watchJob(jobId, { clearLog = true } = {}) {
                 qeEtaKey = null;
                 dom.qeCancel.disabled = true;
                 rememberActiveJob(null);
+                applyQueueEnable(lastSolversInfo);
             }
         }
         if (message.type === "error") setQeStatus(message.message, true);
@@ -827,7 +837,6 @@ async function queueRun() {
         watchJob(job.job_id);
     } catch (err) {
         setQeStatus(err.message, true);
-    } finally {
         applyQueueEnable(lastSolversInfo);
     }
 }
@@ -896,26 +905,33 @@ async function onWannierFileChosen(event) {
 
 function applyQueueEnable(info) {
     const einstein = dom.qeBackend?.value === "einstein_ssh";
+    const busy = Boolean(activeJobId);
     if (!info) {
-        dom.qeQueue.disabled = !einstein;
-        if (einstein) {
+        dom.qeQueue.disabled = busy || !einstein;
+        if (!busy && einstein) {
             setQeStatus("Einstein (SSH) queue enabled (solvers status pending)");
         }
         return;
     }
     if (info.available) {
-        setQeStatus(
-            `Solvers ready — max ${maxMpiRanks} MPI ranks`
-            + (info.mpirun ? "" : " (mpirun not found; runs will be serial)")
-        );
-        dom.qeQueue.disabled = false;
+        if (!busy) {
+            setQeStatus(
+                `Solvers ready — max ${maxMpiRanks} MPI ranks`
+                + (info.mpirun ? "" : " (mpirun not found; runs will be serial)")
+            );
+        }
+        dom.qeQueue.disabled = busy;
     } else if (einstein) {
-        setQeStatus(
-            `Local solvers unavailable (${info.detail || "check server config"}); Einstein (SSH) queue still enabled`
-        );
-        dom.qeQueue.disabled = false;
+        if (!busy) {
+            setQeStatus(
+                `Local solvers unavailable (${info.detail || "check server config"}); Einstein (SSH) queue still enabled`
+            );
+        }
+        dom.qeQueue.disabled = busy;
     } else {
-        setQeStatus(`Solvers unavailable: ${info.detail || "check server config"}`, true);
+        if (!busy) {
+            setQeStatus(`Solvers unavailable: ${info.detail || "check server config"}`, true);
+        }
         dom.qeQueue.disabled = true;
     }
 }
@@ -1017,13 +1033,16 @@ if (!api) {
         console.error("[dft] refreshStructures failed", err);
         setStatus(String(err.message || err), true);
     });
-    refreshSolvers().catch((err) => {
-        console.error("[dft] refreshSolvers failed", err);
-        setQeStatus(String(err.message || err), true);
-    });
-    resumeActiveJobIfAny().catch((err) => {
-        console.error("[dft] resumeActiveJobIfAny failed", err);
-    });
+    refreshSolvers()
+        .catch((err) => {
+            console.error("[dft] refreshSolvers failed", err);
+            setQeStatus(String(err.message || err), true);
+        })
+        .finally(() => {
+            resumeActiveJobIfAny().catch((err) => {
+                console.error("[dft] resumeActiveJobIfAny failed", err);
+            });
+        });
 }
 
 window.addEventListener("pageshow", () => {

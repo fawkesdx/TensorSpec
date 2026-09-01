@@ -279,19 +279,11 @@ class JobQueue:
             job.append_log(f"[step {index}/{job.total_steps}] {rendered}")
 
             # argv list only — never shell=True, never interpolate user text.
-            process = subprocess.Popen(
-                command,
-                cwd=str(job.run_dir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                start_new_session=True,
-            )
+            # Prefer a PTY so C solvers (pw.x) line-flush; pipes stay fully buffered.
+            process, line_iter = _spawn_streaming(command, job.run_dir)
             job._process = process
 
-            assert process.stdout is not None
-            for line in process.stdout:
+            for line in line_iter:
                 job.append_log(line.rstrip("\n"))
 
             code = process.wait()
@@ -311,6 +303,62 @@ class JobQueue:
             job.status = JobStatus.SUCCEEDED
             job.exit_code = 0
             job.append_log("[queue] finished successfully")
+
+
+def _spawn_streaming(command: list[str], run_dir: Path):
+    """Return (Popen, line iterator). PTY on POSIX for live solver logs."""
+    if os.name == "posix":
+        import pty
+
+        master_fd, slave_fd = pty.openpty()
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=str(run_dir),
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                start_new_session=True,
+                close_fds=True,
+            )
+        finally:
+            os.close(slave_fd)
+
+        def _iter_pty_lines():
+            buf = b""
+            try:
+                while True:
+                    try:
+                        chunk = os.read(master_fd, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    buf += chunk
+                    while b"\n" in buf:
+                        raw, buf = buf.split(b"\n", 1)
+                        yield raw.decode("utf-8", errors="replace")
+                if buf:
+                    yield buf.decode("utf-8", errors="replace")
+            finally:
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+
+        return process, _iter_pty_lines()
+
+    process = subprocess.Popen(
+        command,
+        cwd=str(run_dir),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        start_new_session=True,
+    )
+    assert process.stdout is not None
+    return process, (line.rstrip("\n") for line in process.stdout)
 
 
 # Lazily constructed so import does not require solvers to be present.

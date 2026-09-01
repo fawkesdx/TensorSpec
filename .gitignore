@@ -20,3 +20,7 @@ ML_local/
 **/ML_local/
 tensorspec/ml_local/
 docs/ml_local/
+
+# Local remote-compute credentials (copy from scripts/tensorspec-remote.env.example)
+scripts/tensorspec-remote.env
+.tensorspec-remote.env

@@ -448,7 +448,12 @@ async def job_logs(websocket: WebSocket, job_id: str):
         loop.call_soon_threadsafe(outbound.put_nowait, line)
 
     unsubscribe = job.subscribe(on_line)
+    last_status = None
     try:
+        # Immediate snapshot so the UI is not stuck on "Solvers ready"
+        # while waiting for the first stdout line.
+        await websocket.send_json({"type": "status", "job": job.to_dict()})
+        last_status = job.status.value
         while True:
             try:
                 line = await asyncio.wait_for(outbound.get(), timeout=0.5)
@@ -456,7 +461,12 @@ async def job_logs(websocket: WebSocket, job_id: str):
             except asyncio.TimeoutError:
                 pass
 
-            if job.status.value in ("succeeded", "failed", "cancelled"):
+            status = job.status.value
+            if status != last_status:
+                await websocket.send_json({"type": "status", "job": job.to_dict()})
+                last_status = status
+
+            if status in ("succeeded", "failed", "cancelled"):
                 # Drain anything still buffered, then send the final status.
                 while not outbound.empty():
                     await websocket.send_json({"type": "log", "line": outbound.get_nowait()})
