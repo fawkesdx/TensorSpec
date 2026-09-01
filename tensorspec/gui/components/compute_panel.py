@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
     QFormLayout, QGroupBox, QAbstractItemView, QTabWidget, QWidget, QTextEdit,
-    QApplication, QMainWindow, QSplitter, QFileDialog
+    QApplication, QMainWindow, QSplitter, QFileDialog, QScrollArea, QSizePolicy,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -362,7 +362,10 @@ class ComputeManagerPanel(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Compute Manager")
-        self.resize(800, 600)
+        self.setMinimumSize(640, 480)
+        self.resize(860, 680)
+        self.setSizeGripEnabled(True)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         
         self.clusters = []
         self.fetch_thread = None
@@ -392,7 +395,18 @@ class ComputeManagerPanel(QDialog):
         main_layout.addWidget(close_btn, alignment=Qt.AlignRight)
         
     def _init_connections_tab(self):
-        layout = QVBoxLayout(self.tab_connections)
+        outer = QVBoxLayout(self.tab_connections)
+        outer.setContentsMargins(4, 4, 4, 4)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+
+        scroll_body = QWidget()
+        layout = QVBoxLayout(scroll_body)
+        layout.setContentsMargins(0, 0, 0, 0)
         
         # --- Form Area ---
         form_group = QGroupBox("Add New Cluster")
@@ -444,14 +458,19 @@ class ComputeManagerPanel(QDialog):
         paths_form.addRow("tmp_dir:", self.tmp_dir_input)
         paths_form.addRow("repo_root:", self.repo_root_input)
         paths_form.addRow("python:", self.python_input)
-        paths_form.addRow("slurm account:", self.slurm_account_input)
-        paths_form.addRow("slurm qos:", self.slurm_qos_input)
-        paths_form.addRow("slurm constraint:", self.slurm_constraint_input)
-        paths_form.addRow("slurm walltime:", self.slurm_walltime_input)
-        paths_form.addRow("qe module:", self.qe_module_input)
-        paths_form.addRow("ssh key:", self.ssh_key_input)
         paths_group.setLayout(paths_form)
         form_layout.addRow(paths_group)
+
+        slurm_group = QGroupBox("Slurm (SLURM mode only)")
+        slurm_form = QFormLayout()
+        slurm_form.addRow("account:", self.slurm_account_input)
+        slurm_form.addRow("qos:", self.slurm_qos_input)
+        slurm_form.addRow("constraint:", self.slurm_constraint_input)
+        slurm_form.addRow("walltime:", self.slurm_walltime_input)
+        slurm_form.addRow("qe module:", self.qe_module_input)
+        slurm_form.addRow("ssh key:", self.ssh_key_input)
+        slurm_group.setLayout(slurm_form)
+        form_layout.addRow(slurm_group)
         
         btn_layout = QHBoxLayout()
         self.add_btn = QPushButton("Add Cluster")
@@ -462,8 +481,11 @@ class ComputeManagerPanel(QDialog):
         form_layout.addRow(btn_layout)
         form_group.setLayout(form_layout)
         layout.addWidget(form_group)
+
+        scroll.setWidget(scroll_body)
+        outer.addWidget(scroll, stretch=1)
         
-        # --- Table Area ---
+        # --- Table Area (always visible below scroll) ---
         table_group = QGroupBox("Configured Clusters")
         table_layout = QVBoxLayout()
         
@@ -495,7 +517,7 @@ class ComputeManagerPanel(QDialog):
         
         table_layout.addLayout(action_layout)
         table_group.setLayout(table_layout)
-        layout.addWidget(table_group)
+        outer.addWidget(table_group)
 
     def _init_status_tab(self):
         layout = QVBoxLayout(self.tab_status)
