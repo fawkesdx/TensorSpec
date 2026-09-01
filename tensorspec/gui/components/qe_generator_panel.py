@@ -6,17 +6,19 @@ from PySide6.QtWidgets import (QWidget, QFormLayout, QGroupBox, QComboBox,
                                QMessageBox, QPlainTextEdit, QVBoxLayout, QCheckBox, QLabel)
 
 from tensorspec.core.dft.qe_generator import QEInputGenerator
+from tensorspec.core.compute import cluster_paths as cp
 
 
 class QERunnerThread(QThread):
     log_signal = Signal(str)
     finished_signal = Signal(bool, str)
 
-    def __init__(self, script_content, out_dir, cluster=None):
+    def __init__(self, script_content, out_dir, cluster=None, mpi_ranks=1):
         super().__init__()
         self.script_content = script_content
         self.out_dir = out_dir
         self.cluster = cluster
+        self.mpi_ranks = max(1, int(mpi_ranks))
 
     def run(self):
         import os, subprocess, paramiko
@@ -34,19 +36,18 @@ class QERunnerThread(QThread):
                 self.log_signal.emit(f"Connecting to {self.cluster['host']}...")
                 ssh = paramiko.SSHClient()
                 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                pwd = self.cluster.get('password', '') or None
-                ssh.connect(self.cluster['host'], port=self.cluster.get('port', 22), username=self.cluster['user'], password=pwd, timeout=10)
+                cp.ssh_connect(ssh, self.cluster, timeout=15)
                 
-                remote_dir = f"/mnt/data/{self.cluster['user']}/tensorspec_heavy/qe_gui_run"
+                remote_dir = cp.job_dir(self.cluster, "qe")
                 
                 sftp = ssh.open_sftp()
                 try:
-                    sftp.mkdir(f"/mnt/data/{self.cluster['user']}/tensorspec_heavy")
-                except:
+                    sftp.mkdir(cp.heavy_root(self.cluster))
+                except OSError:
                     pass
                 try:
                     sftp.mkdir(remote_dir)
-                except:
+                except OSError:
                     pass
                 
                 # Upload only necessary input files to avoid uploading 10GB+ of old data!
@@ -62,37 +63,41 @@ class QERunnerThread(QThread):
                 if os.path.isdir(pseudo_dir_local):
                     try:
                         sftp.mkdir(f"{remote_dir}/pseudo")
-                    except:
+                    except OSError:
                         pass
                     for p_file in os.listdir(pseudo_dir_local):
                         p_local = os.path.join(pseudo_dir_local, p_file)
                         if os.path.isfile(p_local):
                             sftp.put(p_local, f"{remote_dir}/pseudo/{p_file}")
 
-                        
-                sftp.close()
-                
-                # Execute
-                is_slurm = self.cluster.get('mode', '').upper() == 'SLURM'
-                if is_slurm:
-                    # Modify run_pipeline.sh to be an sbatch script? 
-                    # The script_content already has "#!/bin/bash". We can just submit it if we add SBATCH lines, 
-                    # or just run a wrapper sbatch.
-                    wrapper = f"""#!/bin/bash
-#SBATCH --job-name=qe_pipeline
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --output=sys.out.full
-source ~/miniconda3/etc/profile.d/conda.sh 2>/dev/null
-conda activate qe 2>/dev/null
-bash {script_name}"""
-                    ssh.exec_command(f"echo -e '{wrapper}' > {remote_dir}/job.sbatch")
+                if cp.is_slurm(self.cluster):
+                    sbatch_content = cp.build_qe_slurm_batch(
+                        self.cluster,
+                        remote_dir=remote_dir,
+                        script_name=script_name,
+                        mpi_ranks=self.mpi_ranks,
+                    )
+                    with sftp.file(f"{remote_dir}/job.sbatch", "w") as f:
+                        f.write(sbatch_content)
                     cmd = f"cd {remote_dir} && sbatch job.sbatch"
                     msg_type = "via SLURM Queue"
+                    self.log_signal.emit(
+                        f"SLURM: account={cp.slurm_account(self.cluster)} "
+                        f"qos={cp.slurm_qos(self.cluster)} "
+                        f"constraint={cp.slurm_constraint(self.cluster)} "
+                        f"time={cp.slurm_walltime(self.cluster)} "
+                        f"ntasks={self.mpi_ranks}"
+                    )
                 else:
-                    cmd = f"bash -lc 'cd {remote_dir} && export OMP_NUM_THREADS=1 && source ~/miniconda3/etc/profile.d/conda.sh 2>/dev/null && conda activate qe 2>/dev/null; nohup bash {script_name} > sys.out.full 2>&1 &'"
+                    cmd = (
+                        f"bash -lc 'cd {remote_dir} && "
+                        f"{cp.shell_thread_limits(one_line=True)} && "
+                        f"{cp.qe_env_exports(self.cluster, one_line=True)} && "
+                        f"nohup bash {script_name} > sys.out.full 2>&1 &'"
+                    )
                     msg_type = "via Background Daemon"
+
+                sftp.close()
                     
                 self.log_signal.emit(f"Dispatching execution {msg_type}...")
                 stdin, stdout, stderr = ssh.exec_command(cmd)
@@ -101,9 +106,15 @@ bash {script_name}"""
                 
                 ssh.close()
                 
-                self.log_signal.emit(out)
-                if err:
-                    self.log_signal.emit(f"STDERR: {err}")
+                self.log_signal.emit(out.strip())
+                if err.strip():
+                    self.log_signal.emit(f"STDERR: {err.strip()}")
+                if cp.is_slurm(self.cluster) and "error:" in (out + err).lower():
+                    self.finished_signal.emit(
+                        False,
+                        "Slurm submit failed — check qos/time limits (debug max 30 min).",
+                    )
+                    return
                     
                 self.finished_signal.emit(True, f"Remote Dispatch Complete! Logs at: {remote_dir}/sys.out.full")
                 return
@@ -342,11 +353,10 @@ class QEGeneratorPanel(QWidget):
             import paramiko
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            pwd = cluster.get('password', '') or None
-            ssh.connect(cluster['host'], port=cluster.get('port', 22), username=cluster['user'], password=pwd, timeout=10)
+            cp.ssh_connect(ssh, cluster, timeout=15)
             
             sftp = ssh.open_sftp()
-            remote_dir = f"/mnt/data/{cluster['user']}/tensorspec_heavy/qe_gui_run"
+            remote_dir = cp.job_dir(cluster, "qe")
             
             # Fetch only the logs and final Wannier90 tight-binding model to save bandwidth!
             # Do NOT download .mmn, .amn, .eig, .chk, or .save directories as they are massive (10+ GB).
@@ -414,10 +424,10 @@ class QEGeneratorPanel(QWidget):
             wan_exec = self.line_wan_cmd.text().strip()
             pw2wan_exec = self.line_pw2wan_cmd.text().strip()
             
-            mpi_cmd = (
-                f"mpirun --use-hwthread-cpus --oversubscribe -np {mpi_ranks} "
-                if self.chk_mpi.isChecked()
-                else ""
+            mpi_cmd = cp.mpi_launch_prefix(
+                self.get_selected_cluster(),
+                mpi_ranks,
+                use_mpi=self.chk_mpi.isChecked(),
             )
             env_header = self._pipeline_env_header(use_gpu, cuda_devices)
             
@@ -495,7 +505,8 @@ class QEGeneratorPanel(QWidget):
         self.is_viewing = True
         
         cluster = self.get_selected_cluster()
-        self.qe_thread = QERunnerThread(script_content, out_dir, cluster)
+        mpi_ranks = self.spin_cores.value() if self.chk_mpi.isChecked() else 1
+        self.qe_thread = QERunnerThread(script_content, out_dir, cluster, mpi_ranks=mpi_ranks)
         self.qe_thread.log_signal.connect(self.update_log)
         self.qe_thread.finished_signal.connect(self.calculation_finished)
         self.qe_thread.start()

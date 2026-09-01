@@ -12,6 +12,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from tensorspec.core.compute.cluster_live_monitor import fetch_cluster_snapshot
+from tensorspec.core.compute import cluster_paths as cp
 
 CONFIG_FILE = os.path.expanduser('~/.tensorspec_clusters.json')
 
@@ -19,9 +20,10 @@ class LiveMonitorThread(QThread):
     data_ready = Signal(dict)
     error_occurred = Signal(str)
 
-    def __init__(self, cluster):
+    def __init__(self, cluster, log_jobs=None):
         super().__init__()
         self.cluster = cluster
+        self.log_jobs = log_jobs
         self.running = True
         self.ssh = None
 
@@ -32,7 +34,7 @@ class LiveMonitorThread(QThread):
             self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             pwd = self.cluster.get('password', '')
             if not pwd: pwd = None
-            self.ssh.connect(self.cluster['host'], username=self.cluster['user'], password=pwd, timeout=15)
+            cp.ssh_connect(self.ssh, self.cluster, timeout=15)
             
             while self.running:
                 try:
@@ -62,7 +64,9 @@ class LiveMonitorThread(QThread):
                         except Exception:
                             cpu_usage = 10.0
 
-                    snap = fetch_cluster_snapshot(self.ssh, self.cluster)
+                    snap = fetch_cluster_snapshot(
+                        self.ssh, self.cluster, log_jobs=self.log_jobs
+                    )
                     text_info = snap["text_info"]
                     full_log_tail = snap.get("full_log_tail", "")
                     max_elapsed = snap.get("kkr_elapsed_seconds", 0)
@@ -182,7 +186,7 @@ class LiveClusterMonitor(QMainWindow):
         
         self.tabs.addTab(self.tab_logs, "📜 Calculation Live Logs")
         
-        self.monitor_thread = LiveMonitorThread(self.cluster)
+        self.monitor_thread = LiveMonitorThread(self.cluster, log_jobs=None)
         self.monitor_thread.data_ready.connect(self.update_data)
         self.monitor_thread.error_occurred.connect(self.handle_error)
         self.monitor_thread.start()
@@ -329,7 +333,7 @@ class StatusFetchThread(QThread):
             pwd = self.cluster.get('password', '')
             if not pwd:
                 pwd = None
-            ssh.connect(self.cluster['host'], username=self.cluster['user'], password=pwd, timeout=15)
+            cp.ssh_connect(ssh, self.cluster, timeout=15)
             
             output_text = f"=== Status for {self.cluster['host']} ===\n\n"
             
@@ -406,12 +410,48 @@ class ComputeManagerPanel(QDialog):
         
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Daemon", "SLURM"])
+
+        self.heavy_root_input = QLineEdit()
+        self.heavy_root_input.setPlaceholderText("optional — default /mnt/data/{user}/tensorspec_heavy")
+        self.tmp_dir_input = QLineEdit()
+        self.tmp_dir_input.setPlaceholderText("optional — default /mnt/data/{user}/tmp")
+        self.repo_root_input = QLineEdit()
+        self.repo_root_input.setPlaceholderText("optional — default /home/{user}/TensorSpec")
+        self.python_input = QLineEdit()
+        self.python_input.setPlaceholderText("optional — default {repo}/TensorSpec_env/bin/python")
+        self.slurm_account_input = QLineEdit()
+        self.slurm_account_input.setPlaceholderText("SLURM only — e.g. m1234")
+        self.slurm_qos_input = QLineEdit()
+        self.slurm_qos_input.setPlaceholderText("SLURM only — e.g. regular_0 (debug max 30 min)")
+        self.slurm_constraint_input = QLineEdit()
+        self.slurm_constraint_input.setPlaceholderText("SLURM only — cpu or gpu")
+        self.slurm_walltime_input = QLineEdit()
+        self.slurm_walltime_input.setPlaceholderText("SLURM only — HH:MM:SS e.g. 06:00:00")
+        self.qe_module_input = QLineEdit()
+        self.qe_module_input.setPlaceholderText("optional — e.g. espresso/7.5-libxc-7.0.0-cpu")
+        self.ssh_key_input = QLineEdit()
+        self.ssh_key_input.setPlaceholderText("optional — ~/.ssh/key (passwordless SSH)")
         
         form_layout.addRow("Name:", self.name_input)
         form_layout.addRow("Host:", self.host_input)
         form_layout.addRow("User:", self.user_input)
         form_layout.addRow("Password:", self.password_input)
         form_layout.addRow("Mode:", self.mode_combo)
+
+        paths_group = QGroupBox("Remote paths (optional — see docs/REMOTE_GPU_SETUP.md)")
+        paths_form = QFormLayout()
+        paths_form.addRow("heavy_root:", self.heavy_root_input)
+        paths_form.addRow("tmp_dir:", self.tmp_dir_input)
+        paths_form.addRow("repo_root:", self.repo_root_input)
+        paths_form.addRow("python:", self.python_input)
+        paths_form.addRow("slurm account:", self.slurm_account_input)
+        paths_form.addRow("slurm qos:", self.slurm_qos_input)
+        paths_form.addRow("slurm constraint:", self.slurm_constraint_input)
+        paths_form.addRow("slurm walltime:", self.slurm_walltime_input)
+        paths_form.addRow("qe module:", self.qe_module_input)
+        paths_form.addRow("ssh key:", self.ssh_key_input)
+        paths_group.setLayout(paths_form)
+        form_layout.addRow(paths_group)
         
         btn_layout = QHBoxLayout()
         self.add_btn = QPushButton("Add Cluster")
@@ -513,8 +553,34 @@ class ComputeManagerPanel(QDialog):
             "host": host,
             "user": user,
             "password": password,
-            "mode": mode
+            "mode": mode,
         }
+        paths = {}
+        for key, widget in (
+            ("heavy_root", self.heavy_root_input),
+            ("tmp_dir", self.tmp_dir_input),
+            ("repo_root", self.repo_root_input),
+            ("python", self.python_input),
+            ("qe_module", self.qe_module_input),
+            ("ssh_key", self.ssh_key_input),
+        ):
+            val = widget.text().strip()
+            if val:
+                paths[key] = val
+        slurm = {}
+        for key, widget in (
+            ("account", self.slurm_account_input),
+            ("qos", self.slurm_qos_input),
+            ("constraint", self.slurm_constraint_input),
+            ("walltime", self.slurm_walltime_input),
+        ):
+            val = widget.text().strip()
+            if val:
+                slurm[key] = val
+        if slurm:
+            paths["slurm"] = slurm
+        if paths:
+            cluster_data["paths"] = paths
         
         self.clusters.append(cluster_data)
         self.update_table()
@@ -545,8 +611,7 @@ class ComputeManagerPanel(QDialog):
             import paramiko
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            pwd = cluster.get('password', '') or None
-            ssh.connect(cluster['host'], port=cluster.get('port', 22), username=cluster['user'], password=pwd, timeout=8)
+            cp.ssh_connect(ssh, cluster, timeout=8)
             
             # Quick check for python / slurm
             stdin, stdout, stderr = ssh.exec_command("which python3 sbatch", timeout=5)
@@ -569,7 +634,7 @@ class ComputeManagerPanel(QDialog):
         reply = QMessageBox.question(
             self,
             "Auto-Setup Remote Server",
-            f"Would you like TensorSpec to automatically verify and set up directories and Python environments on '{cluster['name']}'?\n\nThis will:\n- Create `/mnt/data/{cluster['user']}/tensorspec_heavy/`\n- Create temporary scratch directories\n- Verify or create `TensorSpec_env` virtual environment with numpy\n- Install background worker daemon",
+            f"Would you like TensorSpec to automatically verify and set up directories and Python environments on '{cluster['name']}'?\n\nThis will:\n- Create `{cp.heavy_root(cluster)}` and job subdirs\n- Create `{cp.tmp_dir(cluster)}`\n- Verify or create Python venv at `{cp.repo_root(cluster)}`\n- Install numpy/scipy/matplotlib in the remote venv",
             QMessageBox.Yes | QMessageBox.No
         )
         if reply != QMessageBox.Yes:
@@ -579,24 +644,9 @@ class ComputeManagerPanel(QDialog):
             import paramiko
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            pwd = cluster.get('password', '') or None
-            ssh.connect(cluster['host'], port=cluster.get('port', 22), username=cluster['user'], password=pwd, timeout=10)
+            cp.ssh_connect(ssh, cluster, timeout=10)
             
-            setup_cmd = f"""
-mkdir -p /mnt/data/{cluster['user']}/tensorspec_heavy/sprkkr_gui_run
-mkdir -p /mnt/data/{cluster['user']}/tensorspec_heavy/chinook_gui_run
-mkdir -p /mnt/data/{cluster['user']}/tmp
-mkdir -p /home/{cluster['user']}/TensorSpec
-
-# Check or build python venv
-if [ ! -f /home/{cluster['user']}/TensorSpec/TensorSpec_env/bin/python ]; then
-    python3 -m venv /home/{cluster['user']}/TensorSpec/TensorSpec_env || virtualenv /home/{cluster['user']}/TensorSpec/TensorSpec_env
-fi
-
-# Ensure numpy and scipy exist
-/home/{cluster['user']}/TensorSpec/TensorSpec_env/bin/pip install --quiet numpy scipy matplotlib
-echo "SETUP_COMPLETE"
-"""
+            setup_cmd = cp.provision_script(cluster)
             stdin, stdout, stderr = ssh.exec_command(setup_cmd, timeout=60)
             out = stdout.read().decode()
             ssh.close()
@@ -649,6 +699,10 @@ echo "SETUP_COMPLETE"
         self.user_input.clear()
         self.password_input.clear()
         self.mode_combo.setCurrentIndex(0)
+        self.heavy_root_input.clear()
+        self.tmp_dir_input.clear()
+        self.repo_root_input.clear()
+        self.python_input.clear()
 
     def update_table(self):
         self.table.setRowCount(0)

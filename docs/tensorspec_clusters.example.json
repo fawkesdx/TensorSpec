@@ -1,0 +1,33 @@
+[
+  {
+    "name": "remote-cluster",
+    "host": "gpu.example.edu",
+    "user": "YOUR_USER",
+    "password": "",
+    "mode": "Daemon",
+    "paths": {
+      "heavy_root": "/mnt/data/YOUR_USER/tensorspec_heavy",
+      "tmp_dir": "/mnt/data/YOUR_USER/tmp"
+    }
+  },
+  {
+    "name": "Perlmutter",
+    "host": "hpc.example.edu",
+    "user": "YOUR_NERSC_USER",
+    "password": "",
+    "mode": "SLURM",
+    "paths": {
+      "heavy_root": "/pscratch/sd/X/YOUR_NERSC_USER/tensorspec_heavy",
+      "tmp_dir": "/pscratch/sd/X/YOUR_NERSC_USER/tmp",
+      "qe_module": "espresso/7.5-libxc-7.0.0-cpu",
+      "ssh_key": "~/.ssh/nersc",
+      "slurm": {
+        "account": "YOUR_PROJECT",
+        "qos": "regular_0",
+        "constraint": "cpu",
+        "walltime": "06:00:00",
+        "nodes": 1
+      }
+    }
+  }
+]
