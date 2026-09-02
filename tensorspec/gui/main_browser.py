@@ -22,6 +22,7 @@ from tensorspec.core.workspace import global_workspace
 import time
 import platform
 import psutil
+from collections import deque
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PySide6.QtCore import QTimer, Qt
@@ -36,11 +37,19 @@ class TelemetryWindow(QWidget):
         self.setWindowFlags(Qt.WindowStaysOnTopHint) 
         
         # --- Recording States ---
+        # Capped: a 1 Hz recording left running for hours used to grow without
+        # bound. 5000 samples is a little over 80 minutes of history.
+        self.max_history = 5000
         self.is_recording = False
-        self.history_time = []
-        self.history_cpu = []
-        self.history_ram = []
+        self.history_time = deque(maxlen=self.max_history)
+        self.history_cpu = deque(maxlen=self.max_history)
+        self.history_ram = deque(maxlen=self.max_history)
+        self.history_rss = deque(maxlen=self.max_history)
         self.start_time = None
+
+        # Our own resident set size, so a run that is about to exhaust memory is
+        # distinguishable from unrelated system load.
+        self.process = psutil.Process(os.getpid())
         
         layout = QVBoxLayout(self)
         
@@ -81,6 +90,7 @@ class TelemetryWindow(QWidget):
             self.history_time.clear()
             self.history_cpu.clear()
             self.history_ram.clear()
+            self.history_rss.clear()
             self.start_time = time.time()
             
             self.btn_record.setText("⏹ Stop Recording")
@@ -106,6 +116,8 @@ class TelemetryWindow(QWidget):
         mem = psutil.virtual_memory()
         used_gb = mem.used / (1024**3)
         total_gb = mem.total / (1024**3)
+        rss_gb = self.process.memory_info().rss / (1024**3)
+        rss_percent = 100.0 * rss_gb / total_gb if total_gb else 0.0
         
         # 2. Draw Live CPU Bar Chart
         self.ax_cpu.bar(cores, cpu_percents, color='#5bc0de', edgecolor='black')
@@ -116,9 +128,11 @@ class TelemetryWindow(QWidget):
         
         # 3. Draw Live RAM Bar Chart
         mem_label = "Unified Memory" if platform.system() == "Darwin" else "System RAM"
-        self.ax_ram.bar([mem_label], [mem.percent], color='#d9534f', edgecolor='black', width=0.4)
+        self.ax_ram.bar([mem_label, "TensorSpec"], [mem.percent, rss_percent],
+                        color=['#d9534f', '#f0ad4e'], edgecolor='black', width=0.4)
         self.ax_ram.set_ylim(0, 100)
-        self.ax_ram.set_title(f"RAM Usage: {used_gb:.1f} GB / {total_gb:.1f} GB")
+        self.ax_ram.set_title(f"RAM: {used_gb:.1f} / {total_gb:.1f} GB"
+                              f"   |   TensorSpec: {rss_gb:.2f} GB")
         self.ax_ram.set_ylabel("Capacity Used (%)")
         
         self.canvas.draw()
@@ -129,6 +143,7 @@ class TelemetryWindow(QWidget):
             self.history_time.append(elapsed_seconds)
             self.history_cpu.append(total_cpu)
             self.history_ram.append(mem.percent)
+            self.history_rss.append(rss_gb)
 
     def save_graph(self):
         """Generates a beautiful time-series plot of the recorded session and saves it."""
@@ -145,8 +160,9 @@ class TelemetryWindow(QWidget):
             ax = export_fig.add_subplot(111)
             
             # Plot the recorded data
-            ax.plot(self.history_time, self.history_cpu, label='Total CPU Usage (%)', color='#5bc0de', linewidth=2.5)
-            ax.plot(self.history_time, self.history_ram, label='RAM Usage (%)', color='#d9534f', linewidth=2.5)
+            lines = []
+            lines += ax.plot(self.history_time, self.history_cpu, label='Total CPU Usage (%)', color='#5bc0de', linewidth=2.5)
+            lines += ax.plot(self.history_time, self.history_ram, label='RAM Usage (%)', color='#d9534f', linewidth=2.5)
             
             # Style it professionally for a presentation
             ax.set_title("TensorSpec Hardware Stress Test over Time", fontsize=14, fontweight='bold')
@@ -154,7 +170,18 @@ class TelemetryWindow(QWidget):
             ax.set_ylabel("System Utilization (%)", fontsize=12)
             ax.set_ylim(0, 105)
             ax.grid(True, linestyle='--', alpha=0.7)
-            ax.legend(loc='upper left', fontsize=11)
+
+            # Process memory keeps its own axis: absolute GB is what tells you
+            # whether a long run is heading for an out-of-memory kill.
+            ax_rss = ax.twinx()
+            lines += ax_rss.plot(self.history_time, self.history_rss,
+                                 label='TensorSpec Process RAM (GB)',
+                                 color='#f0ad4e', linewidth=2.5, linestyle='--')
+            ax_rss.set_ylabel("Process Memory (GB)", fontsize=12, color='#b8860b')
+            ax_rss.tick_params(axis='y', labelcolor='#b8860b')
+            ax_rss.set_ylim(0, max(1.0, max(self.history_rss) * 1.5))
+
+            ax.legend(lines, [l.get_label() for l in lines], loc='upper left', fontsize=11)
             
             export_fig.savefig(path)
             QMessageBox.information(self, "Export Successful", f"Time-series graph saved successfully to:\n{path}")

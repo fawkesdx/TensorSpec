@@ -9,141 +9,12 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QTabWidget, QCheckBox, QGroupBox, QSplitter, QScrollArea, 
                              QMessageBox, QProgressBar, QStatusBar, QSpinBox, QDoubleSpinBox,
                              QLineEdit, QMenu, QDialog, QApplication)
-import psutil
-import time
-from collections import deque
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QCursor
 
 from tensorspec.gui.maestroai.model_warehouse_tab import ModelWarehouseTab
 from tensorspec.gui.maestroai.build_pipeline_tab import BuildPipelineTab
 from tensorspec.gui.maestroai.train_model_tab import TrainModelTab
-
-class DiagnosticsTab(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        
-        # --- Data Storage for Plotting ---
-        self.max_history = 5000
-        self.time_data = deque(maxlen=self.max_history)
-        self.sys_data = deque(maxlen=self.max_history)
-        self.app_data = deque(maxlen=self.max_history)
-        self.start_time = time.time()
-        
-        # --- Dynamic Sampling State & Thresholds ---
-        self.last_record_time = 0.0
-        self.last_record_sys = 0.0
-        self.last_record_app = 0.0
-        
-        self.delta_trigger_app = 0.05  
-        self.delta_trigger_sys = 0.50  
-        self.max_idle_seconds = 60.0   
-        
-        # --- UI Elements ---
-        sys_group = QGroupBox("Total System Memory Utilization")
-        sys_layout = QVBoxLayout(sys_group)
-        self.sys_label = QLabel("System RAM usage: Loading...")
-        self.sys_bar = QProgressBar()
-        self.sys_bar.setRange(0, 100)
-        sys_layout.addWidget(self.sys_label)
-        sys_layout.addWidget(self.sys_bar)
-        layout.addWidget(sys_group)
-        
-        app_group = QGroupBox("MaestroAI Process Memory Consumption")
-        app_layout = QVBoxLayout(app_group)
-        self.app_label = QLabel("Python Process RAM usage: Loading...")
-        app_layout.addWidget(self.app_label)
-        layout.addWidget(app_group)
-        
-        # --- Live Plot Canvas ---
-        self.plot_canvas = MplCanvas(self, width=4, height=4, is_3d=False)
-        self.plot_canvas.figure.clf()
-        
-        # FIX: Create two independent axes that share the same X-axis
-        self.ax_sys = self.plot_canvas.figure.add_subplot(111)
-        self.ax_app = self.ax_sys.twinx() 
-        
-        layout.addWidget(self.plot_canvas, 1)
-        
-        self.process = psutil.Process(os.getpid())
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_diagnostics)
-        self.timer.start(2000)
-        
-    def update_diagnostics(self):
-        try:
-            current_time = time.time()
-            virtual_mem = psutil.virtual_memory()
-            total_gb = virtual_mem.total / (1024 ** 3)
-            sys_used_gb = virtual_mem.used / (1024 ** 3)
-            percent = virtual_mem.percent
-            
-            mem_info = self.process.memory_info()
-            app_used_gb = mem_info.rss / (1024 ** 3)
-            
-            self.sys_label.setText(f"System Total: {sys_used_gb:.2f} GB / {total_gb:.1f} GB ({percent}%)")
-            self.sys_bar.setValue(int(percent))
-            self.app_label.setText(f"MaestroAI App Allocation: {app_used_gb:.3f} GB of RAM occupied.")
-            
-            time_since_last = current_time - self.last_record_time
-            sys_change = abs(sys_used_gb - self.last_record_sys)
-            app_change = abs(app_used_gb - self.last_record_app)
-            
-            # THE FIX 2: Check if time_data is empty so it ALWAYS draws the initial point
-            if (len(self.time_data) == 0 or 
-                app_change >= self.delta_trigger_app or 
-                sys_change >= self.delta_trigger_sys or 
-                time_since_last >= self.max_idle_seconds):
-                
-                elapsed_hours = (current_time - self.start_time) / 3600.0 
-                
-                self.time_data.append(elapsed_hours)
-                self.sys_data.append(sys_used_gb)
-                self.app_data.append(app_used_gb)
-                
-                self.last_record_time = current_time
-                self.last_record_sys = sys_used_gb
-                self.last_record_app = app_used_gb
-                
-                # Redraw
-                self.ax_sys.clear()
-                self.ax_app.clear()
-                
-                # FIX: Force the twin axis to stay on the right after being cleared
-                self.ax_app.yaxis.set_label_position("right")
-                self.ax_app.yaxis.tick_right()
-                
-                # Plot System RAM on the Left Axis (Blue)
-                line1 = self.ax_sys.plot(self.time_data, self.sys_data, 'b-', label="System RAM", linewidth=2)
-                self.ax_sys.set_ylabel("System RAM (GB)", color='blue', fontweight='bold')
-                self.ax_sys.tick_params(axis='y', labelcolor='blue')
-                self.ax_sys.set_ylim(0, total_gb + 5) 
-                
-                # Plot App RAM on the Right Axis (Red)
-                line2 = self.ax_app.plot(self.time_data, self.app_data, 'r-', label="MaestroAI RAM", linewidth=2)
-                self.ax_app.set_ylabel("App RAM (GB)", color='red', fontweight='bold')
-                self.ax_app.tick_params(axis='y', labelcolor='red')
-                
-                # Dynamically scale the right axis to give the App line breathing room
-                current_max_app = max(self.app_data) if self.app_data else 1.0
-                self.ax_app.set_ylim(0, max(10.0, current_max_app * 1.5)) 
-                
-                # Formatting
-                self.ax_sys.set_title("Memory Consumption History (Dynamic Sampling)")
-                self.ax_sys.set_xlabel("Time Elapsed (Hours)")
-                self.ax_sys.grid(True, linestyle='--', alpha=0.6)
-                
-                # Combine legends into one box
-                lines = line1 + line2
-                labels = [l.get_label() for l in lines]
-                self.ax_sys.legend(lines, labels, loc="upper left")
-                
-                self.plot_canvas.draw_idle()
-                
-        except Exception as e:
-            # Print the error to your IDE terminal just in case something else breaks!
-            print(f"Diagnostics Error: {e}")
 
 # --- UNIVERSAL COMPONENTS ---
 from .maestro_loader import LoadWorker
@@ -657,9 +528,6 @@ class MaestroAIApp(QMainWindow):
         align_layout.addStretch()
         align_page = self._split_tab(align_controls, self.align_canvas, sizes=(380, 420))
 
-        # --- NEW: Add the Diagnostics Tab ---
-        self.diagnostics_tab = DiagnosticsTab(self)
-
         # Group the pages by workflow stage. SSL Training produces the
         # embeddings Clustering consumes, and Clustering produces the domains
         # Steer consumes, so those lead. The Models group holds the not-yet
@@ -681,7 +549,6 @@ class MaestroAIApp(QMainWindow):
             ("Steer", [("Active Learning", al_page),
                        ("Simulate AL", sim_page)]),
             ("Models", model_pages),
-            ("System", [("Diagnostics", self.diagnostics_tab)]),
         ):
             right_panel.addTab(self._tab_group(pages), group_label)
 
@@ -1505,7 +1372,6 @@ class MaestroAIApp(QMainWindow):
         
         if hasattr(self, 'sim_auto_steps') and self.sim_auto_steps > 0:
             self.sim_auto_steps -= 1
-            from PySide6.QtCore import QTimer
             QTimer.singleShot(100, self.run_sim_step)
         else:
             self.btn_sim_init.setEnabled(True); self.btn_sim_step.setEnabled(True); self.btn_sim_ff.setEnabled(True)
