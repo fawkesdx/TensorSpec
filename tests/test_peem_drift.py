@@ -1,0 +1,177 @@
+import unittest
+
+import numpy as np
+
+from tensorspec.core.data_models import TensorData
+from tensorspec.core.peem_engine import drift_correct
+
+
+def _translated(plane, dx, dy):
+    out = np.zeros_like(plane)
+    y_src_lo = max(0, -dy)
+    y_src_hi = min(plane.shape[0], plane.shape[0] - dy)
+    x_src_lo = max(0, -dx)
+    x_src_hi = min(plane.shape[1], plane.shape[1] - dx)
+    out[
+        y_src_lo + dy : y_src_hi + dy,
+        x_src_lo + dx : x_src_hi + dx,
+    ] = plane[y_src_lo:y_src_hi, x_src_lo:x_src_hi]
+    return out
+
+
+def _feature(ny=32, nx=32):
+    plane = np.zeros((ny, nx), dtype=float)
+    plane[12:16, 11:14] = 2.0
+    plane[17:20, 16:21] = 0.7
+    plane[10, 19] = 3.0
+    return plane
+
+
+def _raw_stack(shifts=((0, 0), (3, -2), (-1, 4))):
+    base = _feature()
+    value = np.stack([_translated(base, dx, dy) for dx, dy in shifts])
+    return TensorData(
+        value=value,
+        axes=[np.arange(len(shifts)), np.arange(32), np.arange(32)],
+        labels=["frame", "y", "x"],
+        units=["", "px", "px"],
+        data_type="Experimental PEEM",
+        metadata={
+            "pol": ["unknown"] * len(shifts),
+            "source": "test",
+            "loader": "tif_sequence",
+            "csv_attached": True,
+            "I0": [1.0] * len(shifts),
+        },
+    )
+
+
+ROI = {"kind": "rect", "x0": 7, "y0": 7, "x1": 25, "y1": 25}
+
+
+class TestDriftCorrect(unittest.TestCase):
+    def test_stationary_frame_prefers_zero_when_ncc_scores_tie(self):
+        yy, xx = np.mgrid[0:32, 0:32]
+        repeated_pattern = ((xx + yy) % 2).astype(float)
+        tensor = TensorData(
+            value=np.stack([repeated_pattern, repeated_pattern]),
+            axes=[np.arange(2), np.arange(32), np.arange(32)],
+            labels=["frame", "y", "x"],
+            units=["", "px", "px"],
+            data_type="Experimental PEEM",
+            metadata={"pol": ["unknown", "unknown"]},
+        )
+
+        out = drift_correct(
+            tensor,
+            ref_index=0,
+            roi={"kind": "rect", "x0": 4, "y0": 4, "x1": 27, "y1": 27},
+            search_radius=2,
+        )
+
+        self.assertEqual(out.metadata["drift_shifts"][1], {"index": 1, "dx": 0, "dy": 0})
+
+    def test_recovers_known_integer_shifts_and_metadata(self):
+        out = drift_correct(
+            _raw_stack(),
+            ref_index=0,
+            roi=ROI,
+            search_radius=8,
+        )
+
+        self.assertEqual(
+            [(item["dx"], item["dy"]) for item in out.metadata["drift_shifts"]],
+            [(0, 0), (-3, 2), (1, -4)],
+        )
+        self.assertEqual(out.metadata["drift_method"], "ncc_roi")
+        self.assertEqual(out.metadata["drift_ref_index"], 0)
+        self.assertEqual(out.metadata["drift_roi"], ROI)
+        self.assertEqual(out.metadata["drift_search_radius"], 8)
+        self.assertEqual(out.metadata["drift_track_channel"], 0)
+        self.assertTrue(out.metadata["csv_attached"])
+        self.assertEqual(out.metadata["I0"], [1.0, 1.0, 1.0])
+        self.assertEqual(out.labels, ["frame", "y", "x"])
+        self.assertEqual(out.value.shape, (3, 32, 32))
+
+    def test_paired_estimates_track_channel_and_shifts_both_channels(self):
+        base = _feature()
+        other = base * 0.25 + 5.0
+        cube = np.stack(
+            [
+                np.stack([base, other]),
+                np.stack([_translated(base, 3, 0), _translated(other, 3, 0)]),
+            ]
+        )
+        tensor = TensorData(
+            value=cube,
+            axes=[np.arange(2), np.arange(2), np.arange(32), np.arange(32)],
+            labels=["pair", "channel", "y", "x"],
+            units=["", "", "px", "px"],
+            data_type="Experimental PEEM (paired)",
+            metadata={"channel_tags": ["CP", "CM"], "pair_mode": "CP_CM"},
+        )
+
+        out = drift_correct(
+            tensor,
+            ref_index=0,
+            roi=ROI,
+            search_radius=6,
+            track_channel=0,
+        )
+
+        self.assertEqual(out.metadata["drift_shifts"][1], {"index": 1, "dx": -3, "dy": 0})
+        np.testing.assert_array_equal(out.value[1, 0, :, :-3], base[:, :-3])
+        np.testing.assert_array_equal(out.value[1, 1, :, :-3], other[:, :-3])
+        self.assertEqual(out.metadata["channel_tags"], ["CP", "CM"])
+        self.assertEqual(out.metadata["pair_mode"], "CP_CM")
+
+    def test_shift_uses_edge_clamp_instead_of_wraparound(self):
+        tensor = _raw_stack(shifts=((0, 0), (3, 0)))
+
+        out = drift_correct(tensor, ref_index=0, roi=ROI, search_radius=5)
+
+        self.assertEqual(out.metadata["drift_shifts"][1]["dx"], -3)
+        expected_edge = np.repeat(tensor.value[1, :, -1:], 3, axis=1)
+        np.testing.assert_array_equal(out.value[1, :, -3:], expected_edge)
+
+    def test_rejects_invalid_reference_index(self):
+        with self.assertRaises(ValueError):
+            drift_correct(_raw_stack(), ref_index=99, roi=ROI, search_radius=3)
+
+    def test_rejects_search_radius_outside_cap(self):
+        for radius in (0, 201):
+            with self.subTest(radius=radius), self.assertRaises(ValueError):
+                drift_correct(_raw_stack(), ref_index=0, roi=ROI, search_radius=radius)
+
+    def test_rejects_roi_with_tiny_bounding_box(self):
+        with self.assertRaises(ValueError):
+            drift_correct(
+                _raw_stack(),
+                ref_index=0,
+                roi={"kind": "rect", "x0": 4, "y0": 4, "x1": 5, "y1": 5},
+                search_radius=3,
+            )
+
+    def test_rejects_zero_variance_reference_template(self):
+        tensor = _raw_stack()
+        with self.assertRaises(ValueError):
+            drift_correct(
+                tensor,
+                ref_index=0,
+                roi={"kind": "rect", "x0": 0, "y0": 0, "x1": 4, "y1": 4},
+                search_radius=3,
+            )
+
+    def test_rejects_wrong_shape_and_track_channel(self):
+        wrong_shape = TensorData(
+            value=np.zeros((2, 3, 4)),
+            axes=[np.arange(2), np.arange(3), np.arange(4)],
+            labels=["pair", "y", "x"],
+            units=["", "px", "px"],
+            data_type="Experimental PEEM",
+        )
+        with self.assertRaises(ValueError):
+            drift_correct(wrong_shape, ref_index=0, roi=ROI, search_radius=3)
+
+        with self.assertRaises(ValueError):
+            drift_correct(_raw_stack(), ref_index=0, roi=ROI, search_radius=3, track_channel=1)

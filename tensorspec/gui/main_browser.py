@@ -533,14 +533,76 @@ class TensorSpecMainBrowser(QMainWindow):
         self.arpes_window.setWindowTitle("TensorSpec - ARPES Suite")
         self.arpes_window.show()
 
+    def _launch_panel_suite(
+        self,
+        win_id: str,
+        title: str,
+        module_path: str,
+        class_name: str,
+        size: tuple[int, int] = (1100, 750),
+    ):
+        """Open a tracked floating suite window; surface import/build errors in a dialog."""
+        if win_id in self.active_windows:
+            items = self.window_tracker_list.findItems(win_id, Qt.MatchExactly)
+            if items:
+                self.bring_window_to_front(items[0])
+            return
+
+        try:
+            import importlib
+
+            suite_cls = getattr(importlib.import_module(module_path), class_name)
+            inner = suite_cls()
+            wrapper = FloatingViewerWindow(
+                win_id=win_id,
+                title=title,
+                inner_widget=inner,
+                parent=None,
+            )
+            wrapper.setWindowTitle(title)
+            wrapper.window_closed.connect(self.unregister_window)
+            wrapper.resize(*size)
+            self.active_windows[win_id] = wrapper
+            self.window_tracker_list.addItem(win_id)
+            wrapper.show()
+            wrapper.raise_()
+            wrapper.activateWindow()
+        except Exception as exc:
+            import traceback
+
+            traceback.print_exc()
+            QMessageBox.critical(
+                self,
+                f"Failed to launch {win_id}",
+                f"{exc}\n\nSee terminal for full traceback.",
+            )
+
     def launch_peem_suite(self):
-        print("Launching PEEM Suite Window...")
+        self._launch_panel_suite(
+            "PEEM Suite",
+            "TensorSpec - PEEM Suite",
+            "tensorspec.gui.suites.peem_suite",
+            "PEEMSuite",
+            size=(1100, 750),
+        )
 
     def launch_xas_suite(self):
-        print("Launching XAS Suite Window...")
+        self._launch_panel_suite(
+            "XAS Suite",
+            "TensorSpec - XAS / XMCD Suite",
+            "tensorspec.gui.suites.xas_suite",
+            "XASSuite",
+            size=(1000, 700),
+        )
 
     def launch_transport_suite(self):
-        print("Launching Transport Suite Window...")
+        self._launch_panel_suite(
+            "Transport Suite",
+            "TensorSpec - Transport Suite",
+            "tensorspec.gui.suites.transport_suite",
+            "TransportSuite",
+            size=(1000, 700),
+        )
 
     def launch_compute_manager(self):
         try:

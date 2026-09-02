@@ -14,6 +14,27 @@ import matplotlib.patches as patches
 
 from tensorspec.core.data_models import TensorData
 
+
+def is_ml_label_layer(layer_name: str) -> bool:
+    return (
+        layer_name.startswith("domains_")
+        or layer_name.startswith("Labels_")
+        or layer_name == "Supervised Probabilities"
+    )
+
+
+def ml_label_spatial_map(layer_data: np.ndarray, value_shape: tuple) -> np.ndarray | None:
+    """Reshape flat ML domain vectors (or prob cubes) to (nY, nX) for spatial maps."""
+    if len(value_shape) != 4:
+        return None
+    nY, nX = value_shape[2], value_shape[3]
+    arr = np.asarray(layer_data)
+    if arr.ndim == 1 and arr.size == nY * nX:
+        return arr.reshape(nY, nX)
+    if arr.ndim == 3 and arr.shape[:2] == (nY, nX):
+        return np.argmax(arr, axis=2)
+    return None
+
 class MplCanvas(FigureCanvas):
     def __init__(self, parent=None, width=4, height=4, dpi=100):
         fig = Figure(figsize=(width, height), dpi=dpi, layout='constrained')
@@ -247,9 +268,16 @@ class SliceWidget(QFrame):
             slider.setRange(0, len(ax_arr)-1)
             slider.setValue(current_idx)
             
-            slider.valueChanged.connect(lambda val, dim=i: self.parent_panel.update_global_coord(dim, val))
-            spin.valueChanged.connect(lambda val, dim=i, arr=ax_arr: 
-                self.parent_panel.update_global_coord(dim, (np.abs(arr - val)).argmin()))
+            slider.valueChanged.connect(
+                lambda val, dim=i: self.parent_panel.update_global_coord(
+                    dim, val, cross_sync=self.chk_sync.isChecked()
+                )
+            )
+            spin.valueChanged.connect(
+                lambda val, dim=i, arr=ax_arr: self.parent_panel.update_global_coord(
+                    dim, int((np.abs(arr - val)).argmin()), cross_sync=self.chk_sync.isChecked()
+                )
+            )
             
             row.addWidget(lbl); row.addWidget(spin); row.addWidget(slider)
             self.sliders_layout.addLayout(row)
@@ -335,11 +363,20 @@ class SliceWidget(QFrame):
         layer_text = self.combo_layer.currentText()
         layers = self.tensor_data.metadata.get('layers', {}) if self.tensor_data.metadata else {}
         if layer_text != "Intensity" and layer_text in layers:
-            data_source = layers[layer_text]
+            layer_data = layers[layer_text]
+            spatial = ml_label_spatial_map(np.asarray(layer_data), self.tensor_data.value.shape)
+            if spatial is not None and {self.x_idx, self.y_idx} <= {2, 3}:
+                sliced = spatial
+            else:
+                data_source = np.asarray(layer_data)
+                if data_source.ndim == self.tensor_data.ndim:
+                    sliced = data_source[tuple(slices)]
+                elif spatial is not None:
+                    sliced = spatial
+                else:
+                    sliced = self.tensor_data.value[tuple(slices)]
         else:
-            data_source = self.tensor_data.value
-            
-        sliced = data_source[tuple(slices)]
+            sliced = self.tensor_data.value[tuple(slices)]
         if self.x_idx < self.y_idx: sliced = sliced.T
         
         x_arr, y_arr = self.tensor_data.axes[self.x_idx], self.tensor_data.axes[self.y_idx]
@@ -349,9 +386,13 @@ class SliceWidget(QFrame):
         
         self.im_main.set_data(sliced)
         self.im_main.set_extent(extent)
-        if "Labels" in layer_text:
+        if is_ml_label_layer(layer_text):
             self.im_main.set_clim(-0.5, 19.5)
-            self.im_main.set_cmap('tab20')
+            try:
+                import matplotlib as mpl
+                self.im_main.set_cmap(mpl.colormaps["tab20"].with_extremes(under="#333333"))
+            except Exception:
+                self.im_main.set_cmap("tab20")
         else:
             vmin, vmax = np.nanmin(sliced), np.nanmax(sliced)
             self.im_main.set_clim(vmin, vmax)
@@ -457,12 +498,17 @@ class SliceWidget(QFrame):
         new_x_idx = int((np.abs(x_arr - event.xdata)).argmin())
         new_y_idx = int((np.abs(y_arr - event.ydata)).argmin())
         
-        # 2. Update the global state manager
-        self.parent_panel.update_global_coord(self.x_idx, new_x_idx, broadcast=False)
-        self.parent_panel.update_global_coord(self.y_idx, new_y_idx, broadcast=True)
+        # 2. Update the global state manager (cross-dataset sync only if 🔗 Sync is on)
+        want_sync = bool(getattr(self, 'chk_sync', None) and self.chk_sync.isChecked())
+        self.parent_panel.update_global_coord(
+            self.x_idx, new_x_idx, broadcast=False, cross_sync=want_sync
+        )
+        self.parent_panel.update_global_coord(
+            self.y_idx, new_y_idx, broadcast=True, cross_sync=want_sync
+        )
 
-        # 3. Broadcast to other windows
-        if hasattr(self, 'chk_sync') and self.chk_sync.isChecked() and not self._is_syncing:
+        # 3. Broadcast physical crosshair coords to other Sync-enabled windows
+        if want_sync and not self._is_syncing:
             x_label = self.combo_x.currentText()
             y_label = self.combo_y.currentText()
             
@@ -802,9 +848,30 @@ class DataViewerPanel(QWidget):
                 self.views.append(widget)
             self._rebuild_grid()
 
-    def update_global_coord(self, dim_idx: int, val_idx: int, broadcast=True, cross_sync=True):
+    def _sync_enabled(self) -> bool:
+        """True if any SliceWidget owned by this panel has 🔗 Sync checked."""
+        candidates = list(self.views)
+        for win in self.detached_windows:
+            try:
+                candidates.extend(win.findChildren(SliceWidget))
+            except RuntimeError:
+                continue
+        for view in candidates:
+            chk = getattr(view, 'chk_sync', None)
+            if chk is not None and chk.isChecked():
+                return True
+        return False
+
+    def update_global_coord(self, dim_idx: int, val_idx: int, broadcast=True, cross_sync=False):
+        """Update this panel's cursor index.
+
+        cross_sync defaults False: cross-dataset linking must be opted in via
+        🔗 Sync on the source (and peer) viewers — never the silent default.
+        """
         self.global_coords[dim_idx] = val_idx
         
+        # Caller already opted in via cross_sync=True (from chk_sync on click/slider).
+        # Still require peer Sync on so one toggled window cannot drag an untoggled peer.
         if cross_sync and self.tensor_data is not None:
             phys_val = self.tensor_data.axes[dim_idx][val_idx]
             target_label = self.tensor_data.labels[dim_idx]
@@ -813,6 +880,8 @@ class DataViewerPanel(QWidget):
             for peer in list(DataViewerPanel._active_instances):
                 try:
                     if peer is self or peer.tensor_data is None:
+                        continue
+                    if not peer._sync_enabled():
                         continue
                     for p_dim_idx, (p_label, p_unit) in enumerate(zip(peer.tensor_data.labels, peer.tensor_data.units)):
                         if p_label == target_label and p_unit == target_unit:
@@ -853,9 +922,43 @@ class DataViewerPanel(QWidget):
     def get_dispersion_contrast(self):
         return 100
 
-    def add_overlay_mode(self, mode_name):
+    def sync_ml_layers(self, source_dict: dict):
+        """Merge ML domain / label arrays into viewer metadata and refresh layer combos."""
+        if self.tensor_data is None:
+            return
+        meta = dict(self.tensor_data.metadata or {})
+        layers = dict(meta.get("layers") or {})
+        for key, val in source_dict.items():
+            if key.startswith(("Labels_", "domains_", "probs_")) or key == "Supervised Probabilities":
+                layers[key] = val
+        meta["layers"] = layers
+        self.tensor_data.metadata = meta
         for view in self.views:
-            if hasattr(view, 'combo_layer'):
+            current = view.combo_layer.currentText()
+            view.combo_layer.blockSignals(True)
+            view.combo_layer.clear()
+            view.combo_layer.addItem("Intensity")
+            for layer_name in layers:
+                view.combo_layer.addItem(layer_name)
+            restore = view.combo_layer.findText(current)
+            view.combo_layer.setCurrentIndex(restore if restore >= 0 else 0)
+            view.combo_layer.blockSignals(False)
+
+    def focus_spatial_layer(self, layer_name: str, y_idx: int = 2, x_idx: int = 3):
+        """Show an ML label layer on the Y vs X spatial map."""
+        view = next((v for v in self.views if v.x_idx == x_idx and v.y_idx == y_idx), None)
+        if view is None:
+            self.spawn_view(x_idx, y_idx)
+            view = next(v for v in self.views if v.x_idx == x_idx and v.y_idx == y_idx)
+        if view.combo_layer.findText(layer_name) < 0:
+            view.combo_layer.addItem(layer_name)
+        view.combo_layer.setCurrentText(layer_name)
+        view.redraw()
+
+    def add_overlay_mode(self, mode_name):
+        """Legacy hook — prefer sync_ml_layers() so combo entries have backing arrays."""
+        for view in self.views:
+            if hasattr(view, "combo_layer") and view.combo_layer.findText(mode_name) < 0:
                 view.combo_layer.addItem(mode_name)
 
     def broadcast_redraw(self):

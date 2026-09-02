@@ -428,6 +428,14 @@ class MaestroAIApp(QMainWindow):
         else:
             QMessageBox.warning(self, "Invalid Path", "The specified folder does not exist. Please check the path and try again.")
             
+    def _refresh_viewer_ml_layers(self, select_layer: str | None = None):
+        """Push ML domain/label arrays into the middle DataViewer without resetting the grid."""
+        if not self.current_view_data:
+            return
+        self.viewer.sync_ml_layers(self.current_view_data)
+        if select_layer:
+            self.viewer.focus_spatial_layer(select_layer)
+
     def _convert_to_tensor_data(self, data):
         from tensorspec.core.data_models import TensorData
         import numpy as np
@@ -827,8 +835,7 @@ class MaestroAIApp(QMainWindow):
             
         # 2. Only update UI if the user is STILL looking at this exact file
         if self.current_view_data is self.active_cluster_target:
-            # --- API HOOK ---
-            self.viewer.add_overlay_mode(domain_key)
+            self._refresh_viewer_ml_layers(domain_key)
             
             self.session.notify_domains()
                 
@@ -1036,8 +1043,7 @@ class MaestroAIApp(QMainWindow):
         
         # 2. Only update UI if the user is STILL looking at this exact file
         if self.current_view_data is self.active_sup_test_target:
-            # --- API HOOK ---
-            self.viewer.add_overlay_mode(mode_name)
+            self._refresh_viewer_ml_layers(mode_name)
         
         self.btn_sup_test.setEnabled(True)
         self.status.showMessage("Inference Complete! View updated.", 5000)

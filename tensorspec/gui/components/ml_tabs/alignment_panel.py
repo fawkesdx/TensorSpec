@@ -194,9 +194,9 @@ class AlignmentPanel(QWidget):
         self.session.current_view_data[key2] = map2.flatten()
         self.session.current_view_data[key3] = map3.flatten()
 
-        if self.session.viewer is not None:
-            for k in [key1, key2, key3]:
-                self.session.viewer.add_overlay_mode(k)
+        if self.session.viewer is not None and self.session.current_view_data is not None:
+            self.session.viewer.sync_ml_layers(self.session.current_view_data)
+            self.session.viewer.focus_spatial_layer(key1)
 
         self.btn_run_align.setEnabled(True)
         self.session.set_status(100, f"{mode} successfully computed!")

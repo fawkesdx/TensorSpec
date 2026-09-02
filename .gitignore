@@ -37,3 +37,22 @@ move_mstaab.py
 split_load.py
 add_aspect.py
 bottom.py
+
+# Root-level local scratch / one-off scripts (never push)
+/fix_*.py
+/debug_*.py
+/deep_diag*.py
+/rewrite_*.py
+/get_matrix*.py
+/inspect_*.py
+/dummy.py
+/deploy_worker.py
+/tail_scf.py
+/update_einstein.py
+/upload_sprkkr.py
+/parse_wout*.py
+/install_chinook.py
+/test_*.py
+/test*.png
+/scratch/
+/docs/REMOTE_GPU_SETUP.md
