@@ -856,7 +856,7 @@ class MaestroAIApp(QMainWindow):
                             self.combo_parent_filter.addItem(f"{k} -> Cluster {c}")
 
             # Send data to the viewer component
-            self.viewer.set_data(self.current_view_data)
+            self.viewer.load_data(self._convert_to_tensor_data(self.current_view_data))
             
             # Now let the UI dropdowns fetch the newly added modes directly from the viewer
             self.combo_embed.clear()
@@ -940,7 +940,7 @@ class MaestroAIApp(QMainWindow):
             self.current_view_data = data
             
             # --- THE API HOOK --- 
-            self.viewer.set_data(data)
+            self.viewer.load_data(self._convert_to_tensor_data(data))
             
             self.combo_gp_domain.blockSignals(True) 
             self.combo_sim_domain.blockSignals(True) 
