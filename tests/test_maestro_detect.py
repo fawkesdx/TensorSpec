@@ -25,10 +25,11 @@ def test_select_fixed_spectra(tmp_path):
         ds = select_spectra_dataset(f)
         assert ds.name.endswith("Fixed_Spectra1")
         e, a, eu, au = detector_axes(ds, is_fixed=True)
-        assert len(e) == 10 and len(a) == 20
+        # Fixed plane (10, 20) = (angle, energy); eV scale applies to energy len 20.
+        assert len(e) == 20 and len(a) == 10
         assert eu == "eV"
-        np.testing.assert_allclose(e, np.arange(10) * 0.1)
-        assert au in {"deg", "Angle", "pixels"}
+        np.testing.assert_allclose(e, np.arange(20) * 0.1)
+        assert au == "deg"
 
 
 def test_assert_maestro_signature_missing_group(tmp_path):

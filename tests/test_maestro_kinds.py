@@ -43,10 +43,11 @@ def _write_xy_fine_h5(
     path, *, points_last=True, nx=3, ny=2, n_e=4, n_a=5, num_cycles=None
 ):
     n_points = nx * ny
+    # Fixed Spectra plane order is (angle, energy), not unitNames order.
     if points_last:
-        shape = (n_e, n_a, n_points)
+        shape = (n_a, n_e, n_points)
     else:
-        shape = (n_points, n_e, n_a)
+        shape = (n_points, n_a, n_e)
 
     raw = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
     rows = _xy_fine_rows(nx=nx, ny=ny)
@@ -103,9 +104,9 @@ def _write_focus_xy_fine_h5(
 ):
     n_points = nx * ny * n_defl
     if points_last:
-        shape = (n_e, n_a, n_points)
+        shape = (n_a, n_e, n_points)
     else:
-        shape = (n_points, n_e, n_a)
+        shape = (n_points, n_a, n_e)
 
     raw = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
     rows = _focus_xy_fine_rows(nx=nx, ny=ny, n_defl=n_defl)
@@ -315,9 +316,9 @@ def _write_fermi_defl_h5(
 ):
     n_points = n_defl
     if points_last:
-        shape = (n_e, n_a, n_points)
+        shape = (n_a, n_e, n_points)
     else:
-        shape = (n_points, n_e, n_a)
+        shape = (n_points, n_a, n_e)
 
     raw = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
     rows = _fermi_defl_rows(n_defl=n_defl)

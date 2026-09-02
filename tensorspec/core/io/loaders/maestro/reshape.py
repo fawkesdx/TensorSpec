@@ -155,9 +155,11 @@ def detector_dims_for_buffer(
     is_fixed: bool,
 ) -> tuple[int, int, np.ndarray, np.ndarray, str, str]:
     """Map buffer detector axes to (n_e, n_a) and coordinate arrays."""
-    from tensorspec.core.io.loaders.maestro.detector import detector_axes
+    from tensorspec.core.io.loaders.maestro.detector import (
+        detector_axes,
+        fixed_detector_axes_for_plane,
+    )
 
-    energy, angle, energy_unit, angle_unit = detector_axes(dataset, is_fixed=is_fixed)
     if paxis == 0:
         d1, d2 = int(shape[1]), int(shape[2])
     elif paxis == 2:
@@ -165,6 +167,14 @@ def detector_dims_for_buffer(
     else:
         raise ValueError(f"Unsupported points axis {paxis} for shape {shape}.")
 
+    if is_fixed:
+        # Fixed Spectra plane is always (angle, energy) regardless of unitNames order.
+        energy, angle, energy_unit, angle_unit = fixed_detector_axes_for_plane(
+            dataset, n_angle=d1, n_energy=d2
+        )
+        return len(energy), len(angle), energy, angle, energy_unit, angle_unit
+
+    energy, angle, energy_unit, angle_unit = detector_axes(dataset, is_fixed=False)
     if (d1, d2) == (len(energy), len(angle)):
         return len(energy), len(angle), energy, angle, energy_unit, angle_unit
     if (d1, d2) == (len(angle), len(energy)):
@@ -180,7 +190,7 @@ def detector_dims_for_buffer(
         dataset,
         d1,
         d2,
-        is_fixed=is_fixed,
+        is_fixed=False,
     )
 
 
