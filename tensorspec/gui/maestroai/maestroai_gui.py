@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 import psutil
 import time
 from collections import deque
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QCursor
 
 from tensorspec.gui.maestroai.model_warehouse_tab import ModelWarehouseTab
@@ -164,8 +164,14 @@ from .maestroai_viewers import MplCanvas, DendrogramDialog, AzimuthTemplateViewe
 
 
 class MaestroAIApp(QMainWindow):
-    def __init__(self):
+    # Lets the main browser drop this window from its registry on close. Kept as
+    # a plain QMainWindow rather than a FloatingViewerWindow because the suite
+    # owns its own status bar and progress bar.
+    window_closed = Signal(str)
+
+    def __init__(self, win_id="ML Suite"):
         super().__init__()
+        self.win_id = win_id
         self.setWindowTitle("MaestroAI Suite")
         self.setMinimumSize(1000, 620)
         self.resize(1500, 900)
@@ -173,6 +179,10 @@ class MaestroAIApp(QMainWindow):
         self.current_folder = ""
         self.current_view_data = None
         self.init_ui()
+
+    def closeEvent(self, event):
+        self.window_closed.emit(self.win_id)
+        super().closeEvent(event)
 
     @staticmethod
     def _scrollable(widget):

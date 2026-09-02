@@ -524,12 +524,21 @@ class TensorSpecMainBrowser(QMainWindow):
             print(f"Failed to launch Compute Manager: {e}")
 
     def launch_ml_suite(self):
+        win_id = "ML Suite"
+        if win_id in self.active_windows:
+            items = self.window_tracker_list.findItems(win_id, Qt.MatchExactly)
+            if items: self.bring_window_to_front(items[0])
+            return
+
         print("Launching Machine Learning Suite Window...")
         try:
             from tensorspec.gui.maestroai.maestroai_gui import MaestroAIApp
-            self.ml_window = MaestroAIApp()
-            self.ml_window.setWindowTitle("TensorSpec - Machine Learning Suite")
-            self.ml_window.show()
+            ml_window = MaestroAIApp(win_id=win_id)
+            ml_window.setWindowTitle("TensorSpec - Machine Learning Suite")
+            ml_window.window_closed.connect(self.unregister_window)
+            self.active_windows[win_id] = ml_window
+            self.window_tracker_list.addItem(win_id)
+            ml_window.show()
         except Exception as e:
             print(f"Failed to launch ML Suite: {e}")
     
