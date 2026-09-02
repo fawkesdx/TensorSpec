@@ -6,12 +6,13 @@ import matplotlib.patches as patches
 
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QPushButton, QFileDialog, QListWidget, QComboBox, 
-                             QLabel, QTabWidget, QCheckBox, QGroupBox, QSplitter, QScrollArea, 
+                             QLabel, QTabWidget, QCheckBox, QGroupBox, QSplitter, 
                              QMessageBox, QProgressBar, QStatusBar, QSpinBox, QDoubleSpinBox,
                              QLineEdit, QMenu, QDialog, QApplication)
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QCursor
 
+from tensorspec.gui.components.ml_tabs.layout import scrollable, split_panel, tab_group
 from tensorspec.gui.maestroai.model_warehouse_tab import ModelWarehouseTab
 from tensorspec.gui.maestroai.build_pipeline_tab import BuildPipelineTab
 from tensorspec.gui.maestroai.train_model_tab import TrainModelTab
@@ -54,61 +55,6 @@ class MaestroAIApp(QMainWindow):
     def closeEvent(self, event):
         self.window_closed.emit(self.win_id)
         super().closeEvent(event)
-
-    @staticmethod
-    def _scrollable(widget):
-        """Wrap a control column so it can shrink below its natural height."""
-        scroll = QScrollArea()
-        scroll.setWidget(widget)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        return scroll
-
-    @classmethod
-    def _split_tab(cls, controls, canvas, sizes=(300, 460)):
-        """Tab body: scrollable controls above a canvas, divided by a drag handle.
-
-        The canvas gets the stretch so it absorbs any extra height, and the
-        controls stay reachable via the scroll area when the pane is short.
-        """
-        # Inset the canvas to line up with the control column, which the scroll
-        # area indents by its own layout margin.
-        canvas_holder = QWidget()
-        holder_layout = QVBoxLayout(canvas_holder)
-        holder_layout.setContentsMargins(9, 0, 9, 9)
-        holder_layout.addWidget(canvas)
-
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(cls._scrollable(controls))
-        splitter.addWidget(canvas_holder)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setCollapsible(1, False)
-        splitter.setSizes(list(sizes))
-
-        tab = QWidget()
-        tab_layout = QVBoxLayout(tab)
-        tab_layout.setContentsMargins(0, 0, 0, 0)
-        tab_layout.addWidget(splitter)
-        return tab
-
-    @staticmethod
-    def _tab_group(pages):
-        """Build one top-level group's page.
-
-        A group holding a single tab renders that tab directly, so we don't draw
-        a nested bar with only one entry in it.
-        """
-        if len(pages) == 1:
-            return pages[0][1]
-
-        inner = QTabWidget()
-        inner.setDocumentMode(True)
-        inner.setUsesScrollButtons(True)
-        inner.setElideMode(Qt.TextElideMode.ElideNone)
-        for label, page in pages:
-            inner.addTab(page, label)
-        return inner
 
     def init_ui(self):
         main_widget = QWidget()
@@ -184,7 +130,7 @@ class MaestroAIApp(QMainWindow):
         
         model_pages = [
             ("Model Warehouse", self.model_warehouse_tab),
-            ("Build Pipeline", self._scrollable(self.build_pipeline_tab)),
+            ("Build Pipeline", scrollable(self.build_pipeline_tab)),
             ("Train Model", self.train_model_tab),
         ]
         
@@ -254,7 +200,7 @@ class MaestroAIApp(QMainWindow):
         train_layout.addWidget(self.btn_train)
         train_layout.addLayout(loss_view_layout) 
         train_layout.addStretch()
-        ssl_page = self._split_tab(train_controls, self.loss_canvas, sizes=(420, 380))
+        ssl_page = split_panel(train_controls, self.loss_canvas, sizes=(420, 380))
 
         # Tab B: Clustering
         cluster_controls = QWidget()
@@ -328,7 +274,7 @@ class MaestroAIApp(QMainWindow):
         cluster_layout.addWidget(self.btn_dendro); cluster_layout.addWidget(self.btn_save_labels)
         cluster_layout.addLayout(umap_ctrl_layout)
         cluster_layout.addStretch()
-        cluster_page = self._split_tab(cluster_controls, self.umap_canvas, sizes=(400, 400))
+        cluster_page = split_panel(cluster_controls, self.umap_canvas, sizes=(400, 400))
 
         # Tab C: Supervised Few-Shot
         sup_tab = QWidget()
@@ -380,7 +326,7 @@ class MaestroAIApp(QMainWindow):
 
         sup_layout.addWidget(sup_ctrl_group); sup_layout.addWidget(self.sup_btn_group); sup_layout.addWidget(sup_act_group)
         sup_layout.addStretch()
-        sup_page = self._scrollable(sup_tab)
+        sup_page = scrollable(sup_tab)
 
         # Tab D: Active Learning
         al_controls = QWidget()
@@ -415,7 +361,7 @@ class MaestroAIApp(QMainWindow):
 
         al_layout.addWidget(al_ctrl_group); al_layout.addWidget(self.btn_run_al)
         al_layout.addStretch()
-        al_page = self._split_tab(al_controls, self.al_canvas, sizes=(260, 540))
+        al_page = split_panel(al_controls, self.al_canvas, sizes=(260, 540))
 
         # Tab E: Simulate Active Learning
         sim_controls = QWidget()
@@ -471,7 +417,7 @@ class MaestroAIApp(QMainWindow):
 
         sim_layout.addWidget(sim_ctrl_group); sim_layout.addLayout(btn_layout)
         sim_layout.addStretch()
-        sim_page = self._split_tab(sim_controls, self.sim_canvas, sizes=(300, 500))
+        sim_page = split_panel(sim_controls, self.sim_canvas, sizes=(300, 500))
 
         self.sim_measured_mask = None
         self.sim_next_idx = None
@@ -526,7 +472,7 @@ class MaestroAIApp(QMainWindow):
 
         align_layout.addWidget(align_ctrl_group); align_layout.addWidget(self.btn_run_align)
         align_layout.addStretch()
-        align_page = self._split_tab(align_controls, self.align_canvas, sizes=(380, 420))
+        align_page = split_panel(align_controls, self.align_canvas, sizes=(380, 420))
 
         # Group the pages by workflow stage. SSL Training produces the
         # embeddings Clustering consumes, and Clustering produces the domains
@@ -550,7 +496,7 @@ class MaestroAIApp(QMainWindow):
                        ("Simulate AL", sim_page)]),
             ("Models", model_pages),
         ):
-            right_panel.addTab(self._tab_group(pages), group_label)
+            right_panel.addTab(tab_group(pages), group_label)
 
         right_panel.setCurrentIndex(0)
         
