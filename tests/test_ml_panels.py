@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 from PySide6.QtWidgets import QListWidgetItem
 
+from tensorspec.core.data_models import TensorData
 from tensorspec.gui.ml_session import MLSession
 
 
@@ -45,6 +46,33 @@ def test_activating_a_dataset_pushes_it_to_the_viewer(qapp):
     assert win.current_view_data is win.workspace["probe"]
     assert win.viewer.tensor_data is not None
     assert win.viewer.tensor_data.ndim == 4
+    win.close()
+
+
+def test_tensor_data_activation_keeps_ml_dict_and_viewer_tensor(qapp):
+    from tensorspec.gui.maestroai.maestroai_gui import MaestroAIApp
+
+    tensor = TensorData(
+        value=np.zeros((2, 3, 4, 5)),
+        axes=[np.arange(2), np.arange(3), np.arange(4), np.arange(5)],
+        labels=["Y", "X", "Energy", "Angle"],
+        units=["um", "um", "eV", "deg"],
+        data_type="XY Scan Fine",
+        metadata={"layers": {"embeddings_ae": [1], "domains_k5": [2]}},
+    )
+    win = MaestroAIApp()
+    win.workspace["probe"] = tensor
+
+    win.activate_data(QListWidgetItem("probe"))
+
+    assert win.viewer.tensor_data is tensor
+    assert win.current_view_data["value"] is tensor.value
+    assert win.current_view_data["E"] is tensor.axes[2]
+    assert win.current_view_data["angle"] is tensor.axes[3]
+    assert win.current_view_data["y"] is tensor.axes[0]
+    assert win.current_view_data["x"] is tensor.axes[1]
+    assert win.current_view_data["embeddings_ae"] == [1]
+    assert win.session.current_view_data is win.current_view_data
     win.close()
 
 

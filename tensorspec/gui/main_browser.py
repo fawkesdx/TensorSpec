@@ -18,6 +18,8 @@ from tensorspec.gui.suites.arpes_suite import ARPESSuite
 from tensorspec.gui.suites.dft_suite import DFTSuite
 from tensorspec.gui.components.data_viewer_panel import DataViewerPanel
 from tensorspec.core.workspace import global_workspace
+from tensorspec.core.io.arpes_loader import ARPESLoader
+from tensorspec.core.io.simulated_loader import SimulatedARPESLoader
 
 import time
 import platform
@@ -322,6 +324,10 @@ class TensorSpecMainBrowser(QMainWindow):
         self.lbl_active_vars.customContextMenuRequested.connect(self.show_secret_menu)
         top_left_layout.addWidget(self.lbl_active_vars)
         
+        self.btn_load_workspace = QPushButton("Load ARPES / Maestro Data...")
+        self.btn_load_workspace.clicked.connect(self.load_workspace_files)
+        top_left_layout.addWidget(self.btn_load_workspace)
+
         self.btn_refresh_tree = QPushButton("🔄 Refresh Workspace")
         self.btn_refresh_tree.clicked.connect(self.refresh_workspace_tree)
         top_left_layout.addWidget(self.btn_refresh_tree)
@@ -416,6 +422,40 @@ class TensorSpecMainBrowser(QMainWindow):
 
         # Expand all by default
         self.data_tree_widget.expandAll()
+
+    def load_workspace_files(self):
+        """Load ARPES / Maestro files into the central workspace tree."""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Load ARPES / Maestro Data",
+            "",
+            "ARPES Data (*.h5 *.hdf5 *.npz)",
+        )
+        if not paths:
+            return
+
+        success_count = 0
+        for path in paths:
+            var_name = os.path.basename(path).split('.')[0]
+            try:
+                if path.endswith('.npz'):
+                    tensor_data = SimulatedARPESLoader.load(path)
+                else:
+                    tensor_data = ARPESLoader.load(path)
+                global_workspace.push_spectroscopy_data(var_name, tensor_data)
+                success_count += 1
+            except Exception as e:
+                QMessageBox.critical(
+                    self, "Load Error", f"Failed to load '{var_name}':\n{str(e)}"
+                )
+
+        if success_count > 0:
+            self.refresh_workspace_tree()
+            QMessageBox.information(
+                self,
+                "Load Complete",
+                f"Successfully loaded {success_count} dataset(s) into the Workspace.",
+            )
 
     def on_item_selected(self, current_item, previous_item):
         """Triggers preview update in the Inspector Panel upon selecting a variable."""

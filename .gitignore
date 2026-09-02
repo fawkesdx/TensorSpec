@@ -56,3 +56,6 @@ bottom.py
 /test*.png
 /scratch/
 /docs/REMOTE_GPU_SETUP.md
+
+# Agent scratch (never push)
+.superpowers/

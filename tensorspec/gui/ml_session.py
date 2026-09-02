@@ -7,6 +7,8 @@ writes with signals so each panel only ever touches its own widgets.
 """
 from PySide6.QtCore import QObject, Signal
 
+from tensorspec.core.data_models import TensorData
+
 
 class MLSession(QObject):
     """Workspace and active-dataset state shared by every ML panel."""
@@ -14,7 +16,7 @@ class MLSession(QObject):
     # A dataset was added to or removed from the in-memory workspace.
     workspace_changed = Signal()
     # The user selected a dataset to work on; payload is that dataset.
-    data_activated = Signal(dict)
+    data_activated = Signal(object)
     # The "embeddings_*" keys available on the active dataset changed.
     embeddings_changed = Signal(list)
     # The "domains_*" keys available on the active dataset changed.
@@ -50,9 +52,16 @@ class MLSession(QObject):
         self.data_activated.emit(data)
 
     def _keys_with_prefix(self, prefix):
-        if not self.current_view_data:
+        data = self.current_view_data
+        if data is None:
             return []
-        return [k for k in self.current_view_data if k.startswith(prefix)]
+        if isinstance(data, TensorData):
+            keys = (data.metadata.get("layers") or {}).keys()
+        elif isinstance(data, dict):
+            keys = data.keys()
+        else:
+            return []
+        return [k for k in keys if k.startswith(prefix)]
 
     def embedding_keys(self):
         return self._keys_with_prefix(self.EMBEDDING_PREFIX)

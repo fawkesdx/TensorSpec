@@ -1,5 +1,4 @@
 import os
-import h5py
 import numpy as np
 import pickle
 
@@ -19,6 +18,8 @@ from tensorspec.gui.ml_session import MLSession
 from tensorspec.gui.maestroai.model_warehouse_tab import ModelWarehouseTab
 from tensorspec.gui.maestroai.build_pipeline_tab import BuildPipelineTab
 from tensorspec.gui.maestroai.train_model_tab import TrainModelTab
+from tensorspec.core.data_models import TensorData
+from tensorspec.core.workspace import global_workspace
 
 # --- UNIVERSAL COMPONENTS ---
 from .maestro_loader import LoadWorker
@@ -35,6 +36,33 @@ from .maestroai_guides import (MasterGuideDialog, SSLGuideDialog, ClusterGuideDi
 from .maestroai_viewers import MplCanvas, DendrogramDialog
 
 
+def _tensor_to_ml_dict(td: TensorData) -> dict:
+    """Expose TensorData through the legacy mapping consumed by ML workers."""
+    data = {
+        "value": td.value,
+        "kind": td.data_type,
+    }
+    for label, axis in zip(td.labels, td.axes):
+        normalized = label.strip().casefold()
+        if normalized == "energy":
+            key = "E"
+        elif normalized == "angle" or "slit angle" in normalized:
+            key = "angle"
+        elif normalized == "y":
+            key = "y"
+        elif normalized == "x":
+            key = "x"
+        elif normalized.startswith("defl"):
+            key = "defl"
+        else:
+            key = label
+        data[key] = axis
+    layers = td.metadata.get("layers") or {}
+    if isinstance(layers, dict):
+        data.update(layers)
+    return data
+
+
 class MaestroAIApp(QMainWindow):
     # Lets the main browser drop this window from its registry on close. Kept as
     # a plain QMainWindow rather than a FloatingViewerWindow because the suite
@@ -49,6 +77,7 @@ class MaestroAIApp(QMainWindow):
         self.resize(1500, 900)
         self.session = MLSession()
         self.workspace = self.session.workspace
+        self._workspace_tensors = {}
         self.current_folder = ""
         self.current_view_data = None
         self.init_ui()
@@ -437,9 +466,10 @@ class MaestroAIApp(QMainWindow):
             self.viewer.focus_spatial_layer(select_layer)
 
     def _convert_to_tensor_data(self, data):
-        from tensorspec.core.data_models import TensorData
-        import numpy as np
+        """Convert legacy Maestro workspace dictionaries to TensorData."""
         if data is None: return None
+        if not isinstance(data, dict):
+            raise TypeError("_convert_to_tensor_data only accepts legacy dictionaries")
         layers = {}
         for k, v in data.items():
             if k.startswith("Labels_") or k.startswith("domains_") or k.startswith("probs_"):
@@ -571,31 +601,10 @@ class MaestroAIApp(QMainWindow):
         file_path = os.path.join(self.current_folder, item.text())
         var_name = "MAESTRO_" + item.text().replace('.h5', '').replace('-', '_')
 
-        try:
-            with h5py.File(file_path, 'r') as f:
-                d0_keys = list(f['0D_Data'].keys()) if '0D_Data' in f else []
-                has_spatial = any(k in d0_keys for k in ['X', 'Y', 'Sample X', 'Sample Y', 'Scan X', 'Scan Y'])
-                has_angle = any(k in d0_keys for k in ['Deflection', 'Slit Defl', 'Manipulator Theta', 'Manipulator Phi', 'Tilt'])
-                
-                scan_info = ""
-                if 'Headers' in f and 'Low_Level_Scan' in f['Headers']:
-                    scan_info = str(f['Headers']['Low_Level_Scan'][0][2])
-                
-                if "XY Scan Fine" in scan_info: mode = "XY Scan Fine"
-                elif "XY Scan" in scan_info or has_spatial: mode = "XY Scan"
-                elif "Fermi" in scan_info or has_angle: mode = "Fermi Map"
-                else: mode = "Raw"
-        except:
-            mode = "Raw"
-
-        if mode == "Raw":
-            reply = QMessageBox.question(self, "Unknown Type", f"Could not identify {item.text()} as a Spatial Scan. Load as Raw Data?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-            if reply == QMessageBox.StandardButton.No: return
-
         # Start Background Load
         self.prog_bar.setVisible(True)
         self.btn_load.setEnabled(False)
-        self.loader = LoadWorker(file_path, var_name, mode)
+        self.loader = LoadWorker(file_path, var_name)
         self.loader.progress.connect(self.update_status)
         self.loader.finished.connect(self.on_load_finish)
         
@@ -607,8 +616,12 @@ class MaestroAIApp(QMainWindow):
     def update_status(self, val, msg):
         self.prog_bar.setValue(val); self.status.showMessage(msg)
 
-    def on_load_finish(self, var_name, data):
-        self.session.add_dataset(var_name, data)
+    def on_load_finish(self, var_name, tensor_data):
+        ml_data = _tensor_to_ml_dict(tensor_data)
+        self.session.add_dataset(var_name, ml_data)
+        self._workspace_tensors[var_name] = tensor_data
+        global_workspace.push_spectroscopy_data(var_name, tensor_data)
+        self.viewer.load_data(tensor_data)
         if self.workspace_list.findItems(var_name, Qt.MatchFlag.MatchExactly) == []:
             self.workspace_list.addItem(var_name)
         self.prog_bar.setVisible(False)
@@ -616,7 +629,16 @@ class MaestroAIApp(QMainWindow):
         self.status.showMessage("Ready.", 3000)
 
     def activate_data(self, item):
-        data = self.workspace[item.text()]
+        name = item.text()
+        data = self._workspace_tensors.get(name, self.workspace[name])
+
+        if isinstance(data, TensorData):
+            ml_data = _tensor_to_ml_dict(data)
+            self.workspace[name] = ml_data
+            self.current_view_data = ml_data
+            self.session.activate(ml_data)
+            self.viewer.load_data(data)
+            return
         
         # --- NEW: Safety Catch for 3D Fermi Maps ---
         if data.get('kind') == "Fermi Map (Cleaned)":

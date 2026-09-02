@@ -5,8 +5,10 @@ repopulated combo boxes owned by the clustering, active-learning and
 simulate-AL tabs, and on_cluster_finish did the same. MLSession replaces those
 writes with signals, so these tests pin the signal contract the panels rely on.
 """
+import numpy as np
 import pytest
 
+from tensorspec.core.data_models import TensorData
 from tensorspec.gui.ml_session import MLSession
 
 
@@ -79,6 +81,22 @@ def test_key_helpers_filter_by_prefix(session):
     })
 
     assert session.embedding_keys() == ["embeddings_ae", "embeddings_vae"]
+    assert session.domain_keys() == ["domains_k5"]
+
+
+def test_key_helpers_read_tensor_data_metadata_layers(session):
+    tensor = TensorData(
+        value=np.zeros((2, 3)),
+        axes=[np.arange(2), np.arange(3)],
+        labels=["Energy", "Angle"],
+        units=["eV", "deg"],
+        data_type="ARPES",
+        metadata={"layers": {"embeddings_ae": [1], "domains_k5": [2], "other": 3}},
+    )
+
+    session.activate(tensor)
+
+    assert session.embedding_keys() == ["embeddings_ae"]
     assert session.domain_keys() == ["domains_k5"]
 
 
