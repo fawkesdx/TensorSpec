@@ -19,7 +19,7 @@ WINDOW_SIZES = [(1500, 900), (1100, 700), (1000, 620)]
 EXPECTED_GROUPS = ["Train", "Cluster", "Align", "Steer", "Models"]
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def suite(qapp):
     from tensorspec.gui.maestroai.maestroai_gui import MaestroAIApp
 

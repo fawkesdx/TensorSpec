@@ -8,11 +8,13 @@ from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QLabel, QTabWidget, QCheckBox, QGroupBox, QSplitter, 
                              QMessageBox, QProgressBar, QStatusBar, QSpinBox, QDoubleSpinBox,
                              QLineEdit, QMenu, QDialog, QApplication)
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor
 
 from tensorspec.gui.components.ml_tabs.active_learning_panel import ActiveLearningPanel
+from tensorspec.gui.components.ml_tabs.alignment_panel import AlignmentPanel
 from tensorspec.gui.components.ml_tabs.layout import scrollable, split_panel, tab_group
+from tensorspec.gui.components.ml_tabs.simulate_al_panel import SimulateALPanel
 from tensorspec.gui.ml_session import MLSession
 from tensorspec.gui.maestroai.model_warehouse_tab import ModelWarehouseTab
 from tensorspec.gui.maestroai.build_pipeline_tab import BuildPipelineTab
@@ -26,14 +28,11 @@ from .maestro_fermi_viewer import FermiViewerWindow
 from .maestroai_training_ssl import TrainWorker
 from .maestroai_training_sup import SupTrainWorker, SupTestWorker
 from .maestroai_clustering import ClusterWorker
-from .maestroai_active_learning import SimulateALWorker
-from .maestroai_alignment import AzimuthalTwistWorker, CoupledAzimuthTiltWorker, NormalTiltWorker
 
 # --- AI VIEWERS & GUIDES ---
 from .maestroai_guides import (MasterGuideDialog, SSLGuideDialog, ClusterGuideDialog, 
-                              SupGuideDialog, SimulateALGuideDialog,
-                              AlignmentGuideDialog)
-from .maestroai_viewers import MplCanvas, DendrogramDialog, AzimuthTemplateViewer
+                              SupGuideDialog)
+from .maestroai_viewers import MplCanvas, DendrogramDialog
 
 
 class MaestroAIApp(QMainWindow):
@@ -48,11 +47,12 @@ class MaestroAIApp(QMainWindow):
         self.setWindowTitle("MaestroAI Suite")
         self.setMinimumSize(1000, 620)
         self.resize(1500, 900)
-        self.workspace = {}
+        self.session = MLSession()
+        self.workspace = self.session.workspace
         self.current_folder = ""
         self.current_view_data = None
-        self.session = MLSession()
         self.init_ui()
+        self.session.viewer = self.viewer
         self.session.status_changed.connect(self._on_session_status)
 
     def _on_session_status(self, value, message):
@@ -344,115 +344,12 @@ class MaestroAIApp(QMainWindow):
         al_page = self.al_panel
 
         # Tab E: Simulate Active Learning
-        sim_controls = QWidget()
-        sim_layout = QVBoxLayout(sim_controls)
-
-        self.btn_sim_help = QPushButton("🎮 How to use the AL Simulator? Click Here")
-        self.btn_sim_help.setStyleSheet("font-weight: bold; color: #17becf; padding: 6px; font-size: 14px;")
-        self.btn_sim_help.clicked.connect(lambda: SimulateALGuideDialog(self).exec())
-        sim_layout.addWidget(self.btn_sim_help)
-
-        sim_ctrl_group = QGroupBox("Simulation Controls:")
-        sim_c_layout = QVBoxLayout(sim_ctrl_group)
-        
-        self.combo_sim_domain = QComboBox() 
-        sim_c_layout.addWidget(QLabel("Ground Truth Domain (From Clustering):"))
-        sim_c_layout.addWidget(self.combo_sim_domain)
-
-        self.combo_sim_algo = QComboBox()
-        self.combo_sim_algo.addItems([
-            "Bayesian Network (GPU)", "Deep Ensembles (GPU)", "Evidential Deep Learning (GPU)",
-            "Gaussian Process (CPU)", "Random Forest (CPU)"
-        ])
-        sim_c_layout.addWidget(QLabel("Steering Algorithm:"))
-        sim_c_layout.addWidget(self.combo_sim_algo)
-
-        h_sim = QHBoxLayout()
-        self.spin_sim_points = QSpinBox(); self.spin_sim_points.setRange(2, 50); self.spin_sim_points.setValue(10)
-        h_sim.addWidget(QLabel("Initial Random Seed Points:")); h_sim.addWidget(self.spin_sim_points)
-        
-        self.spin_sim_ff = QSpinBox(); self.spin_sim_ff.setRange(1, 500); self.spin_sim_ff.setValue(10)
-        h_sim.addWidget(QLabel("Fast-Forward Steps:")); h_sim.addWidget(self.spin_sim_ff)
-        sim_c_layout.addLayout(h_sim)
-
-        btn_layout = QHBoxLayout()
-        self.btn_sim_init = QPushButton("1. Initialize Simulation")
-        self.btn_sim_init.setStyleSheet("font-weight: bold; color: #1f77b4;")
-        self.btn_sim_init.clicked.connect(self.run_sim_init)
-        
-        self.btn_sim_step = QPushButton("2. Simulate 1 Step")
-        self.btn_sim_step.setStyleSheet("font-weight: bold; color: #d62728;")
-        self.btn_sim_step.setEnabled(False)
-        self.btn_sim_step.clicked.connect(self.run_sim_step)
-        
-        self.btn_sim_ff = QPushButton("3. Fast-Forward")
-        self.btn_sim_ff.setStyleSheet("font-weight: bold; color: #9467bd;")
-        self.btn_sim_ff.setEnabled(False)
-        self.btn_sim_ff.clicked.connect(self.run_sim_ff)
-        
-        btn_layout.addWidget(self.btn_sim_init); btn_layout.addWidget(self.btn_sim_step); btn_layout.addWidget(self.btn_sim_ff)
-
-        self.sim_canvas = MplCanvas(self, width=5, height=4, is_3d=False, orientation='vertical_3')
-        self.ax_sim_truth, self.ax_sim_pred, self.ax_sim_uncert = self.sim_canvas.axes
-
-        sim_layout.addWidget(sim_ctrl_group); sim_layout.addLayout(btn_layout)
-        sim_layout.addStretch()
-        sim_page = split_panel(sim_controls, self.sim_canvas, sizes=(300, 500))
-
-        self.sim_measured_mask = None
-        self.sim_next_idx = None
+        self.sim_panel = SimulateALPanel(self.session)
+        sim_page = self.sim_panel
 
         # Tab F: 3D Alignment
-        align_controls = QWidget()
-        align_layout = QVBoxLayout(align_controls)
-
-        self.btn_align_help = QPushButton("📐 Guide to Alignment (Azimuth & Tilt)")
-        self.btn_align_help.setStyleSheet("font-weight: bold; color: #bcbd22; padding: 6px; font-size: 14px;")
-        self.btn_align_help.clicked.connect(lambda: AlignmentGuideDialog(self).exec())
-        align_layout.addWidget(self.btn_align_help)
-
-        align_ctrl_group = QGroupBox("Alignment Controls:")
-        align_c_layout = QVBoxLayout(align_ctrl_group)
-        
-        self.combo_align_ref = QComboBox() 
-        align_c_layout.addWidget(QLabel("Select Reference 3D Fermi Map:"))
-        align_c_layout.addWidget(self.combo_align_ref)
-
-        self.btn_inspect_ref = QPushButton("Inspect Selected Reference Map")
-        self.btn_inspect_ref.setStyleSheet("font-weight: bold; color: #1f77b4; padding: 4px;")
-        self.btn_inspect_ref.clicked.connect(self.open_fermi_viewer)
-        align_c_layout.addWidget(self.btn_inspect_ref)
-
-        self.btn_inspect_azimuth = QPushButton("Visualize Azimuthal Cuts")
-        self.btn_inspect_azimuth.setStyleSheet("font-weight: bold; color: #9467bd; padding: 4px;")
-        self.btn_inspect_azimuth.clicked.connect(self.open_azimuth_viewer)
-        align_c_layout.addWidget(self.btn_inspect_azimuth)
-
-        self.combo_align_mode = QComboBox()
-        self.combo_align_mode.addItems([
-            "Azimuthal Twist (In-Plane)", "Surface Normal Tilt (Out-of-Plane)", "Coupled Azimuth & Deflection Tilt"
-        ])
-        align_c_layout.addWidget(QLabel("Alignment Mode:"))
-        align_c_layout.addWidget(self.combo_align_mode)
-        
-        gamma_layout = QHBoxLayout()
-        self.spin_gamma_s = QDoubleSpinBox(); self.spin_gamma_s.setRange(-45, 45); self.spin_gamma_s.setDecimals(2)
-        self.spin_gamma_d = QDoubleSpinBox(); self.spin_gamma_d.setRange(-45, 45); self.spin_gamma_d.setDecimals(2)
-        gamma_layout.addWidget(QLabel("Γ Slit (°):")); gamma_layout.addWidget(self.spin_gamma_s)
-        gamma_layout.addWidget(QLabel("Γ Defl (°):")); gamma_layout.addWidget(self.spin_gamma_d)
-        align_c_layout.addWidget(QLabel("Center of Rotation (Γ-Point Target):"))
-        align_c_layout.addLayout(gamma_layout)
-
-        self.btn_run_align = QPushButton("Run Global Alignment Search")
-        self.btn_run_align.setStyleSheet("font-weight: bold; color: #2ca02c; padding: 6px; font-size: 14px;")
-        self.btn_run_align.clicked.connect(self.run_alignment)
-
-        self.align_canvas = MplCanvas(self, width=5, height=4, is_3d=False, orientation='horizontal_3')
-        self.ax_align_1, self.ax_align_2, self.ax_align_3 = self.align_canvas.axes
-
-        align_layout.addWidget(align_ctrl_group); align_layout.addWidget(self.btn_run_align)
-        align_layout.addStretch()
-        align_page = split_panel(align_controls, self.align_canvas, sizes=(380, 420))
+        self.align_panel = AlignmentPanel(self.session)
+        align_page = self.align_panel
 
         # Group the pages by workflow stage. SSL Training produces the
         # embeddings Clustering consumes, and Clustering produces the domains
@@ -633,9 +530,6 @@ class MaestroAIApp(QMainWindow):
             for key, val in session_data.items():
                 self.current_view_data[key] = val
                 
-                if key.startswith("domains_"):
-                    self.combo_sim_domain.addItem(key)
-
             self.combo_parent_filter.clear()
             self.combo_parent_filter.addItem("None (Run on Entire Map)")
             for k in self.current_view_data.keys():
@@ -706,10 +600,9 @@ class MaestroAIApp(QMainWindow):
         self.prog_bar.setValue(val); self.status.showMessage(msg)
 
     def on_load_finish(self, var_name, data):
-        self.workspace[var_name] = data
+        self.session.add_dataset(var_name, data)
         if self.workspace_list.findItems(var_name, Qt.MatchFlag.MatchExactly) == []:
             self.workspace_list.addItem(var_name)
-            self.combo_align_ref.addItem(var_name)
         self.prog_bar.setVisible(False)
         self.btn_load.setEnabled(True)
         self.status.showMessage("Ready.", 3000)
@@ -735,12 +628,6 @@ class MaestroAIApp(QMainWindow):
             # --- THE API HOOK --- 
             self.viewer.load_data(self._convert_to_tensor_data(data))
             
-            self.combo_sim_domain.blockSignals(True)
-            self.combo_sim_domain.clear()
-            for k in data.keys():
-                if k.startswith("domains_"):
-                    self.combo_sim_domain.addItem(k)
-            self.combo_sim_domain.blockSignals(False)
             self.session.notify_domains()
             
             self.combo_embed.blockSignals(True)
@@ -943,8 +830,6 @@ class MaestroAIApp(QMainWindow):
             # --- API HOOK ---
             self.viewer.add_overlay_mode(domain_key)
             
-            if self.combo_sim_domain.findText(domain_key) == -1:
-                self.combo_sim_domain.addItem(domain_key)
             self.session.notify_domains()
                 
             self.combo_parent_filter.clear()
@@ -1182,171 +1067,3 @@ class MaestroAIApp(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", f"Could not save file:\n{str(e)}")
 
-    def run_sim_init(self):
-        if not self.current_view_data: return
-        domain_key = self.combo_sim_domain.currentText()
-        if not domain_key: 
-            QMessageBox.warning(self, "No Domains", "Please run Clustering first to define the ground truth!")
-            return
-        labels_2d = self.current_view_data[domain_key]
-        total_pixels = labels_2d.size
-        self.sim_measured_mask = np.zeros(total_pixels, dtype=bool)
-        self.sim_auto_steps = 0 
-        valid_indices = np.where(labels_2d.flatten() != -1)[0]
-        n_start = self.spin_sim_points.value()
-        start_indices = np.random.choice(valid_indices, n_start, replace=False)
-        self.sim_measured_mask[start_indices] = True
-        self.btn_sim_step.setEnabled(False); self.btn_sim_ff.setEnabled(False)
-        self.execute_sim_worker()
-
-    def run_sim_ff(self):
-        self.sim_auto_steps = self.spin_sim_ff.value() - 1 
-        self.run_sim_step()
-
-    def run_sim_step(self):
-        if self.sim_next_idx is None or self.sim_next_idx == -1: return
-        self.sim_measured_mask[self.sim_next_idx] = True
-        self.btn_sim_step.setEnabled(False); self.btn_sim_ff.setEnabled(False); self.btn_sim_init.setEnabled(False)
-        self.execute_sim_worker()
-
-    def execute_sim_worker(self):
-        domain_key = self.combo_sim_domain.currentText()
-        algo = self.combo_sim_algo.currentText()
-        labels_2d = self.current_view_data[domain_key]
-        x_arr, y_arr = self.current_view_data['x'], self.current_view_data['y']
-        self.prog_bar.setVisible(True)
-        if self.sim_auto_steps > 0: self.status.showMessage(f"Fast-Forwarding {algo} ({self.sim_auto_steps} steps remaining)...")
-        else: self.status.showMessage(f"Simulating {algo}...")
-        self.sim_worker = SimulateALWorker(x_arr, y_arr, labels_2d, algo, self.sim_measured_mask)
-        self.sim_worker.setStackSize(32 * 1024 * 1024) 
-        self.sim_worker.progress.connect(self.update_status)
-        self.sim_worker.finished.connect(self.on_sim_finish)
-        self.sim_worker.error.connect(lambda e: self.status.showMessage(f"Simulation Error: {e}"))
-        self.sim_worker.start()
-
-    def on_sim_finish(self, pred_map, uncert_map, next_idx):
-        self.ax_sim_truth.clear(); self.ax_sim_pred.clear(); self.ax_sim_uncert.clear()
-        x_arr, y_arr = self.current_view_data['x'], self.current_view_data['y']
-        X_grid, Y_grid = np.meshgrid(x_arr, y_arr)
-        extent = (x_arr[0], x_arr[-1], y_arr[0], y_arr[-1])
-
-        domain_key = self.combo_sim_domain.currentText()
-        truth_map_1d = self.current_view_data[domain_key]
-        truth_map_2d = truth_map_1d.reshape(X_grid.shape)
-
-        self.ax_sim_truth.imshow(truth_map_2d, origin='lower', extent=extent, cmap='tab20', alpha=0.8, vmin=-0.5, vmax=19.5)
-        self.ax_sim_pred.imshow(pred_map, origin='lower', extent=extent, cmap='tab20', alpha=0.8, vmin=-0.5, vmax=19.5)
-        self.ax_sim_uncert.imshow(uncert_map, origin='lower', extent=extent, cmap='magma')
-
-        measured_x = X_grid.flatten()[self.sim_measured_mask]
-        measured_y = Y_grid.flatten()[self.sim_measured_mask]
-        for ax in [self.ax_sim_truth, self.ax_sim_pred, self.ax_sim_uncert]:
-            ax.scatter(measured_x, measured_y, c='white', s=10, edgecolors='black', label='Measured Points')
-            ax.set_xlabel("X Position"); ax.set_ylabel("Y Position")
-
-        self.sim_next_idx = next_idx
-        if next_idx != -1:
-            nxt_x = X_grid.flatten()[next_idx]
-            nxt_y = Y_grid.flatten()[next_idx]
-            self.ax_sim_uncert.scatter([nxt_x], [nxt_y], c='lime', s=80, marker='X', edgecolors='black', label='Next Scan Suggestion')
-            self.ax_sim_uncert.legend(loc='upper right', fontsize=8)
-
-        total_measured = np.sum(self.sim_measured_mask)
-        self.ax_sim_truth.set_title("Ground Truth Domain Map")
-        self.ax_sim_pred.set_title(f"Simulation Phase Prediction\n(Trained on {total_measured} points)")
-        self.ax_sim_uncert.set_title("Simulation Uncertainty Heatmap\n(Green X = Next Step)")
-
-        self.sim_canvas.figure.tight_layout()
-        self.sim_canvas.draw_idle()
-        
-        if hasattr(self, 'sim_auto_steps') and self.sim_auto_steps > 0:
-            self.sim_auto_steps -= 1
-            QTimer.singleShot(100, self.run_sim_step)
-        else:
-            self.btn_sim_init.setEnabled(True); self.btn_sim_step.setEnabled(True); self.btn_sim_ff.setEnabled(True)
-            self.prog_bar.setVisible(False)
-            self.status.showMessage("Simulation step complete!", 5000)
-
-    def run_alignment(self):
-        if not self.current_view_data:
-            QMessageBox.warning(self, "No Target Map", "Please activate an XY Scan in the workspace first.")
-            return
-        ref_name = self.combo_align_ref.currentText()
-        if not ref_name:
-            QMessageBox.warning(self, "No Reference Map", "Please load a standard 3D Fermi map into the workspace.")
-            return
-        mode = self.combo_align_mode.currentText()
-        gamma_s_deg, gamma_d_deg = self.spin_gamma_s.value(), self.spin_gamma_d.value()
-        ref_data = self.workspace[ref_name]
-        gamma_s_px = int(np.argmin(np.abs(ref_data['angle'] - gamma_s_deg)))
-        gamma_d_px = int(np.argmin(np.abs(ref_data['x'] - gamma_d_deg)))
-        
-        self.btn_run_align.setEnabled(False); self.prog_bar.setVisible(True)
-        self.status.showMessage(f"Initializing {mode} Search...")
-        
-        if "Coupled" in mode: self.align_worker = CoupledAzimuthTiltWorker(self.current_view_data, ref_data, gamma_s_px, gamma_d_px)
-        elif "Azimuth" in mode: self.align_worker = AzimuthalTwistWorker(self.current_view_data, ref_data, gamma_s_px, gamma_d_px)
-        else: self.align_worker = NormalTiltWorker(self.current_view_data, ref_data, gamma_s_px, gamma_d_px)
-            
-        self.align_worker.progress.connect(self.update_status)
-        self.align_worker.finished.connect(self.on_align_finish)
-        self.align_worker.error.connect(lambda e: self.status.showMessage(f"Alignment Error: {e}"))
-        self.align_worker.start()
-
-    def on_align_finish(self, map1, map2, map3, mode):
-        self.align_canvas.figure.clf()
-        self.ax_align_1, self.ax_align_2, self.ax_align_3 = self.align_canvas.figure.subplots(1, 3)
-        x_arr, y_arr = self.current_view_data['x'], self.current_view_data['y']
-        nX, nY = len(x_arr), len(y_arr)
-        px_x = (x_arr[-1] - x_arr[0]) / max(1, nX-1) if nX > 1 else 0.1
-        px_y = (y_arr[-1] - y_arr[0]) / max(1, nY-1) if nY > 1 else 0.1
-        extent = (x_arr[0]-px_x/2, x_arr[-1]+px_x/2, y_arr[0]-px_y/2, y_arr[-1]+px_y/2)
-        
-        if "Coupled" in mode:
-            title1, key1, cmap1 = r"Best Azimuth Rotation ($\phi^\circ$)", 'domains_Align_Azimuth_Coupled', 'hsv'
-            title2, key2, cmap2 = r"Deflection Tilt Shift (pixels)", 'domains_Align_Defl_Coupled', 'PiYG'
-            title3, key3, cmap3 = "Match Quality Score", 'domains_Align_Score_Coupled', 'magma'
-        elif "Azimuth" in mode:
-            title1, key1, cmap1 = r"Best Azimuth Rotation ($\phi^\circ$)", 'domains_Align_Azimuth', 'hsv'
-            title2, key2, cmap2 = r"Momentum Slit Shift (pixels)", 'domains_Align_Slit_Shift', 'PiYG'
-            title3, key3, cmap3 = "Match Quality Score", 'domains_Align_Score', 'magma'
-        else: 
-            title1, key1, cmap1 = r"Deflection Tilt Shift (pixels)", 'domains_Align_Defl_Tilt', 'PiYG'
-            title2, key2, cmap2 = r"Momentum Slit Shift (pixels)", 'domains_Align_Slit_Tilt', 'PiYG'
-            title3, key3, cmap3 = "Match Quality Score", 'domains_Align_Score_Tilt', 'magma'
-            
-        for ax, data_map, title, cmap in zip([self.ax_align_1, self.ax_align_2, self.ax_align_3], [map1, map2, map3], [title1, title2, title3], [cmap1, cmap2, cmap3]):
-            im = ax.imshow(data_map, origin='lower', extent=extent, cmap=cmap, aspect='auto')
-            ax.set_title(title, fontsize=10); ax.set_xlabel("X Position"); ax.set_ylabel("Y Position")
-            self.align_canvas.figure.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-            
-        self.align_canvas.figure.tight_layout(); self.align_canvas.draw_idle()
-        self.current_view_data[key1], self.current_view_data[key2], self.current_view_data[key3] = map1.flatten(), map2.flatten(), map3.flatten()
-        
-        # --- API HOOK ---
-        for k in [key1, key2, key3]:
-            self.viewer.add_overlay_mode(k)
-
-        self.btn_run_align.setEnabled(True); self.prog_bar.setVisible(False)
-        self.status.showMessage(f"{mode} successfully computed!", 5000)
-    
-    def open_fermi_viewer(self):
-        ref_name = self.combo_align_ref.currentText()
-        if not ref_name:
-            QMessageBox.warning(self, "No Reference Map", "Please load a standard 3D Fermi map into the workspace.")
-            return
-        ref_data = self.workspace[ref_name]
-        if len(ref_data['value'].shape) != 4 or ref_data['value'].shape[2] != 1:
-            QMessageBox.warning(self, "Invalid Format", "The selected item is an XY Spatial Scan, not a 3D Deflection Map!")
-            return
-        self.fermi_dialog = FermiViewerWindow(ref_data, self); self.fermi_dialog.show()
-
-    def open_azimuth_viewer(self):
-        ref_name = self.combo_align_ref.currentText()
-        if not ref_name:
-            QMessageBox.warning(self, "No Reference Map", "Please load a standard 3D Fermi map into the workspace.")
-            return
-        gamma_s_deg = self.spin_gamma_s.value()
-        gamma_d_deg = self.spin_gamma_d.value()
-        self.az_viewer = AzimuthTemplateViewer(self.workspace[ref_name], gamma_s_deg, gamma_d_deg, self)
-        self.az_viewer.show()
