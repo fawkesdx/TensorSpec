@@ -1,18 +1,6 @@
 """Behavioural tests for the ML suite panels."""
-import os
-
 import numpy as np
-import pytest
-
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-os.environ.setdefault("MPLBACKEND", "QtAgg")
-
-from PySide6.QtWidgets import QApplication, QListWidgetItem
-
-
-@pytest.fixture(scope="module")
-def qapp():
-    return QApplication.instance() or QApplication([])
+from PySide6.QtWidgets import QListWidgetItem
 
 
 def xy_scan(**extra):
