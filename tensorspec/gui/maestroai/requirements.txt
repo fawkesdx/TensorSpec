@@ -1,0 +1,8 @@
+PyQt6
+numpy
+matplotlib
+h5py
+scikit-learn
+umap-learn
+hdbscan
+torch
