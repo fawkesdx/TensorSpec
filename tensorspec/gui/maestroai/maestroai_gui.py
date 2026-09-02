@@ -64,8 +64,7 @@ class DiagnosticsTab(QWidget):
         self.ax_sys = self.plot_canvas.figure.add_subplot(111)
         self.ax_app = self.ax_sys.twinx() 
         
-        layout.addWidget(self.plot_canvas)
-        layout.addStretch()
+        layout.addWidget(self.plot_canvas, 1)
         
         self.process = psutil.Process(os.getpid())
         self.timer = QTimer(self)
@@ -168,11 +167,49 @@ class MaestroAIApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MaestroAI Suite")
-        self.setGeometry(100, 100, 1400, 800)
+        self.setMinimumSize(1000, 620)
+        self.resize(1500, 900)
         self.workspace = {}
         self.current_folder = ""
         self.current_view_data = None
         self.init_ui()
+
+    @staticmethod
+    def _scrollable(widget):
+        """Wrap a control column so it can shrink below its natural height."""
+        scroll = QScrollArea()
+        scroll.setWidget(widget)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        return scroll
+
+    @classmethod
+    def _split_tab(cls, controls, canvas, sizes=(300, 460)):
+        """Tab body: scrollable controls above a canvas, divided by a drag handle.
+
+        The canvas gets the stretch so it absorbs any extra height, and the
+        controls stay reachable via the scroll area when the pane is short.
+        """
+        # Inset the canvas to line up with the control column, which the scroll
+        # area indents by its own layout margin.
+        canvas_holder = QWidget()
+        holder_layout = QVBoxLayout(canvas_holder)
+        holder_layout.setContentsMargins(9, 0, 9, 9)
+        holder_layout.addWidget(canvas)
+
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        splitter.addWidget(cls._scrollable(controls))
+        splitter.addWidget(canvas_holder)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setCollapsible(1, False)
+        splitter.setSizes(list(sizes))
+
+        tab = QWidget()
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(splitter)
+        return tab
 
     def init_ui(self):
         main_widget = QWidget()
@@ -238,6 +275,12 @@ class MaestroAIApp(QMainWindow):
 
         # --- RIGHT: MACHINE LEARNING ---
         right_panel = QTabWidget()
+        right_panel.setDocumentMode(True)
+        right_panel.setMovable(True)
+        right_panel.setUsesScrollButtons(True)
+        # No elide: with this many tabs, truncated labels ("Mo...", "Bu...") are
+        # unreadable, so keep full names and let the scroll arrows handle overflow.
+        right_panel.setElideMode(Qt.TextElideMode.ElideNone)
         
         # --- NEW REIMAGINED TABS ---
         self.model_warehouse_tab = ModelWarehouseTab(self)
@@ -245,12 +288,12 @@ class MaestroAIApp(QMainWindow):
         self.train_model_tab = TrainModelTab(self)
         
         right_panel.addTab(self.model_warehouse_tab, "Model Warehouse")
-        right_panel.addTab(self.build_pipeline_tab, "Build Pipeline")
+        right_panel.addTab(self._scrollable(self.build_pipeline_tab), "Build Pipeline")
         right_panel.addTab(self.train_model_tab, "Train Model")
         
         # Tab A: Train SSL
-        train_tab = QWidget()
-        train_layout = QVBoxLayout(train_tab)
+        train_controls = QWidget()
+        train_layout = QVBoxLayout(train_controls)
         
         self.btn_ssl_help = QPushButton("📖 New to SSL Training? Click Here for a Guide")
         self.btn_ssl_help.setStyleSheet("font-weight: bold; color: #1f77b4; padding: 6px; font-size: 14px;")
@@ -313,12 +356,13 @@ class MaestroAIApp(QMainWindow):
         train_layout.addWidget(hyper_group)
         train_layout.addWidget(self.btn_train)
         train_layout.addLayout(loss_view_layout) 
-        train_layout.addWidget(self.loss_canvas)
-        right_panel.addTab(train_tab, "SSL Training")
+        train_layout.addStretch()
+        right_panel.addTab(self._split_tab(train_controls, self.loss_canvas, sizes=(420, 380)),
+                           "SSL Training")
 
         # Tab B: Clustering
-        cluster_tab = QWidget()
-        cluster_layout = QVBoxLayout(cluster_tab)
+        cluster_controls = QWidget()
+        cluster_layout = QVBoxLayout(cluster_controls)
         
         self.btn_cluster_help = QPushButton("📊 What do these Algorithms do? Click Here")
         self.btn_cluster_help.setStyleSheet("font-weight: bold; color: #d62728; padding: 6px; font-size: 14px;")
@@ -379,7 +423,6 @@ class MaestroAIApp(QMainWindow):
         self.combo_umap_plot_type.addItems(["Full Dispersion 2D", "Integrated EDC 1D", "Integrated MDC 1D"])
         umap_ctrl_layout.addWidget(self.combo_umap_plot_type)
         umap_ctrl_layout.addStretch()
-        cluster_layout.addLayout(umap_ctrl_layout)
 
         self.umap_canvas = MplCanvas(self, width=4, height=4, is_3d=False)
         self.ax_umap, self.ax_band = self.umap_canvas.axes
@@ -387,8 +430,10 @@ class MaestroAIApp(QMainWindow):
         
         cluster_layout.addWidget(cluster_ctrl_group); cluster_layout.addWidget(self.btn_cluster)
         cluster_layout.addWidget(self.btn_dendro); cluster_layout.addWidget(self.btn_save_labels)
-        cluster_layout.addWidget(self.umap_canvas)
-        right_panel.addTab(cluster_tab, "Clustering")
+        cluster_layout.addLayout(umap_ctrl_layout)
+        cluster_layout.addStretch()
+        right_panel.addTab(self._split_tab(cluster_controls, self.umap_canvas, sizes=(400, 400)),
+                           "Clustering")
 
         # Tab C: Supervised Few-Shot
         sup_tab = QWidget()
@@ -440,11 +485,11 @@ class MaestroAIApp(QMainWindow):
 
         sup_layout.addWidget(sup_ctrl_group); sup_layout.addWidget(self.sup_btn_group); sup_layout.addWidget(sup_act_group)
         sup_layout.addStretch()
-        right_panel.addTab(sup_tab, "Supervised Learning")
+        right_panel.addTab(self._scrollable(sup_tab), "Supervised Learning")
 
         # Tab D: Active Learning
-        al_tab = QWidget()
-        al_layout = QVBoxLayout(al_tab)
+        al_controls = QWidget()
+        al_layout = QVBoxLayout(al_controls)
 
         self.btn_al_help = QPushButton("🧭 What is Active Learning? Click Here")
         self.btn_al_help.setStyleSheet("font-weight: bold; color: #8c564b; padding: 6px; font-size: 14px;")
@@ -474,12 +519,13 @@ class MaestroAIApp(QMainWindow):
         self.ax_al_pred, self.ax_al_uncert = self.al_canvas.axes
 
         al_layout.addWidget(al_ctrl_group); al_layout.addWidget(self.btn_run_al)
-        al_layout.addWidget(self.al_canvas)
-        right_panel.addTab(al_tab, "Active Learning")
+        al_layout.addStretch()
+        right_panel.addTab(self._split_tab(al_controls, self.al_canvas, sizes=(260, 540)),
+                           "Active Learning")
 
         # Tab E: Simulate Active Learning
-        sim_tab = QWidget()
-        sim_layout = QVBoxLayout(sim_tab)
+        sim_controls = QWidget()
+        sim_layout = QVBoxLayout(sim_controls)
 
         self.btn_sim_help = QPushButton("🎮 How to use the AL Simulator? Click Here")
         self.btn_sim_help.setStyleSheet("font-weight: bold; color: #17becf; padding: 6px; font-size: 14px;")
@@ -529,15 +575,17 @@ class MaestroAIApp(QMainWindow):
         self.sim_canvas = MplCanvas(self, width=5, height=4, is_3d=False, orientation='vertical_3')
         self.ax_sim_truth, self.ax_sim_pred, self.ax_sim_uncert = self.sim_canvas.axes
 
-        sim_layout.addWidget(sim_ctrl_group); sim_layout.addLayout(btn_layout); sim_layout.addWidget(self.sim_canvas)
-        right_panel.addTab(sim_tab, "Simulate AL")
+        sim_layout.addWidget(sim_ctrl_group); sim_layout.addLayout(btn_layout)
+        sim_layout.addStretch()
+        right_panel.addTab(self._split_tab(sim_controls, self.sim_canvas, sizes=(300, 500)),
+                           "Simulate AL")
 
         self.sim_measured_mask = None
         self.sim_next_idx = None
 
         # Tab F: 3D Alignment
-        align_tab = QWidget()
-        align_layout = QVBoxLayout(align_tab)
+        align_controls = QWidget()
+        align_layout = QVBoxLayout(align_controls)
 
         self.btn_align_help = QPushButton("📐 Guide to Alignment (Azimuth & Tilt)")
         self.btn_align_help.setStyleSheet("font-weight: bold; color: #bcbd22; padding: 6px; font-size: 14px;")
@@ -583,20 +631,28 @@ class MaestroAIApp(QMainWindow):
         self.align_canvas = MplCanvas(self, width=5, height=4, is_3d=False, orientation='horizontal_3')
         self.ax_align_1, self.ax_align_2, self.ax_align_3 = self.align_canvas.axes
 
-        align_layout.addWidget(align_ctrl_group); align_layout.addWidget(self.btn_run_align); align_layout.addWidget(self.align_canvas)
-        right_panel.addTab(align_tab, "3D Alignment")
+        align_layout.addWidget(align_ctrl_group); align_layout.addWidget(self.btn_run_align)
+        align_layout.addStretch()
+        right_panel.addTab(self._split_tab(align_controls, self.align_canvas, sizes=(380, 420)),
+                           "3D Alignment")
 
         # --- NEW: Add the Diagnostics Tab ---
         self.diagnostics_tab = DiagnosticsTab(self)
         right_panel.addTab(self.diagnostics_tab, "Diagnostics")
         
-        scroll_area = QScrollArea()
-        scroll_area.setWidget(right_panel)
-        scroll_area.setWidgetResizable(True)
-        
+        # Each tab scrolls its own control column, so the tab bar itself must not
+        # sit inside a scroll area or it scrolls out of reach.
+        left_panel.setMinimumWidth(220)
+        mid_panel.setMinimumWidth(320)
+        right_panel.setMinimumWidth(380)
+
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.addWidget(left_panel); splitter.addWidget(mid_panel); splitter.addWidget(scroll_area)
-        splitter.setSizes([200, 600, 400])
+        splitter.addWidget(left_panel); splitter.addWidget(mid_panel); splitter.addWidget(right_panel)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 1)
+        splitter.setCollapsible(1, False)
+        splitter.setSizes([260, 680, 560])
         layout.addWidget(splitter)
         self.setCentralWidget(main_widget)
 

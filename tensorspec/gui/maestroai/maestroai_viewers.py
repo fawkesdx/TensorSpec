@@ -26,7 +26,10 @@ class MplCanvas(FigureCanvas):
             self.axes = fig.subplots(1, 1)
             
         super().__init__(fig)
-        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        # Expanding (not Ignored) so the canvas claims leftover space instead of
+        # being squeezed to nothing by the control widgets stacked above it.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumSize(240, 220)
         self.updateGeometry()
 
 

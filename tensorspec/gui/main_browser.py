@@ -528,7 +528,6 @@ class TensorSpecMainBrowser(QMainWindow):
         try:
             from tensorspec.gui.maestroai.maestroai_gui import MaestroAIApp
             self.ml_window = MaestroAIApp()
-            self.ml_window.resize(1100, 700)
             self.ml_window.setWindowTitle("TensorSpec - Machine Learning Suite")
             self.ml_window.show()
         except Exception as e:
