@@ -221,6 +221,24 @@ class MaestroAIApp(QMainWindow):
         tab_layout.addWidget(splitter)
         return tab
 
+    @staticmethod
+    def _tab_group(pages):
+        """Build one top-level group's page.
+
+        A group holding a single tab renders that tab directly, so we don't draw
+        a nested bar with only one entry in it.
+        """
+        if len(pages) == 1:
+            return pages[0][1]
+
+        inner = QTabWidget()
+        inner.setDocumentMode(True)
+        inner.setUsesScrollButtons(True)
+        inner.setElideMode(Qt.TextElideMode.ElideNone)
+        for label, page in pages:
+            inner.addTab(page, label)
+        return inner
+
     def init_ui(self):
         main_widget = QWidget()
         layout = QHBoxLayout(main_widget)
@@ -284,22 +302,20 @@ class MaestroAIApp(QMainWindow):
         mid_layout.addWidget(self.viewer)
 
         # --- RIGHT: MACHINE LEARNING ---
-        right_panel = QTabWidget()
-        right_panel.setDocumentMode(True)
-        right_panel.setMovable(True)
-        right_panel.setUsesScrollButtons(True)
-        # No elide: with this many tabs, truncated labels ("Mo...", "Bu...") are
-        # unreadable, so keep full names and let the scroll arrows handle overflow.
-        right_panel.setElideMode(Qt.TextElideMode.ElideNone)
+        # Pages are collected as they are built and grouped into a small set of
+        # top-level tabs at the end of this method; ten flat tabs overflowed the
+        # bar in a pane this narrow.
         
         # --- NEW REIMAGINED TABS ---
         self.model_warehouse_tab = ModelWarehouseTab(self)
         self.build_pipeline_tab = BuildPipelineTab(self)
         self.train_model_tab = TrainModelTab(self)
         
-        right_panel.addTab(self.model_warehouse_tab, "Model Warehouse")
-        right_panel.addTab(self._scrollable(self.build_pipeline_tab), "Build Pipeline")
-        right_panel.addTab(self.train_model_tab, "Train Model")
+        model_pages = [
+            ("Model Warehouse", self.model_warehouse_tab),
+            ("Build Pipeline", self._scrollable(self.build_pipeline_tab)),
+            ("Train Model", self.train_model_tab),
+        ]
         
         # Tab A: Train SSL
         train_controls = QWidget()
@@ -367,8 +383,7 @@ class MaestroAIApp(QMainWindow):
         train_layout.addWidget(self.btn_train)
         train_layout.addLayout(loss_view_layout) 
         train_layout.addStretch()
-        right_panel.addTab(self._split_tab(train_controls, self.loss_canvas, sizes=(420, 380)),
-                           "SSL Training")
+        ssl_page = self._split_tab(train_controls, self.loss_canvas, sizes=(420, 380))
 
         # Tab B: Clustering
         cluster_controls = QWidget()
@@ -442,8 +457,7 @@ class MaestroAIApp(QMainWindow):
         cluster_layout.addWidget(self.btn_dendro); cluster_layout.addWidget(self.btn_save_labels)
         cluster_layout.addLayout(umap_ctrl_layout)
         cluster_layout.addStretch()
-        right_panel.addTab(self._split_tab(cluster_controls, self.umap_canvas, sizes=(400, 400)),
-                           "Clustering")
+        cluster_page = self._split_tab(cluster_controls, self.umap_canvas, sizes=(400, 400))
 
         # Tab C: Supervised Few-Shot
         sup_tab = QWidget()
@@ -495,7 +509,7 @@ class MaestroAIApp(QMainWindow):
 
         sup_layout.addWidget(sup_ctrl_group); sup_layout.addWidget(self.sup_btn_group); sup_layout.addWidget(sup_act_group)
         sup_layout.addStretch()
-        right_panel.addTab(self._scrollable(sup_tab), "Supervised Learning")
+        sup_page = self._scrollable(sup_tab)
 
         # Tab D: Active Learning
         al_controls = QWidget()
@@ -530,8 +544,7 @@ class MaestroAIApp(QMainWindow):
 
         al_layout.addWidget(al_ctrl_group); al_layout.addWidget(self.btn_run_al)
         al_layout.addStretch()
-        right_panel.addTab(self._split_tab(al_controls, self.al_canvas, sizes=(260, 540)),
-                           "Active Learning")
+        al_page = self._split_tab(al_controls, self.al_canvas, sizes=(260, 540))
 
         # Tab E: Simulate Active Learning
         sim_controls = QWidget()
@@ -587,8 +600,7 @@ class MaestroAIApp(QMainWindow):
 
         sim_layout.addWidget(sim_ctrl_group); sim_layout.addLayout(btn_layout)
         sim_layout.addStretch()
-        right_panel.addTab(self._split_tab(sim_controls, self.sim_canvas, sizes=(300, 500)),
-                           "Simulate AL")
+        sim_page = self._split_tab(sim_controls, self.sim_canvas, sizes=(300, 500))
 
         self.sim_measured_mask = None
         self.sim_next_idx = None
@@ -643,12 +655,37 @@ class MaestroAIApp(QMainWindow):
 
         align_layout.addWidget(align_ctrl_group); align_layout.addWidget(self.btn_run_align)
         align_layout.addStretch()
-        right_panel.addTab(self._split_tab(align_controls, self.align_canvas, sizes=(380, 420)),
-                           "3D Alignment")
+        align_page = self._split_tab(align_controls, self.align_canvas, sizes=(380, 420))
 
         # --- NEW: Add the Diagnostics Tab ---
         self.diagnostics_tab = DiagnosticsTab(self)
-        right_panel.addTab(self.diagnostics_tab, "Diagnostics")
+
+        # Group the pages by workflow stage. SSL Training produces the
+        # embeddings Clustering consumes, and Clustering produces the domains
+        # Steer consumes, so those lead. The Models group holds the not-yet
+        # implemented placeholders and sits near the end so the suite does not
+        # open on a stub.
+        right_panel = QTabWidget()
+        right_panel.setDocumentMode(True)
+        right_panel.setMovable(True)
+        right_panel.setUsesScrollButtons(True)
+        # No elide: truncated labels ("Mo...", "Bu...") are unreadable, so keep
+        # full names and let the scroll arrows handle any overflow.
+        right_panel.setElideMode(Qt.TextElideMode.ElideNone)
+
+        for group_label, pages in (
+            ("Train", [("SSL Training", ssl_page),
+                       ("Supervised Learning", sup_page)]),
+            ("Cluster", [("Clustering", cluster_page)]),
+            ("Align", [("3D Alignment", align_page)]),
+            ("Steer", [("Active Learning", al_page),
+                       ("Simulate AL", sim_page)]),
+            ("Models", model_pages),
+            ("System", [("Diagnostics", self.diagnostics_tab)]),
+        ):
+            right_panel.addTab(self._tab_group(pages), group_label)
+
+        right_panel.setCurrentIndex(0)
         
         # Each tab scrolls its own control column, so the tab bar itself must not
         # sit inside a scroll area or it scrolls out of reach.
