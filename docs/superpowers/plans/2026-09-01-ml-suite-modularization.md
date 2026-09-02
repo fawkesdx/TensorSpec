@@ -274,7 +274,7 @@ git commit -am "chore: drop scratch layout harnesses now covered by tests" || tr
   - Attributes: `workspace: dict`, `current_folder: str`, `current_view_data: dict | None`, `viewer` (set by the suite)
   - Methods: `set_status(value: int, message: str) -> None`, `add_dataset(name: str, data: dict) -> None`, `activate(data: dict) -> None`, `embedding_keys() -> list[str]`, `domain_keys() -> list[str]`, `notify_embeddings() -> None`, `notify_domains() -> None`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```python
 import os
@@ -345,7 +345,7 @@ def test_set_status_relays_value_and_message(session):
     assert got == [(42, "training")]
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONPATH="$PWD" TensorSpec_env/bin/python -m pytest tests/test_ml_session.py -v
@@ -353,7 +353,7 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH="$PWD" TensorSpec_env/bin/python -m pytest 
 
 Expected: FAIL with `ModuleNotFoundError: No module named 'tensorspec.gui.ml_session'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```python
 """Shared state for the ML suite.
@@ -425,7 +425,7 @@ class MLSession(QObject):
         self.domains_changed.emit(self.domain_keys())
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 ```bash
 QT_QPA_PLATFORM=offscreen PYTHONPATH="$PWD" TensorSpec_env/bin/python -m pytest tests/test_ml_session.py -v
@@ -433,7 +433,7 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH="$PWD" TensorSpec_env/bin/python -m pytest 
 
 Expected: 7 passed.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tensorspec/gui/ml_session.py tests/test_ml_session.py
@@ -455,13 +455,13 @@ git commit -m "feat(gui): add MLSession to carry ML suite state between panels"
   - `split_panel(controls: QWidget, canvas: QWidget, sizes=(300, 460)) -> QWidget`
   - `tab_group(pages: list[tuple[str, QWidget]]) -> QWidget`
 
-- [ ] **Step 1: Create the package init**
+- [x] **Step 1: Create the package init**
 
 ```python
 """Panel widgets for the Machine Learning suite, one module per tab."""
 ```
 
-- [ ] **Step 2: Write `layout.py` by moving the three helpers verbatim**
+- [x] **Step 2: Write `layout.py` by moving the three helpers verbatim**
 
 Move the bodies of `MaestroAIApp._scrollable`, `_split_tab` and `_tab_group` (currently lines 188-241) into module-level functions. Drop the `self`/`cls` parameters and the `cls._scrollable` call becomes a direct `scrollable` call.
 
@@ -530,11 +530,11 @@ def tab_group(pages):
     return inner
 ```
 
-- [ ] **Step 3: Point `maestroai_gui.py` at the helpers**
+- [x] **Step 3: Point `maestroai_gui.py` at the helpers**
 
 Delete the three methods and add `from tensorspec.gui.components.ml_tabs.layout import scrollable, split_panel, tab_group` at the top. Replace `self._scrollable(` -> `scrollable(`, `self._split_tab(` -> `split_panel(`, `self._tab_group(` -> `tab_group(`.
 
-- [ ] **Step 4: Run the layout test**
+- [x] **Step 4: Run the layout test**
 
 ```bash
 QT_QPA_PLATFORM=offscreen MPLCONFIGDIR=/tmp/mplcache PYTHONPATH="$PWD" \
@@ -543,7 +543,7 @@ QT_QPA_PLATFORM=offscreen MPLCONFIGDIR=/tmp/mplcache PYTHONPATH="$PWD" \
 
 Expected: all PASS, unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add tensorspec/gui/components/ml_tabs tensorspec/gui/maestroai/maestroai_gui.py
