@@ -269,6 +269,12 @@ def test_focus_xy_fine_5d_load_points_last(tmp_path):
     np.testing.assert_allclose(result["axes"][1], np.linspace(0, 1, nx))
     np.testing.assert_allclose(result["axes"][2], np.linspace(-1.0, 1.0, n_defl))
     assert result["metadata"]["kind"] == FOCUS_KIND_ID
+    # Flat point index varies Defl fastest, then X, then Y (Maestro inner-first).
+    for iy in range(ny):
+        for ix in range(nx):
+            for id_ in range(n_defl):
+                point = (iy * nx + ix) * n_defl + id_
+                assert result["data"][iy, ix, id_, 0, 0] == point
 
 
 def test_focus_xy_fine_5d_load_points_first(tmp_path):

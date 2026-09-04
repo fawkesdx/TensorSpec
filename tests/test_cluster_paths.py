@@ -1,10 +1,17 @@
 """Unit tests for remote cluster path resolution."""
 
+import os
+
+import pytest
+
 from tensorspec.core.compute.cluster_paths import (
+    adapt_pipeline_mpi_launcher,
     build_qe_slurm_batch,
     heavy_root,
+    is_arpes_fetch_candidate,
     is_slurm,
     job_dir,
+    load_private_key,
     mpi_launch_prefix,
     python_bin,
     repo_root,
@@ -13,6 +20,7 @@ from tensorspec.core.compute.cluster_paths import (
     slurm_walltime,
     sprkkr_binary,
     tmp_dir,
+    uses_sshproxy,
 )
 
 
@@ -79,3 +87,49 @@ def test_slurm_helpers_and_batch():
     assert "#SBATCH -A m9999" in batch
     assert "module load espresso/7.5-libxc-7.0.0-cpu" in batch
     assert "bash run_pipeline.sh" in batch
+
+
+def test_adapt_pipeline_mpi_launcher_slurm_vs_daemon():
+    script = (
+        "mpirun --use-hwthread-cpus --oversubscribe -np 128 pw.x -in scf.in\n"
+        "mpirun --use-hwthread-cpus --oversubscribe -np 36 pw2wannier90.x -in pw2wan.in\n"
+    )
+    slurm = {"mode": "SLURM", "paths": {"slurm": {"account": "als"}}}
+    adapted = adapt_pipeline_mpi_launcher(script, slurm)
+    assert "srun -n 128 --cpu-bind=cores pw.x" in adapted
+    assert "srun -n 36 --cpu-bind=cores pw2wannier90.x" in adapted
+    assert "mpirun" not in adapted
+
+    daemon = {"mode": "Daemon"}
+    back = adapt_pipeline_mpi_launcher(adapted, daemon)
+    assert "mpirun --use-hwthread-cpus --oversubscribe -np 128 pw.x" in back
+    assert "mpirun --use-hwthread-cpus --oversubscribe -np 36 pw2wannier90.x" in back
+    assert "srun" not in back
+
+    local = adapt_pipeline_mpi_launcher(adapted, None)
+    assert "mpirun" in local
+    assert "srun" not in local
+
+
+def test_load_private_key_nersc_rsa_pem():
+    key_path = os.path.expanduser("~/.ssh/nersc")
+    if not os.path.isfile(key_path):
+        pytest.skip("~/.ssh/nersc not present")
+    pkey = load_private_key(key_path)
+    assert pkey is not None
+
+
+def test_uses_sshproxy_and_arpes_fetch_filter():
+    assert uses_sshproxy({"host": "hpc.example.edu", "user": "u"})
+    assert uses_sshproxy({"host": "x.lbl.gov", "auth": "sshproxy"})
+    assert not uses_sshproxy({"host": "gpu.example.edu", "mode": "Daemon"})
+    assert not uses_sshproxy({"host": "hpc.example.edu", "auth": "password"})
+
+    assert is_arpes_fetch_candidate("wannier90_hr.dat")
+    assert is_arpes_fetch_candidate("scf.out")
+    assert is_arpes_fetch_candidate("sys.out.full")
+    assert is_arpes_fetch_candidate("scf.in")
+    assert not is_arpes_fetch_candidate("wannier90.mmn")
+    assert not is_arpes_fetch_candidate("wannier90.amn")
+    assert not is_arpes_fetch_candidate("wannier90.eig")
+    assert not is_arpes_fetch_candidate("wannier90.chk")

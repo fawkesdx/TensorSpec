@@ -4,7 +4,7 @@ import pytest
 from PySide6.QtWidgets import QListWidgetItem
 
 from tensorspec.core.data_models import TensorData
-from tensorspec.gui.ml_session import MLSession
+from tensorspec.gui.ml.session import MLSession
 
 
 def xy_scan(**extra):

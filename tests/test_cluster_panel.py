@@ -1,7 +1,7 @@
 """Behavioural tests for ClusterPanel."""
 import pytest
 
-from tensorspec.gui.ml_session import MLSession
+from tensorspec.gui.ml.session import MLSession
 
 
 @pytest.fixture

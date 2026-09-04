@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from tensorspec.core.data_models import TensorData
-from tensorspec.gui.ml_session import MLSession
+from tensorspec.gui.ml.session import MLSession
 
 
 @pytest.fixture

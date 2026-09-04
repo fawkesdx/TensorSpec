@@ -16,7 +16,7 @@ from tensorspec.gui.components.ml_tabs.supervised_panel import SupervisedPanel
 from tensorspec.gui.ml.build_pipeline_tab import BuildPipelineTab
 from tensorspec.gui.ml.model_warehouse_tab import ModelWarehouseTab
 from tensorspec.gui.ml.train_model_tab import TrainModelTab
-from tensorspec.gui.ml_session import MLSession
+from tensorspec.gui.ml.session import MLSession
 
 
 class MLSuite(QWidget):
