@@ -14,11 +14,11 @@ Rule of thumb for new code:
 
 ## Domain packages today
 
-- **ML:** `core/ml/models.py` (pure torch) · Qt workers/session in `gui/ml/` · panels in `gui/components/ml_tabs/` · shell `gui/suites/ml_suite.py`
+- **ML:** `core/ml/{models,clustering,training_ssl,training_sup,active_learning,alignment}.py` (pure numerics) · thin `QThread` wrappers + session in `gui/ml/` · panels in `gui/components/ml_tabs/` · shell `gui/suites/ml_suite.py`
 - **PEEM:** `core/peem/{bg,engine,roi,sumrule}.py` · service `gui/services/peem_service.py` · panel/suite under `gui/`
 - **DFT / ARPES:** `core/dft/`, `core/arpes/` (+ top-level engines where still present)
 
 ## Still optional later
 
-- Split numerics out of ML `QThread` workers so more of ML can live under `core/ml/`
+- Rename `gui/ml/maestroai_*.py` workers to clearer names
 - Split fat Crystal suite into `components/crystal_tabs/`
