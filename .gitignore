@@ -17,7 +17,6 @@ currentproblem2
 # Local-only / private (never push)
 SPRKKR/
 GrizzlyME/
-/maestroai/
 AGENT_HANDOFF.md
 
 # Local Daemon / debug scratch (never push)
