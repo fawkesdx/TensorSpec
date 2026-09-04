@@ -20,7 +20,7 @@ from typing import Any
 
 import numpy as np
 
-from tensorspec.core.peem_bg import fit_background
+from tensorspec.core.peem.bg import fit_background
 
 _R_EPS = np.finfo(float).eps
 

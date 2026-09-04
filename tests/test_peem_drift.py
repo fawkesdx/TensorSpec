@@ -3,7 +3,7 @@ import unittest
 import numpy as np
 
 from tensorspec.core.data_models import TensorData
-from tensorspec.core.peem_engine import drift_correct
+from tensorspec.core.peem.engine import drift_correct
 
 
 def _translated(plane, dx, dy):

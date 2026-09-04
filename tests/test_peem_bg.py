@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from tensorspec.core import peem_bg as bg
+from tensorspec.core.peem import bg
 
 
 class TestExtractSpectrum(unittest.TestCase):

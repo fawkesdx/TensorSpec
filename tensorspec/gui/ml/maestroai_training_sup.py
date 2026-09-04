@@ -7,7 +7,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from PySide6.QtCore import QThread, Signal
 
 # Import ONLY the Supervised model
-from .maestroai_models import SupervisedCNN
+from tensorspec.core.ml.models import SupervisedCNN
 
 class SupTrainWorker(QThread):
     progress = Signal(int, str)

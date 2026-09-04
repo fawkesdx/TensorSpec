@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
 from tensorspec.core.data_models import TensorData
-from tensorspec.core import peem_engine as eng
+from tensorspec.core.peem import engine as eng
 
 
 def _raw(pols, frames=None):

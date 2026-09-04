@@ -16,7 +16,7 @@ from tensorspec.core.io.peem_loaders import (
     load_tif_sequence,
     load_tif_stack,
 )
-from tensorspec.core.peem_bg import (
+from tensorspec.core.peem.bg import (
     analysis_dataset as bg_analysis_dataset,
     apply_bg_to_stack,
     bg_child_name,
@@ -26,9 +26,9 @@ from tensorspec.core.peem_bg import (
     is_bg_output_node,
     resolve_energy,
 )
-from tensorspec.core.peem_engine import drift_correct, pair_stack, separate_pairs
-from tensorspec.core.peem_roi import roi_to_mask
-from tensorspec.core.peem_sumrule import (
+from tensorspec.core.peem.engine import drift_correct, pair_stack, separate_pairs
+from tensorspec.core.peem.roi import roi_to_mask
+from tensorspec.core.peem.sumrule import (
     analysis_dataset as sumrule_analysis_dataset,
     apply_i0,
     ensemble_sumrule,

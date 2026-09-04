@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from tensorspec.core.peem_roi import roi_to_mask
+from tensorspec.core.peem.roi import roi_to_mask
 
 
 class TestPeemRoi(unittest.TestCase):

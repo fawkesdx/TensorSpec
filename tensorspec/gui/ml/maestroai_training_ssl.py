@@ -8,7 +8,7 @@ import torchvision.transforms as T
 from PySide6.QtCore import QThread, Signal
 
 # Import ONLY the SSL models
-from .maestroai_models import (SimpleCAE, SimCLRModel, ContrastiveDataset, NTXentLoss, 
+from tensorspec.core.ml.models import (SimpleCAE, SimCLRModel, ContrastiveDataset, NTXentLoss, 
                               BetaVAE, CNNMaskedAutoencoder, MoCoModel, BYOLModel, 
                               ViTMAE, SwAVModel)
 

@@ -2,7 +2,7 @@ import unittest
 
 import numpy as np
 
-from tensorspec.core import peem_sumrule as sr
+from tensorspec.core.peem import sumrule as sr
 
 
 class TestApplyI0(unittest.TestCase):

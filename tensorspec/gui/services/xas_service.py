@@ -9,12 +9,12 @@ import numpy as np
 
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.io.xas_loaders import load_xas_pair, load_xas_spectrum
-from tensorspec.core.peem_bg import (
+from tensorspec.core.peem.bg import (
     analysis_dataset as bg_analysis_dataset,
     ensemble_background,
     fit_background,
 )
-from tensorspec.core.peem_sumrule import (
+from tensorspec.core.peem.sumrule import (
     analysis_dataset as sumrule_analysis_dataset,
     apply_i0,
     ensemble_sumrule,

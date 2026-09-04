@@ -6,7 +6,7 @@ from typing import Any, Literal
 import numpy as np
 
 from tensorspec.core.data_models import TensorData
-from tensorspec.core.peem_roi import roi_to_mask
+from tensorspec.core.peem.roi import roi_to_mask
 
 PairMode = Literal["auto", "CP_CM", "LH_LV"]
 
