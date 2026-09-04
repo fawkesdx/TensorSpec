@@ -21,13 +21,14 @@ EXPECTED_GROUPS = ["Train", "Cluster", "Align", "Steer", "Models"]
 
 @pytest.fixture(scope="module")
 def suite(qapp):
-    from tensorspec.gui.maestroai.maestroai_gui import MaestroAIApp
+    from tensorspec.gui.suites.ml_suite import MLSuite
 
-    win = MaestroAIApp()
-    win.show()
+    widget = MLSuite()
+    widget.resize(1500, 900)
+    widget.show()
     qapp.processEvents()
-    yield win
-    win.close()
+    yield widget
+    widget.close()
 
 
 def ancestors(widget):
@@ -55,7 +56,7 @@ def leaf_pages(tabs, qapp, trail=()):
 
 
 def root_tabs(suite):
-    return suite.centralWidget().findChild(QTabWidget)
+    return suite.findChild(QTabWidget)
 
 
 def test_top_level_groups_are_workflow_ordered(suite):
@@ -99,7 +100,7 @@ def test_every_canvas_has_usable_height(suite, qapp, width, height):
 def test_viewer_pane_is_never_crushed(suite, qapp, width, height):
     suite.resize(width, height)
     qapp.processEvents()
-    splitter = suite.centralWidget().findChild(QSplitter)
+    splitter = suite.findChild(QSplitter)
     assert splitter.sizes()[1] >= MIN_VIEWER_WIDTH
 
 

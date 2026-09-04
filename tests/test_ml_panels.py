@@ -36,9 +36,9 @@ def test_activating_a_dataset_pushes_it_to_the_viewer(qapp):
     DataViewerPanel exposes load_data(TensorData); set_data belongs to
     Maestro4DViewer. Clicking a workspace entry raised AttributeError.
     """
-    from tensorspec.gui.maestroai.maestroai_gui import MaestroAIApp
+    from tensorspec.gui.suites.ml_suite import MLSuite
 
-    win = MaestroAIApp()
+    win = MLSuite()
     win.workspace["probe"] = xy_scan(embeddings_ae=[1], domains_k5=[2])
 
     win.activate_data(QListWidgetItem("probe"))
@@ -50,7 +50,7 @@ def test_activating_a_dataset_pushes_it_to_the_viewer(qapp):
 
 
 def test_tensor_data_activation_keeps_ml_dict_and_viewer_tensor(qapp):
-    from tensorspec.gui.maestroai.maestroai_gui import MaestroAIApp
+    from tensorspec.gui.suites.ml_suite import MLSuite
 
     tensor = TensorData(
         value=np.zeros((2, 3, 4, 5)),
@@ -60,7 +60,7 @@ def test_tensor_data_activation_keeps_ml_dict_and_viewer_tensor(qapp):
         data_type="XY Scan Fine",
         metadata={"layers": {"embeddings_ae": [1], "domains_k5": [2]}},
     )
-    win = MaestroAIApp()
+    win = MLSuite()
     win.workspace["probe"] = tensor
 
     win.activate_data(QListWidgetItem("probe"))

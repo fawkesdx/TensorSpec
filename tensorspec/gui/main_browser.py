@@ -661,13 +661,19 @@ class TensorSpecMainBrowser(QMainWindow):
 
         print("Launching Machine Learning Suite Window...")
         try:
-            from tensorspec.gui.maestroai.maestroai_gui import MaestroAIApp
-            ml_window = MaestroAIApp(win_id=win_id)
-            ml_window.setWindowTitle("TensorSpec - Machine Learning Suite")
-            ml_window.window_closed.connect(self.unregister_window)
-            self.active_windows[win_id] = ml_window
+            from tensorspec.gui.suites.ml_suite import MLSuite
+            ml_widget = MLSuite()
+            wrapper = FloatingViewerWindow(
+                win_id=win_id,
+                title="TensorSpec - Machine Learning Suite",
+                inner_widget=ml_widget,
+                parent=self,
+            )
+            wrapper.window_closed.connect(self.unregister_window)
+            wrapper.resize(1500, 900)
+            self.active_windows[win_id] = wrapper
             self.window_tracker_list.addItem(win_id)
-            ml_window.show()
+            wrapper.show()
         except Exception as e:
             print(f"Failed to launch ML Suite: {e}")
     
