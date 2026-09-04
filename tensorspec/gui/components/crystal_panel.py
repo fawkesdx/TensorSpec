@@ -1,4 +1,4 @@
-# File: tensorspec/gui/crystal_tabs/tab_view.py
+# File: tensorspec/gui/components/crystal_panel.py
 import os
 import numpy as np
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton, 
