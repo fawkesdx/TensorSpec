@@ -3,11 +3,15 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
                                QDoubleSpinBox, QPushButton, QGroupBox, QLabel, 
                                QSpinBox, QLineEdit, QComboBox, QCheckBox, QFileDialog)
 
-from tensorspec.gui.cluster_utils import (
-    cluster_display_name,
+from tensorspec.gui.services.cluster_utils import (
     is_remote_target,
     populate_compute_target_combo,
     selected_cluster,
+)
+from tensorspec.gui.services.compute_mode import (
+    effective_band_diag,
+    hybrid_exec_summary,
+    is_hybrid_mode,
 )
 
 class TightBindingPanel(QWidget):
@@ -26,19 +30,31 @@ class TightBindingPanel(QWidget):
         tb_group = QGroupBox("Tight Binding Parameters")
         tb_form = QFormLayout(tb_group)
 
-        # --- Compute target (same cluster list as QE / ARPES) ---
+        # --- Compute mode: local only vs hybrid (server compute) ---
         self.combo_tb_target = QComboBox()
         populate_compute_target_combo(self.combo_tb_target)
         self.combo_tb_target.setToolTip(
-            "Local = calculate on this Mac. Remote = one click: upload, "
-            "run on cluster, download result, plot here."
+            "Local only = everything on this Mac.\n"
+            "Hybrid = upload TB job to your server (remote-cluster etc.), "
+            "run band diag there, download result, plot here."
         )
         self.lbl_tb_exec = QLabel("")
         self.lbl_tb_exec.setWordWrap(True)
         self.lbl_tb_exec.setStyleSheet("color: #666; font-size: 10px;")
-        tb_form.addRow("Compute target:", self.combo_tb_target)
+
+        self.chk_hybrid_fast = QCheckBox("Hybrid fast path: Grizzly CUDA on server")
+        self.chk_hybrid_fast.setChecked(True)
+        self.chk_hybrid_fast.setToolTip(
+            "When Hybrid is selected, auto-use GrizzlyME + CUDA on the remote "
+            "cluster for band diagonalization (best for large Wannier90 models)."
+        )
+        self.chk_hybrid_fast.setStyleSheet("color: #2b5c8f; font-weight: bold;")
+
+        tb_form.addRow("Compute mode:", self.combo_tb_target)
         tb_form.addRow(self.lbl_tb_exec)
+        tb_form.addRow(self.chk_hybrid_fast)
         self.combo_tb_target.currentIndexChanged.connect(self._sync_tb_target)
+        self.chk_hybrid_fast.stateChanged.connect(self._sync_tb_target)
         
         # --- Dimension Toggle ---
         self.combo_k_mode = QComboBox()
@@ -110,11 +126,26 @@ class TightBindingPanel(QWidget):
         self.chk_overlay_w90 = QCheckBox("Overlay Native W90 Bands (Red Dashed)")
         self.chk_overlay_w90.setChecked(True)
         self.chk_overlay_w90.setEnabled(False) # Disabled until a file is loaded
+
+        self.spin_hop_tol = QDoubleSpinBox()
+        self.spin_hop_tol.setDecimals(8)
+        self.spin_hop_tol.setRange(1e-10, 0.1)
+        self.spin_hop_tol.setValue(1e-4)
+        self.spin_hop_tol.setSingleStep(1e-5)
+        self.spin_hop_tol.setToolTip(
+            "Drop hoppings with |t| ≤ this (eV). Higher = fewer hops = faster "
+            "Prepare-for-ARPES on huge third-party hr.dat. Default 1e-4."
+        )
         
         w90_layout.addWidget(self.btn_load_w90)
         w90_layout.addWidget(self.lbl_w90_warning)
         w90_layout.addWidget(self.chk_overlay_w90)
         w90_layout.addWidget(self.lbl_w90_status)
+        hop_tol_row = QHBoxLayout()
+        hop_tol_row.addWidget(QLabel("Hop cutoff |t|>"))
+        hop_tol_row.addWidget(self.spin_hop_tol)
+        hop_tol_row.addWidget(QLabel("eV (ARPES prep)"))
+        w90_layout.addLayout(hop_tol_row)
         tb_form.addRow(w90_group)
         
         self.btn_load_w90.clicked.connect(self.load_w90_file)
@@ -241,19 +272,37 @@ class TightBindingPanel(QWidget):
     def is_remote_target(self) -> bool:
         return is_remote_target(self.combo_tb_target)
 
+    def is_hybrid_mode(self) -> bool:
+        return is_hybrid_mode(self.combo_tb_target)
+
     def get_selected_cluster(self):
         return selected_cluster(self.combo_tb_target)
 
+    def hybrid_auto_gpu(self) -> bool:
+        return bool(self.chk_hybrid_fast.isChecked())
+
     def _sync_tb_target(self, _index=None) -> None:
-        if is_remote_target(self.combo_tb_target):
-            cluster = selected_cluster(self.combo_tb_target) or {}
-            self.lbl_tb_exec.setText(
-                f"Remote: {cluster_display_name(cluster)} — "
-                "Calculate = upload, run on server, download, plot here "
-                "(no separate Fetch button)."
-            )
+        hybrid = is_hybrid_mode(self.combo_tb_target)
+        self.chk_hybrid_fast.setVisible(hybrid)
+        self.lbl_tb_exec.setText(hybrid_exec_summary(self.combo_tb_target))
+        if hybrid and self.active_w90_file:
+            self.lbl_tb_exec.setStyleSheet("color: #2b5c8f; font-size: 10px;")
         else:
-            self.lbl_tb_exec.setText("Local: calculate and plot on this machine.")
+            self.lbl_tb_exec.setStyleSheet("color: #666; font-size: 10px;")
+
+    def resolved_band_diag_settings(self) -> tuple[str, str]:
+        """UI engine/device, with hybrid fast-path override when enabled."""
+        ui_engine, ui_device = self.band_diag_settings()
+        return effective_band_diag(
+            self.combo_tb_target,
+            ui_engine,
+            ui_device,
+            auto_gpu=self.hybrid_auto_gpu(),
+            w90_loaded=bool(self.active_w90_file),
+        )
+
+    def hop_tol(self) -> float:
+        return float(self.spin_hop_tol.value())
 
     def band_diag_settings(self) -> tuple[str, str]:
         """(diag_engine, device) exactly as selected in the UI."""
@@ -286,6 +335,7 @@ class TightBindingPanel(QWidget):
             filename_short = fname.split('/')[-1]
             self.lbl_w90_status.setText(f"Status: Using {filename_short}")
             self.lbl_w90_status.setStyleSheet("color: blue; font-weight: bold;")
+            self._sync_tb_target()
             
             self.spin_t1.setEnabled(False)
             self.spin_t2.setEnabled(False)

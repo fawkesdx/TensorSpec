@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFo
 
 from PySide6.QtCore import Signal
 
-from tensorspec.gui.cluster_utils import (
+from tensorspec.gui.services.cluster_utils import (
     cluster_display_name,
     find_cluster_by_name,
     is_remote_target,

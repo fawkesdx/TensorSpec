@@ -1,5 +1,6 @@
 import numpy as np
-from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+from typing import Optional
+from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QComboBox, QPushButton, QDoubleSpinBox, 
                                QFormLayout, QGroupBox, QMessageBox, QSlider, 
                                QSpinBox, QScrollArea, QApplication, QInputDialog, QSplitter,
@@ -12,6 +13,7 @@ from matplotlib.figure import Figure
 from tensorspec.core.arpes_engine import ARPESEngineRouter
 from tensorspec.core.workspace import global_workspace
 from tensorspec.core.data_models import TensorData
+from tensorspec.core.compute import cluster_paths as cp
 
 class ARPESRunnerThread(QThread):
     """Runs the heavy 2D matrix element loop in the background to prevent UI freezing."""
@@ -65,11 +67,12 @@ class ARPESPanel(QWidget):
         self.engine_dropdown.addItem("Option A: Phenomenological Three-Step Model", "A")
         
         self.target_dropdown = QComboBox()
-        self.target_dropdown.addItem("💻 Local Machine (Fast TB / Preview)", "local")
-        self.populate_clusters()
+        from tensorspec.gui.services.compute_mode import populate_compute_mode_combo
+
+        populate_compute_mode_combo(self.target_dropdown)
         
         engine_layout.addRow(QLabel("Physics Model:"), self.engine_dropdown)
-        engine_layout.addRow(QLabel("Compute Target:"), self.target_dropdown)
+        engine_layout.addRow(QLabel("Compute mode:"), self.target_dropdown)
         control_layout.addWidget(engine_group)
 
         # Remote Chinook/Grizzly debug toggles (shown for B1/B2/A + Remote)
@@ -85,9 +88,25 @@ class ARPESPanel(QWidget):
         self.combo_remote_device.addItem("CPU", "cpu")
         self.combo_remote_layout = QComboBox()
         self.combo_remote_layout.addItem("θ-slices (safe; large TB)", "slices")
-        self.combo_remote_layout.addItem("Full cube (1 GPU job; may OOM)", "full")
+        self.combo_remote_layout.addItem("Full cube (θ-chunked; may OOM)", "full")
         self.combo_remote_layout.addItem("Auto (full if CUDA Grizzly)", "auto")
         self.combo_remote_layout.setCurrentIndex(0)
+        self.remote_ngpus_spin = QSpinBox()
+        self.remote_ngpus_spin.setRange(1, 8)
+        self.remote_ngpus_spin.setValue(1)
+        self.remote_ngpus_spin.setSuffix(" GPU")
+        self._remote_gpu_host_max: Optional[int] = None
+        self._remote_gpu_safe_max: Optional[int] = None
+        gpu_row = QHBoxLayout()
+        gpu_row.addWidget(self.remote_ngpus_spin)
+        self.lbl_remote_gpu_limits = QLabel("host max: —")
+        self.lbl_remote_gpu_limits.setStyleSheet("color: #9ad; font-size: 11px;")
+        gpu_row.addWidget(self.lbl_remote_gpu_limits)
+        self.btn_refresh_remote_gpus = QPushButton("Refresh")
+        self.btn_refresh_remote_gpus.setFixedWidth(72)
+        self.btn_refresh_remote_gpus.clicked.connect(self._refresh_remote_gpu_count)
+        gpu_row.addWidget(self.btn_refresh_remote_gpus)
+        gpu_row.addStretch()
         self.remote_tb_cores_spin = QSpinBox()
         self.remote_tb_cores_spin.setRange(1, 128)
         self.remote_tb_cores_spin.setValue(40)
@@ -95,15 +114,22 @@ class ARPESPanel(QWidget):
         remote_tb_form.addRow("ME engine:", self.combo_remote_me)
         remote_tb_form.addRow("Grizzly device:", self.combo_remote_device)
         remote_tb_form.addRow("Layout:", self.combo_remote_layout)
+        remote_tb_form.addRow("CUDA GPUs:", gpu_row)
         remote_tb_form.addRow("CPU workers:", self.remote_tb_cores_spin)
         self.combo_remote_me.setToolTip(
             "Chinook = reference CPU path. GrizzlyME = GPU/CPU accelerated ME. "
             "Toggle to A/B debug intensity and speed."
         )
         self.combo_remote_layout.setToolTip(
-            "Full cube feeds one GPU job (fast when it fits VRAM). "
-            "Large Wannier TB often OOMs on full — use θ-slices then."
+            "Full cube runs GrizzlyME on the full (θ,φ,E) grid with automatic θ-chunking "
+            "when VRAM is tight. Large Wannier TB often OOMs without chunks — use θ-slices."
         )
+        self.remote_ngpus_spin.setToolTip(
+            "Type any count from 1 up to host max. Capped again at submit and on the cluster."
+        )
+        self.combo_remote_device.currentIndexChanged.connect(self._sync_remote_gpu_ui)
+        self.combo_remote_layout.currentIndexChanged.connect(self._sync_remote_gpu_ui)
+        self.target_dropdown.currentIndexChanged.connect(self._refresh_remote_gpu_count)
         control_layout.addWidget(self.remote_tb_opts)
         self.remote_tb_opts.hide()
 
@@ -585,11 +611,11 @@ class ARPESPanel(QWidget):
                     return
                 
                 if vault_name == "Temporary Scratch Run (sprkkr_gui_run)":
-                    remote_dir = f"/mnt/data/{cluster['user']}/tensorspec_heavy/sprkkr_gui_run"
+                    remote_dir = cp.job_dir(cluster, "sprkkr")
                     cluster_name = cluster.get('name', cluster['host'])
                 else:
                     vault = global_workspace.get(vault_name)
-                    remote_dir = vault.get('remote_path') if vault else f"/mnt/data/{cluster['user']}/tensorspec_heavy/sprkkr_gui_run"
+                    remote_dir = vault.get('remote_path') if vault else cp.job_dir(cluster, "sprkkr")
                     cluster_name = vault.get('cluster_name', vault.get('cluster', cluster.get('name', cluster['host'])))
 
                 ssh = self._ssh_connect(cluster)
@@ -628,7 +654,8 @@ class ARPESPanel(QWidget):
                 workf = self.work_function_spin.value()
                 cores = self.remote_cores_spin.value()
                 
-                bin_path = f"/mnt/data/{cluster['user']}/tensorspec_heavy/SPRKKR/bin/kkrspec9.7"
+                bin_path = cp.sprkkr_binary(cluster, "kkrspec9.7")
+                py = cp.python_bin(cluster)
                 run_args = f"--theta_min {kx_min} --theta_max {kx_max} --ntheta {kx_steps} --phi_min {ky_min} --phi_max {ky_max} --nphi {ky_steps} --bin {bin_path} --cores {cores}"
 
                 # SARPES Args
@@ -649,15 +676,11 @@ class ARPESPanel(QWidget):
 #SBATCH --error=sys.out.full
 
 cd {remote_dir}
-export TMPDIR=/mnt/data/{cluster['user']}/tmp
-mkdir -p $TMPDIR
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export PATH="/home/{cluster['user']}/miniconda3/envs/qe/bin:$PATH"
-export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRARY_PATH"
+{cp.shell_export_tmp(cluster)}
+{cp.shell_thread_limits()}
+{cp.qe_env_exports(cluster)}
 
-/home/{cluster['user']}/TensorSpec/TensorSpec_env/bin/python -u arpes_map_runner.py {run_args}
+{py} -u arpes_map_runner.py {run_args}
 """
                     sftp = ssh.open_sftp()
                     with sftp.file(f"{remote_dir}/job.sbatch", "w") as f:
@@ -666,7 +689,13 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                     
                     cmd = f"cd {remote_dir} && sbatch job.sbatch"
                 else:
-                    cmd = f"bash -c 'cd {remote_dir} && export TMPDIR=/mnt/data/{cluster['user']}/tmp && mkdir -p $TMPDIR && export OMP_NUM_THREADS=1 && export MKL_NUM_THREADS=1 && export OPENBLAS_NUM_THREADS=1 && export PATH=\"/home/{cluster['user']}/miniconda3/envs/qe/bin:$PATH\" && export LD_LIBRARY_PATH=\"/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRARY_PATH\" && nohup /home/{cluster['user']}/TensorSpec/TensorSpec_env/bin/python -u arpes_map_runner.py {run_args} > sys.out.full 2>&1 &'"
+                    cmd = (
+                        f"bash -c 'cd {remote_dir} && "
+                        f"{cp.shell_export_tmp(cluster, one_line=True)} && "
+                        f"{cp.shell_thread_limits(one_line=True)} && "
+                        f"{cp.qe_env_exports(cluster, one_line=True)} && "
+                        f"nohup {py} -u arpes_map_runner.py {run_args} > sys.out.full 2>&1 &'"
+                    )
                 
                 ssh.exec_command(cmd)
                 ssh.close()
@@ -715,45 +744,68 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
         print(f"Dictionary keys pulled: {list(band_data.keys())}")
         print(">> SUCCESS: Band structure loaded. Routing to Matrix Element Engine...")
         
-        if self.target_dropdown.currentData() != "local":
+        from tensorspec.gui.services.compute_mode import is_hybrid_mode
+
+        if is_hybrid_mode(self.target_dropdown):
             # --- REMOTE CHINOOK DISPATCH ---
+            cluster = None
+            cluster_label = "remote cluster"
             try:
-                import os, json, paramiko
+                import json
+                from pathlib import Path
+
                 cluster = self.get_selected_cluster()
                 if not cluster:
                     QMessageBox.critical(self, "Error", "No remote cluster found in configuration!")
                     return
-                
-                remote_dir = f"/mnt/data/{cluster['user']}/tensorspec_heavy/chinook_gui_run"
+                cluster_label = cluster.get("name") or cluster.get("host") or cluster_label
+
+                remote_dir = cp.job_dir(cluster, "chinook")
+                py = cp.python_bin(cluster)
                 ssh = self._ssh_connect(cluster)
                 sftp = ssh.open_sftp()
                 
                 try:
-                    sftp.mkdir(f"/mnt/data/{cluster['user']}/tensorspec_heavy")
-                except:
+                    sftp.mkdir(cp.heavy_root(cluster))
+                except OSError:
                     pass
                 try:
                     sftp.mkdir(remote_dir)
-                except:
+                except OSError:
                     pass
                     
-                # Upload runner + shared kmesh module
-                local_template = "tensorspec/core/arpes/one_step/chinook_remote_runner_template.py"
-                local_kmesh = "tensorspec/core/arpes/one_step/chinook_arpes_kmesh.py"
-                local_schedule = "tensorspec/core/arpes/one_step/grizzly_cuda_schedule.py"
-                sftp.put(local_template, f"{remote_dir}/chinook_remote_runner.py")
-                sftp.put(local_kmesh, f"{remote_dir}/chinook_arpes_kmesh.py")
-                sftp.put(local_schedule, f"{remote_dir}/grizzly_cuda_schedule.py")
+                # Upload runner modules (absolute paths — cwd is not always repo root)
+                one_step = (
+                    Path(__file__).resolve().parents[2]
+                    / "core"
+                    / "arpes"
+                    / "one_step"
+                )
+                local_template = one_step / "chinook_remote_runner_template.py"
+                local_kmesh = one_step / "chinook_arpes_kmesh.py"
+                local_schedule = one_step / "grizzly_cuda_schedule.py"
+                local_collect = one_step / "grizzly_multigpu_collect.py"
+                for src, dst_name in (
+                    (local_template, "chinook_remote_runner.py"),
+                    (local_kmesh, "chinook_arpes_kmesh.py"),
+                    (local_schedule, "grizzly_cuda_schedule.py"),
+                    (local_collect, "grizzly_multigpu_collect.py"),
+                ):
+                    if not src.is_file():
+                        raise FileNotFoundError(f"Missing ARPES runner module: {src}")
+                    sftp.put(str(src), f"{remote_dir}/{dst_name}")
                 
                 # Save and upload TB data
-                os.makedirs("scratch/chinook_gui_run", exist_ok=True)
-                tb_path_local = "scratch/chinook_gui_run/tb_data.npz"
-                physics_path_local = "scratch/chinook_gui_run/arpes_physics.json"
+                scratch = Path.home() / ".tensorspec_cache" / "chinook_gui_run"
+                scratch.mkdir(parents=True, exist_ok=True)
+                tb_path_local = str(scratch / "tb_data.npz")
+                physics_path_local = str(scratch / "arpes_physics.json")
                 
                 # Compress massive H_dict into binary arrays.
                 # R vectors are Cartesian floats (Wannier/SK) — must stay float64.
                 # (int32 truncation zeroed remote ARPES intensity at finite angle.)
-                h_list = band_data.get('H_dict', {}).get('list', [])
+                h_dict = band_data.get("H_dict") or {}
+                h_list = h_dict.get("list") or h_dict.get("H") or []
                 if len(h_list) > 0:
                     indices = np.array(
                         [[h[0], h[1], h[2], h[3], h[4]] for h in h_list],
@@ -763,32 +815,25 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                 else:
                     indices = np.empty((0, 5), dtype=np.float64)
                     values = np.empty(0, dtype=np.complex128)
-                
 
-                # Extract basic basis info
-                basis = band_data.get('basis', [])
-                if isinstance(basis, dict) and 'bulk' in basis:
-                    basis = basis['bulk']
-                elif isinstance(basis, dict) and 'orbitals' in basis:
-                    basis = basis['orbitals']
-                    
-                basis_list = []
+                if indices.shape[0] == 0:
+                    raise ValueError(
+                        "Workspace TB has zero hoppings (H_dict.list empty). "
+                        "Re-run Prepare TB for ARPES / Calculate Bands, then Push again."
+                    )
 
-                if isinstance(basis, (list, tuple, np.ndarray)):
-                    for b in basis:
-                        if hasattr(b, 'pos'):
-                            basis_list.append({
-                                'pos': b.pos, 
-                                'label': getattr(b, 'label', '10'), 
-                                'spin': getattr(b, 'spin', 1.0),
-                                'Z': getattr(b, 'Z', 1)
-                            })
+                basis_list = self._pack_basis_list_for_remote(band_data)
+                if not basis_list:
+                    raise ValueError(
+                        "Workspace TB has no orbital basis for remote ARPES. "
+                        "Re-run Prepare TB for ARPES (needs Wannier + structure), then Push."
+                    )
                 
                 b_matrix = band_data.get("recip_matrix")
                 if b_matrix is None and band_data.get("structure") is not None:
                     b_matrix = band_data["structure"].lattice.reciprocal_lattice.matrix
                 elif b_matrix is None:
-                    a_list = band_data.get("H_dict", {}).get("a")
+                    a_list = h_dict.get("a")
                     if a_list is not None:
                         A = np.array(a_list, dtype=float)
                         b_matrix = 2 * np.pi * np.linalg.inv(A).T
@@ -800,18 +845,18 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                     indices=indices,
                     values=values,
                     basis_list=basis_list,
-                    a_mat=band_data.get('H_dict', {}).get('a', []),
+                    a_mat=h_dict.get("a", []),
                     b_matrix=np.asarray(b_matrix, dtype=float),
                     e_fermi=float(
                         band_data.get(
-                            'arpes_e_fermi_shift',
-                            band_data.get('fermi_energy', 0.0),
+                            "arpes_e_fermi_shift",
+                            band_data.get("fermi_energy", 0.0),
                         )
                         or 0.0
                     ),
-                    onsite_e=float(band_data.get('onsite_e', 0.0) or 0.0),
-                    fermi_energy_qe=float(band_data.get('fermi_energy', 0.0) or 0.0),
-                    h_includes_onsite=bool(band_data.get('h_includes_onsite', False)),
+                    onsite_e=float(band_data.get("onsite_e", 0.0) or 0.0),
+                    fermi_energy_qe=float(band_data.get("fermi_energy", 0.0) or 0.0),
+                    h_includes_onsite=bool(band_data.get("h_includes_onsite", False)),
                 )
                 print(
                     f"[ARPES remote] TB upload: hops={len(indices)} "
@@ -878,6 +923,7 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                 me_engine = self.combo_remote_me.currentData()
                 me_device = self.combo_remote_device.currentData()
                 me_layout = self.combo_remote_layout.currentData()
+                me_ngpus = self._resolve_ngpus_for_submit(me_device, me_layout)
 
                 run_args = (
                     f"--tb_file tb_data.npz --theta_min {kx_min} --theta_max {kx_max} --ntheta {kx_steps} "
@@ -885,7 +931,7 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
                     f"--e_min {e_min} --e_max {e_max} --ne {e_steps} "
                     f"--hv {hv} --workf {workf} --v0 {v0} --temp {temp} --polar {polar} "
                     f"--cores {cores} --engine {me_engine} --device {me_device} "
-                    f"--layout {me_layout} --e_fermi {e_fermi} --theta_chunk 0 --ngpus 0"
+                    f"--layout {me_layout} --e_fermi {e_fermi} --theta_chunk 0 --ngpus {me_ngpus}"
                 )
 
                 # SARPES Args (forces chinook fallback inside runner; GrizzlyME v0.1 is spinless)
@@ -906,13 +952,10 @@ export LD_LIBRARY_PATH="/home/{cluster['user']}/miniconda3/envs/qe/lib:$LD_LIBRA
 #SBATCH --error=sys.out.full
 
 cd {remote_dir}
-export TMPDIR=/mnt/data/{cluster['user']}/tmp
-mkdir -p $TMPDIR
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
+{cp.shell_export_tmp(cluster)}
+{cp.shell_thread_limits()}
 
-/home/{cluster['user']}/TensorSpec/TensorSpec_env/bin/python -u chinook_remote_runner.py {run_args}
+{py} -u chinook_remote_runner.py {run_args}
 """
                     sftp = ssh.open_sftp()
                     with sftp.file(f"{remote_dir}/job.sbatch", "w") as f:
@@ -920,7 +963,12 @@ export OPENBLAS_NUM_THREADS=1
                     sftp.close()
                     cmd = f"cd {remote_dir} && sbatch job.sbatch"
                 else:
-                    cmd = f"bash -c 'cd {remote_dir} && export TMPDIR=/mnt/data/{cluster['user']}/tmp && mkdir -p $TMPDIR && export OMP_NUM_THREADS=1 && export MKL_NUM_THREADS=1 && export OPENBLAS_NUM_THREADS=1 && nohup /home/{cluster['user']}/TensorSpec/TensorSpec_env/bin/python -u chinook_remote_runner.py {run_args} > sys.out.full 2>&1 &'"
+                    cmd = (
+                        f"bash -c 'cd {remote_dir} && "
+                        f"{cp.shell_export_tmp(cluster, one_line=True)} && "
+                        f"{cp.shell_thread_limits(one_line=True)} && "
+                        f"nohup {py} -u chinook_remote_runner.py {run_args} > sys.out.full 2>&1 &'"
+                    )
                 
                 ssh.exec_command(cmd)
                 ssh.close()
@@ -932,10 +980,13 @@ export OPENBLAS_NUM_THREADS=1
                 self.toggle_embedded_monitor(force_start=True)
                 return
             except Exception as e:
+                import traceback
+
+                traceback.print_exc()
                 QMessageBox.critical(
                     self,
                     "Error",
-                    f"Failed to dispatch CHINOOK to {cluster_label}:\n{str(e)}",
+                    f"Failed to dispatch CHINOOK to {cluster_label}:\n{e}",
                 )
                 return
         
@@ -1139,33 +1190,15 @@ export OPENBLAS_NUM_THREADS=1
         self.canvas.draw()
         
     def populate_clusters(self):
-        import json, os
-        config_file = os.path.expanduser('~/.tensorspec_clusters.json')
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, 'r') as f:
-                    clusters = json.load(f)
-                for c in clusters:
-                    self.target_dropdown.addItem(f"🚀 Remote: {c.get('name', c.get('host'))}", c)
-            except Exception as e:
-                print(f"Error reading cluster config: {e}")
+        """Refresh cluster list (Hybrid entries) after Compute Manager changes."""
+        from tensorspec.gui.services.compute_mode import populate_compute_mode_combo
+
+        populate_compute_mode_combo(self.target_dropdown)
 
     def get_selected_cluster(self):
-        selected_data = self.target_dropdown.currentData()
-        if isinstance(selected_data, dict):
-            return selected_data
-            
-        import json, os
-        config_file = os.path.expanduser('~/.tensorspec_clusters.json')
-        if os.path.exists(config_file):
-            try:
-                with open(config_file, 'r') as f:
-                    clusters = json.load(f)
-                if clusters:
-                    return clusters[0]
-            except:
-                pass
-        return None
+        from tensorspec.gui.services.compute_mode import combo_cluster
+
+        return combo_cluster(self.target_dropdown)
 
     def _ssh_connect(self, cluster):
         """Paramiko connect with longer banner/kex timeouts (slow remote hosts)."""
@@ -1209,7 +1242,14 @@ export OPENBLAS_NUM_THREADS=1
             return
         
         from tensorspec.gui.components.compute_panel import LiveMonitorThread
-        self.live_monitor = LiveMonitorThread(active_cluster)
+
+        model_choice = self.engine_dropdown.currentData() if hasattr(self, "engine_dropdown") else None
+        if model_choice == "B3":
+            log_jobs = ["sprkkr"]
+        else:
+            log_jobs = ["chinook"]
+
+        self.live_monitor = LiveMonitorThread(active_cluster, log_jobs=log_jobs)
         self.live_monitor.data_ready.connect(self.update_embedded_logs)
         self.live_monitor.start()
         self.btn_start_live.setText("⏹️ Stop Live Monitor")
@@ -1257,17 +1297,17 @@ export OPENBLAS_NUM_THREADS=1
         
         # Chinook / bare / three-step remote → chinook_gui_run.
         # Only SPR-KKR (B3) uses SPRKKR vault paths.
-        is_chinook_remote = (model_choice != "B3" and self.target_dropdown.currentData() != "local")
+        is_chinook_remote = model_choice != "B3" and self._is_remote_target()
         
         if is_chinook_remote:
-            remote_dir = f"/mnt/data/{cluster['user']}/tensorspec_heavy/chinook_gui_run"
+            remote_dir = cp.job_dir(cluster, "chinook")
             target_cube_name = "chinook_arpes_cube.npz"
         elif vault_name == "Temporary Scratch Run (sprkkr_gui_run)":
-            remote_dir = f"/mnt/data/{cluster['user']}/tensorspec_heavy/sprkkr_gui_run"
+            remote_dir = cp.job_dir(cluster, "sprkkr")
             target_cube_name = "arpes_cube.npz"
         else:
             vault = global_workspace.get(vault_name)
-            remote_dir = vault.get('remote_path') if vault else f"/mnt/data/{cluster['user']}/tensorspec_heavy/sprkkr_gui_run"
+            remote_dir = vault.get('remote_path') if vault else cp.job_dir(cluster, "sprkkr")
             target_cube_name = "arpes_cube.npz"
 
         try:
@@ -1352,8 +1392,39 @@ export OPENBLAS_NUM_THREADS=1
                 QMessageBox.critical(self, "Error", f"Failed to save data:\n{e}")
     
 
+    def _pack_basis_list_for_remote(self, band_data: dict) -> list:
+        """Serialize orbital basis for tb_data.npz (handles gen_basis dict + TB_model)."""
+        basis = band_data.get("basis")
+        tb_model = band_data.get("tb_model")
+
+        if isinstance(basis, dict):
+            if "bulk" in basis:
+                basis = basis["bulk"]
+            elif "orbitals" in basis:
+                basis = basis["orbitals"]
+
+        if not isinstance(basis, (list, tuple)) or not basis:
+            if tb_model is not None and getattr(tb_model, "basis", None) is not None:
+                basis = list(tb_model.basis)
+
+        basis_list = []
+        if isinstance(basis, (list, tuple)):
+            for b in basis:
+                if hasattr(b, "pos"):
+                    basis_list.append(
+                        {
+                            "pos": np.asarray(b.pos, dtype=float).tolist(),
+                            "label": getattr(b, "label", "10"),
+                            "spin": 1.0,
+                            "Z": int(getattr(b, "Z", 1) or 1),
+                        }
+                    )
+        return basis_list
+
     def _is_remote_target(self) -> bool:
-        return self.target_dropdown.currentData() != "local"
+        from tensorspec.gui.services.compute_mode import is_hybrid_mode
+
+        return is_hybrid_mode(self.target_dropdown)
 
     def _sync_remote_ui(self):
         """Show/enable live-monitor + fetch from Physics Model × Compute Target.
@@ -1389,6 +1460,98 @@ export OPENBLAS_NUM_THREADS=1
                 self.live_log_widget.hide()
                 self.btn_fetch_results.setEnabled(False)
                 self.btn_start_live.setEnabled(False)
+        self._sync_remote_gpu_ui()
+        if remote:
+            self._refresh_remote_gpu_count()
+
+    def _probe_remote_cuda_gpus(self) -> tuple[Optional[int], Optional[int]]:
+        """Return (total_gpus, gpus_with_headroom) on selected remote host."""
+        cluster = self.get_selected_cluster()
+        if not cluster:
+            return None, None
+        min_free_mib = 10 * 1024  # ~10 GiB ARPES worker headroom guideline
+        try:
+            ssh = self._ssh_connect(cluster)
+            _, stdout, _ = ssh.exec_command(
+                "nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null",
+                timeout=15,
+            )
+            lines = [ln.strip() for ln in stdout.read().decode().splitlines() if ln.strip()]
+            ssh.close()
+            if not lines:
+                return None, None
+            free_vals = [int(float(x)) for x in lines]
+            total = len(free_vals)
+            safe = sum(1 for f in free_vals if f >= min_free_mib)
+            return total, safe
+        except Exception:
+            return None, None
+
+    def _probe_remote_cuda_gpu_count(self) -> Optional[int]:
+        total, _ = self._probe_remote_cuda_gpus()
+        return total
+
+    def _refresh_remote_gpu_count(self):
+        """Set GPU spin max from remote nvidia-smi (any cluster)."""
+        if not self._is_remote_target():
+            self.lbl_remote_gpu_limits.setText("host max: —")
+            return
+        total, safe = self._probe_remote_cuda_gpus()
+        self._remote_gpu_host_max = total
+        self._remote_gpu_safe_max = safe
+        prev = self.remote_ngpus_spin.value()
+        if total is not None:
+            self.remote_ngpus_spin.setMaximum(max(1, total))
+            if prev > total:
+                self.remote_ngpus_spin.setValue(total)
+            safe_txt = f", {safe} with headroom" if safe is not None else ""
+            self.lbl_remote_gpu_limits.setText(f"host max: {total}{safe_txt}")
+        else:
+            self.remote_ngpus_spin.setMaximum(8)
+            self.lbl_remote_gpu_limits.setText("host max: unknown")
+
+    def _resolve_ngpus_for_submit(self, me_device: str, me_layout: str) -> int:
+        """Clamp manual GPU request to probed host limits before dispatch."""
+        if me_device != "cuda" or me_layout not in ("full", "auto"):
+            return 1
+        requested = int(self.remote_ngpus_spin.value())
+        total, safe = self._probe_remote_cuda_gpus()
+        if total is None:
+            return max(1, min(requested, self.remote_ngpus_spin.maximum()))
+        effective = max(1, min(requested, total))
+        if effective != requested:
+            QMessageBox.warning(
+                self,
+                "GPU count capped",
+                f"Requested {requested} GPU(s) but host has {total}. Using {effective}.",
+            )
+            self.remote_ngpus_spin.setValue(effective)
+        elif requested > 1 and safe is not None and safe < requested:
+            QMessageBox.information(
+                self,
+                "GPU headroom",
+                f"{safe} of {total} GPU(s) have ≥10 GiB free. "
+                f"Job may still run but cluster can clamp further if VRAM is tight.",
+            )
+        return effective
+
+    def _sync_remote_gpu_ui(self):
+        """CUDA GPU count applies only to full-cube Grizzly layout."""
+        cuda = self.combo_remote_device.currentData() == "cuda"
+        layout = self.combo_remote_layout.currentData()
+        fullish = layout in ("full", "auto")
+        enabled = cuda and fullish
+        self.remote_ngpus_spin.setEnabled(enabled)
+        self.btn_refresh_remote_gpus.setEnabled(enabled)
+        self.lbl_remote_gpu_limits.setEnabled(enabled)
+        if not enabled:
+            self.remote_ngpus_spin.setToolTip(
+                "GPU count applies to full-cube CUDA Grizzly runs only."
+            )
+        else:
+            self.remote_ngpus_spin.setToolTip(
+                "Type any count from 1 up to host max. Capped again at submit and on the cluster."
+            )
 
     def on_target_changed(self):
         self._sync_remote_ui()

@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock
 
-from tensorspec.gui import compute_mode as cm
+from tensorspec.gui.services import compute_mode as cm
 
 
 class _FakeCombo:

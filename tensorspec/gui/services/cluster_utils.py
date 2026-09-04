@@ -26,27 +26,22 @@ def cluster_display_name(cluster: Dict[str, Any]) -> str:
 
 
 def populate_compute_target_combo(combo, *, include_local: bool = True) -> None:
-    """Fill a QComboBox with Local + clusters from ~/.tensorspec_clusters.json."""
-    combo.blockSignals(True)
-    combo.clear()
-    if include_local:
-        combo.addItem("💻 Local Computation", LOCAL_TARGET)
-    for cluster in load_clusters():
-        combo.addItem(f"🚀 Remote: {cluster_display_name(cluster)}", cluster)
-    combo.blockSignals(False)
+    """Fill combo with Local only + Hybrid server entries (see compute_mode.py)."""
+    from tensorspec.gui.services.compute_mode import populate_compute_mode_combo
+
+    populate_compute_mode_combo(combo, include_local=include_local)
 
 
 def is_remote_target(combo) -> bool:
-    data = combo.currentData()
-    return isinstance(data, dict)
+    from tensorspec.gui.services.compute_mode import is_hybrid_mode
+
+    return is_hybrid_mode(combo)
 
 
 def selected_cluster(combo) -> Optional[Dict[str, Any]]:
-    data = combo.currentData()
-    if isinstance(data, dict):
-        return data
-    clusters = load_clusters()
-    return clusters[0] if clusters else None
+    from tensorspec.gui.services.compute_mode import combo_cluster
+
+    return combo_cluster(combo)
 
 
 def find_cluster_by_name(name: str) -> Optional[Dict[str, Any]]:

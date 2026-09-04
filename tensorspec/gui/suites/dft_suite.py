@@ -17,8 +17,45 @@ from tensorspec.gui.components.dft_panels import TightBindingPanel
 from tensorspec.gui.components.qe_generator_panel import QEGeneratorPanel
 from PySide6.QtWidgets import QStackedWidget
 from tensorspec.gui.components.sprkkr_panels import SPRKKRDftPanel
-from tensorspec.core.dft.tb_remote_client import build_job_payload, run_remote_tb_bands
-from tensorspec.gui.cluster_utils import cluster_display_name
+from tensorspec.core.dft.tb_remote_client import (
+    TBCancelled,
+    build_job_payload,
+    kill_remote_tb_job,
+    run_remote_tb_bands,
+)
+from tensorspec.core.dft.w90_hr_stats import format_w90_cost_warning, quick_w90_hr_stats
+from tensorspec.core.dft.w90_tb_cache import cache_key as w90_cache_key_for
+from tensorspec.gui.services.cluster_utils import cluster_display_name
+
+
+def _recip_matrix_for_workspace(chinook_engine, structure):
+    """Match band k-path frame: QE A_qe when parsed from scf/wout, else CIF pymatgen."""
+    if structure is None:
+        return None, "none"
+    a_qe = getattr(chinook_engine, "A_qe", None) if chinook_engine is not None else None
+    if a_qe is not None:
+        b = 2 * np.pi * np.linalg.inv(np.asarray(a_qe, dtype=float)).T
+        return b, "qe"
+    return structure.lattice.reciprocal_lattice.matrix, "cif"
+
+
+def _orbital_positions_for_workspace(chinook_engine, basis, structure):
+    """Prefer Wannier WF centres from Chinook basis; fall back to CIF atom sites."""
+    if chinook_engine is not None and basis is not None:
+        orbs = chinook_engine._orbital_list_from_basis(basis)
+        if orbs:
+            pos = []
+            for orb in orbs:
+                raw = getattr(orb, "pos", None)
+                if raw is None:
+                    pos = []
+                    break
+                pos.append(np.asarray(raw, dtype=float).tolist())
+            if len(pos) == len(orbs):
+                return pos
+    if structure is not None:
+        return [site.coords.tolist() for site in structure]
+    return []
 
 
 class TBBandRunnerThread(QThread):
@@ -32,6 +69,10 @@ class TBBandRunnerThread(QThread):
         self.cluster = cluster
         self.job = job
         self.w90_filepath = w90_filepath
+        self._cancel = False
+
+    def request_cancel(self):
+        self._cancel = True
 
     def run(self):
         try:
@@ -40,8 +81,83 @@ class TBBandRunnerThread(QThread):
                 self.job,
                 self.w90_filepath,
                 log_fn=self.log_signal.emit,
+                cancel_check=lambda: self._cancel,
             )
-            self.finished_signal.emit(True, "Remote bands downloaded.", result)
+            if self._cancel:
+                self.finished_signal.emit(False, "Cancelled.", None)
+                return
+            self.finished_signal.emit(True, "Hybrid bands downloaded.", result)
+        except TBCancelled:
+            self.finished_signal.emit(False, "Hybrid run cancelled.", None)
+        except Exception as exc:
+            self.finished_signal.emit(False, str(exc), None)
+
+
+class TBBandLocalRunnerThread(QThread):
+    """Local band diag off GUI thread (large W90 still blocks this worker)."""
+
+    finished_signal = Signal(bool, str, object)
+
+    def __init__(self, engine, k_vecs, solve_kwargs, fermi_energy, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.k_vecs = k_vecs
+        self.solve_kwargs = solve_kwargs
+        self.fermi_energy = fermi_energy
+        self._cancel = False
+
+    def request_cancel(self):
+        self._cancel = True
+
+    def run(self):
+        try:
+            if self._cancel:
+                self.finished_signal.emit(False, "Cancelled.", None)
+                return
+            eigenvalues, eigenvectors, orb_labels = self.engine.solve_bands(
+                self.k_vecs, **self.solve_kwargs
+            )
+            if self._cancel:
+                self.finished_signal.emit(False, "Cancelled.", None)
+                return
+            result = (
+                np.asarray(eigenvalues, dtype=float) - self.fermi_energy,
+                eigenvectors,
+                orb_labels,
+            )
+            self.finished_signal.emit(True, "Local bands done.", result)
+        except Exception as exc:
+            self.finished_signal.emit(False, str(exc), None)
+
+
+class PrepareTBForARPESThread(QThread):
+    """Parse/build Wannier TB for workspace push without full band path."""
+
+    log_signal = Signal(str)
+    finished_signal = Signal(bool, str, object)
+
+    def __init__(self, engine, w90_filepath, prepare_kwargs, parent=None):
+        super().__init__(parent)
+        self.engine = engine
+        self.w90_filepath = w90_filepath
+        self.prepare_kwargs = prepare_kwargs
+        self._cancel = False
+
+    def request_cancel(self):
+        self._cancel = True
+
+    def run(self):
+        try:
+            if self._cancel:
+                self.finished_signal.emit(False, "Cancelled.", None)
+                return
+            result = self.engine.prepare_tb_for_arpes(
+                self.w90_filepath, **self.prepare_kwargs
+            )
+            if self._cancel:
+                self.finished_signal.emit(False, "Cancelled.", None)
+                return
+            self.finished_signal.emit(True, "TB ready for ARPES push.", result)
         except Exception as exc:
             self.finished_signal.emit(False, str(exc), None)
 
@@ -119,6 +235,20 @@ class DFTSuite(QWidget):
         # Action Buttons
         self.btn_calculate = QPushButton("⚙️ Calculate Band Structure")
         self.btn_calculate.setStyleSheet("background-color: #2b5c8f; color: white; font-weight: bold; padding: 8px;")
+
+        self.btn_cancel_bands = QPushButton("🛑 Cancel Run")
+        self.btn_cancel_bands.setStyleSheet("background-color: #c0392b; color: white; font-weight: bold; padding: 8px;")
+        self.btn_cancel_bands.setEnabled(False)
+
+        self.btn_prepare_arpes = QPushButton("🚀 Prepare TB for ARPES")
+        self.btn_prepare_arpes.setStyleSheet(
+            "background-color: #e67e22; color: white; font-weight: bold; padding: 8px;"
+        )
+        self.btn_prepare_arpes.setToolTip(
+            "Fast path: parse Wannier90 with hop cutoff, build H_dict, enable "
+            "Push to Workspace — skips full band-path diagonalization. "
+            "Use for large / third-party hr.dat before ARPES."
+        )
         
         self.btn_push_bands = QPushButton("📤 Push Bands to Workspace")
         self.btn_push_bands.setStyleSheet("background-color: #5cb85c; color: white; font-weight: bold; padding: 8px;")
@@ -129,6 +259,8 @@ class DFTSuite(QWidget):
         self.btn_load_qe_bands.setStyleSheet("background-color: #9C27B0; color: white; font-weight: bold; padding: 8px;")
         
         control_layout.addWidget(self.btn_calculate)
+        control_layout.addWidget(self.btn_prepare_arpes)
+        control_layout.addWidget(self.btn_cancel_bands)
         control_layout.addWidget(self.btn_push_bands)
         control_layout.addWidget(self.btn_load_qe_bands)
         
@@ -194,6 +326,37 @@ class DFTSuite(QWidget):
         main_layout.addWidget(main_splitter)
         
         self.monitor_thread = None
+        self._tb_band_thread = None
+        self._tb_local_thread = None
+        self._tb_prepare_thread = None
+        self._tb_run_cluster = None
+
+    def _set_tb_running(self, running: bool, label: str = "⚙️ Calculate Band Structure"):
+        self.btn_calculate.setEnabled(not running)
+        self.btn_prepare_arpes.setEnabled(not running)
+        self.btn_cancel_bands.setEnabled(running)
+        self.btn_calculate.setText(label if running else "⚙️ Calculate Band Structure")
+
+    def cancel_tb_run(self):
+        """Stop in-flight local or hybrid TB band calculation."""
+        if self._tb_band_thread and self._tb_band_thread.isRunning():
+            self._tb_band_thread.request_cancel()
+            if self._tb_run_cluster:
+                try:
+                    kill_remote_tb_job(
+                        self._tb_run_cluster,
+                        log_fn=lambda m: print(m, flush=True),
+                    )
+                except Exception as exc:
+                    print(f"WARN: remote kill: {exc}", flush=True)
+        if self._tb_local_thread and self._tb_local_thread.isRunning():
+            self._tb_local_thread.request_cancel()
+            self._tb_local_thread.terminate()
+        if getattr(self, "_tb_prepare_thread", None) and self._tb_prepare_thread.isRunning():
+            self._tb_prepare_thread.request_cancel()
+            self._tb_prepare_thread.terminate()
+        self._set_tb_running(False)
+        print("TB band run cancel requested.", flush=True)
 
     def start_embedded_monitor(self, force_start=False):
         if self.monitor_thread and self.monitor_thread.isRunning():
@@ -220,12 +383,18 @@ class DFTSuite(QWidget):
             return
 
         target = None
-        if hasattr(self, "tb_panel") and self.tb_panel.is_remote_target():
+        if hasattr(self, "tb_panel") and self.tb_panel.is_hybrid_mode():
             target = self.tb_panel.get_selected_cluster()
         target = target or clusters[0]
+
+        # DFT suite: tail QE or SPR-KKR logs — not ARPES chinook_gui_run.
+        if hasattr(self, "engine_dropdown") and self.engine_dropdown.currentIndex() == 1:
+            log_jobs = ["sprkkr"]
+        else:
+            log_jobs = ["qe", "tb"]
         
         from tensorspec.gui.components.compute_panel import LiveMonitorThread
-        self.monitor_thread = LiveMonitorThread(target)
+        self.monitor_thread = LiveMonitorThread(target, log_jobs=log_jobs)
         self.monitor_thread.data_ready.connect(self.update_embedded_logs)
         self.monitor_thread.error_occurred.connect(self.monitor_error)
         self.monitor_thread.start()
@@ -255,6 +424,7 @@ class DFTSuite(QWidget):
         if idx == 1:
             self.tb_panel.hide()
             self.btn_calculate.hide()
+            self.btn_prepare_arpes.hide()
             self.btn_push_bands.hide()
             self.btn_load_qe_bands.hide()
             self.canvas.hide()
@@ -263,6 +433,7 @@ class DFTSuite(QWidget):
         else:
             self.tb_panel.show()
             self.btn_calculate.show()
+            self.btn_prepare_arpes.show()
             self.btn_push_bands.show()
             self.btn_load_qe_bands.show()
             self.lbl_sprkkr_info.hide()
@@ -271,6 +442,8 @@ class DFTSuite(QWidget):
 
     def _connect_signals(self):
         self.btn_calculate.clicked.connect(self.calculate_bands)
+        self.btn_prepare_arpes.clicked.connect(self.prepare_tb_for_arpes)
+        self.btn_cancel_bands.clicked.connect(self.cancel_tb_run)
         self.btn_ws_refresh.clicked.connect(self.refresh_workspace_list)
         self.btn_ws_load.clicked.connect(self.load_workspace_structure)
         self.btn_push_bands.clicked.connect(self.push_bands_to_workspace)
@@ -360,6 +533,161 @@ class DFTSuite(QWidget):
             
         else:
             QMessageBox.critical(self, "Error", "Failed to load structure.")
+
+    def prepare_tb_for_arpes(self):
+        """Parse/build Wannier TB for ARPES push — no full band-path diagonalization."""
+        w90_file = self.tb_panel.active_w90_file
+        if not w90_file:
+            QMessageBox.warning(
+                self,
+                "Prepare TB for ARPES",
+                "Load a wannier90_hr.dat first (yours or someone else's).",
+            )
+            return
+        if self.engine.crystal_structure is None:
+            QMessageBox.warning(
+                self,
+                "Prepare TB for ARPES",
+                "Load a crystal structure from Workspace first.",
+            )
+            return
+
+        hop_tol = self.tb_panel.hop_tol()
+        is_soc = self.tb_panel.chk_soc.isChecked()
+        onsite_e = float(self.tb_panel.spin_onsite.value())
+        fermi_energy = self._fermi_energy_from_w90(w90_file)
+        orbital_shifts = {
+            "0": float(self.tb_panel.spin_onsite_s.value()),
+            "1": float(self.tb_panel.spin_onsite_p.value()),
+            "2": float(self.tb_panel.spin_onsite_d.value()),
+        }
+
+        self._pending_prepare_ctx = {
+            "w90_file": w90_file,
+            "is_soc": is_soc,
+            "onsite_e": onsite_e,
+            "orbital_shifts": orbital_shifts,
+            "tb_mode": self.tb_panel.combo_tb_mode.currentText(),
+            "fermi_energy": fermi_energy,
+            "hop_tol": hop_tol,
+        }
+        self._set_tb_running(True, "⏳ Preparing TB for ARPES...")
+        print(
+            f"Prepare TB for ARPES: {w90_file} hop_tol={hop_tol:g} "
+            f"(Wannier hr.dat — TB mode '{self.tb_panel.combo_tb_mode.currentText()}' ignored)",
+            flush=True,
+        )
+        self._tb_prepare_thread = PrepareTBForARPESThread(
+            self.engine,
+            w90_file,
+            {
+                "use_soc": is_soc,
+                "onsite_e": onsite_e,
+                "hop_tol": hop_tol,
+                "quick_diag": True,
+            },
+            parent=self,
+        )
+        self._tb_prepare_thread.finished_signal.connect(self._on_prepare_arpes_done)
+        self._tb_prepare_thread.start()
+
+    def _on_prepare_arpes_done(self, success, message, result):
+        self._set_tb_running(False)
+        if message == "Cancelled.":
+            return
+        if not success:
+            QMessageBox.warning(self, "Prepare TB for ARPES", message)
+            return
+
+        ctx = getattr(self, "_pending_prepare_ctx", None) or {}
+        stats = result.get("stats", {})
+        w90_file = ctx.get("w90_file")
+        onsite_e = ctx.get("onsite_e", 0.0)
+        fermi_energy = ctx.get("fermi_energy", 0.0)
+        orbital_shifts = ctx.get("orbital_shifts", {})
+        tb_mode = ctx.get("tb_mode", "Simple Scalar")
+
+        basis_coords = _orbital_positions_for_workspace(
+            self.engine.chinook,
+            result.get("basis"),
+            self.engine.crystal_structure,
+        )
+        recip_matrix, recip_source = _recip_matrix_for_workspace(
+            self.engine.chinook, self.engine.crystal_structure
+        )
+        basis_quality = getattr(
+            self.engine.chinook, "_last_wannier_basis_quality", None
+        )
+
+        eigenvalues = result.get("eigenvalues")
+        if eigenvalues is not None:
+            eigenvalues = np.asarray(eigenvalues, dtype=float) - fermi_energy
+
+        self.active_bands_data = {
+            "type": "band_structure",
+            "is_2d": False,
+            "k_vecs": np.array([[0.0, 0.0, 0.0]]),
+            "eigenvalues": eigenvalues,
+            "eigenvectors": None,
+            "orbital_positions": basis_coords,
+            # Prefer TB_model orbital list (ARPES remote packing); keep gen_basis dict too.
+            "basis": (
+                getattr(result.get("tb_model"), "basis", None)
+                or self.engine.chinook._orbital_list_from_basis(result.get("basis"))
+                or result.get("basis")
+            ),
+            "H_dict": result.get("tb_dict")
+            or getattr(self.engine.chinook, "H_dict", None),
+            "tb_model": result.get("tb_model"),
+            "fermi_energy": fermi_energy,
+            "e_fermi": fermi_energy,
+            "onsite_e": onsite_e,
+            "orbital_shifts": orbital_shifts,
+            "tb_mode": tb_mode,
+            "w90_filepath": w90_file or "",
+            "h_includes_onsite": True,
+            "h_includes_qe_fermi_shift": True,
+            "arpes_e_fermi_shift": 0.0,
+            "hop_tol": stats.get("hop_tol", ctx.get("hop_tol")),
+            "prepared_for_arpes": True,
+            "title": "Wannier90 TB (prepared for ARPES)",
+            "structure": self.engine.crystal_structure,
+            "recip_matrix": recip_matrix,
+            "recip_matrix_source": recip_source,
+            "wannier_basis_quality": basis_quality,
+            "k_dist": np.array([0.0]),
+            "node_idx": [0],
+            "labels": ["Γ"],
+        }
+        self.btn_push_bands.setEnabled(True)
+
+        # Light Γ-point plot if we have eigenvalues
+        if eigenvalues is not None:
+            self.figure.clear()
+            self.ax = self.figure.add_subplot(111)
+            n_bands = eigenvalues.shape[1] if eigenvalues.ndim == 2 else len(eigenvalues)
+            e_plot = eigenvalues[0] if eigenvalues.ndim == 2 else eigenvalues
+            self.ax.plot(np.zeros(n_bands), e_plot, "o", markersize=2, color="C0")
+            self.ax.axhline(0.0, color="k", lw=0.8, ls="--")
+            self.ax.set_ylabel("E − E_F (eV)")
+            self.ax.set_title(
+                f"TB ready for ARPES  |  hops={stats.get('n_hops', '?')}  "
+                f"hop_tol={stats.get('hop_tol', '?')}"
+            )
+            self.figure.tight_layout()
+            self.canvas.draw()
+
+        QMessageBox.information(
+            self,
+            "Prepare TB for ARPES",
+            f"{message}\n\n"
+            f"Hops kept: {stats.get('n_hops', '?'):,}\n"
+            f"Orbitals: {stats.get('n_orbs', '?')}\n"
+            f"hop_tol: {stats.get('hop_tol', '?')}\n"
+            f"Time: {stats.get('total_s', 0):.1f}s\n\n"
+            f"Next: Push Bands to Workspace → ARPES Suite.",
+        )
+
     def calculate_bands(self):
         is_2d = self.tb_panel.combo_k_mode.currentIndex() == 1
         
@@ -430,7 +758,14 @@ class DFTSuite(QWidget):
                 and self.tb_panel.combo_projection.currentText()
                 != "None (Standard Lines)"
             )
-            diag_engine, diag_device = self.tb_panel.band_diag_settings()
+            diag_engine, diag_device = self.tb_panel.resolved_band_diag_settings()
+            ui_engine, ui_device = self.tb_panel.band_diag_settings()
+            if (ui_engine, ui_device) != (diag_engine, diag_device):
+                print(
+                    f"TB bands: hybrid fast path overrides UI "
+                    f"{ui_engine}/{ui_device} -> {diag_engine}/{diag_device}",
+                    flush=True,
+                )
             onsite_e = float(self.tb_panel.spin_onsite.value())
             orbital_shifts = {
                 '0': float(self.tb_panel.spin_onsite_s.value()),
@@ -439,6 +774,21 @@ class DFTSuite(QWidget):
             }
             tb_mode = self.tb_panel.combo_tb_mode.currentText()
             fermi_energy = self._fermi_energy_from_w90(w90_file)
+
+            if w90_file:
+                warn = format_w90_cost_warning(
+                    quick_w90_hr_stats(w90_file), len(k_vecs)
+                )
+                if warn:
+                    reply = QMessageBox.warning(
+                        self,
+                        "Large Wannier90 model",
+                        warn + "\n\nContinue anyway?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No,
+                    )
+                    if reply != QMessageBox.Yes:
+                        return
 
             ctx = {
                 "is_2d": is_2d,
@@ -461,12 +811,15 @@ class DFTSuite(QWidget):
                 "diag_device": diag_device,
             }
 
-            if self.tb_panel.is_remote_target():
+            if self.tb_panel.is_hybrid_mode():
                 cluster = self.tb_panel.get_selected_cluster()
                 if not cluster:
                     raise ValueError(
-                        "Select a remote cluster under Compute target (Tight Binding panel)."
+                        "Select a server under Compute mode (Hybrid) in the Tight Binding panel."
                     )
+                w90_key = None
+                if w90_file:
+                    w90_key = w90_cache_key_for(w90_file, is_soc, onsite_e)
                 job = build_job_payload(
                     self.engine.crystal_structure,
                     k_vecs,
@@ -482,12 +835,14 @@ class DFTSuite(QWidget):
                     cutoffs=ui_cutoffs,
                     tb_mode=tb_mode,
                     w90_basename="wannier90_hr.dat" if w90_file else None,
+                    w90_cache_key=w90_key,
                 )
                 self._pending_band_ctx = ctx
-                self.btn_calculate.setEnabled(False)
-                self.btn_calculate.setText("⏳ Remote: run + download...")
+                self._tb_run_cluster = cluster
+                self._set_tb_running(True, "⏳ Hybrid: server run + download...")
                 print(
-                    f"TB bands: remote submit -> {cluster_display_name(cluster)}",
+                    f"TB bands: hybrid submit -> {cluster_display_name(cluster)} "
+                    f"({diag_engine}/{diag_device})",
                     flush=True,
                 )
                 self._tb_band_thread = TBBandRunnerThread(
@@ -496,13 +851,15 @@ class DFTSuite(QWidget):
                 self._tb_band_thread.log_signal.connect(
                     lambda m: print(m, flush=True)
                 )
-                self._tb_band_thread.finished_signal.connect(self._on_tb_remote_done)
+                self._tb_band_thread.finished_signal.connect(self._on_tb_bands_done)
                 self._tb_band_thread.start()
                 self.start_embedded_monitor(force_start=True)
                 return
 
-            eigenvalues, eigenvectors, orb_labels = self.engine.solve_bands(
-                k_vecs,
+            self._pending_band_ctx = ctx
+            self._tb_run_cluster = None
+            self._set_tb_running(True, "⏳ Local: calculating...")
+            solve_kwargs = dict(
                 custom_hopping=custom_hopping,
                 onsite_e=onsite_e,
                 use_soc=is_soc,
@@ -515,10 +872,12 @@ class DFTSuite(QWidget):
                 diag_engine=diag_engine,
                 diag_device=diag_device,
             )
-            ctx["eigenvalues"] = eigenvalues - fermi_energy
-            ctx["eigenvectors"] = eigenvectors
-            ctx["orb_labels"] = orb_labels
-            self._finalize_and_plot_bands(ctx)
+            self._tb_local_thread = TBBandLocalRunnerThread(
+                self.engine, k_vecs, solve_kwargs, fermi_energy, parent=self
+            )
+            self._tb_local_thread.finished_signal.connect(self._on_tb_bands_done)
+            self._tb_local_thread.start()
+            return
             
         except Exception as e:
             QMessageBox.warning(self, "Calculation Error", str(e))
@@ -540,52 +899,58 @@ class DFTSuite(QWidget):
                     break
         return fermi_energy
 
-    def _on_tb_remote_done(self, success, message, result):
-        self.btn_calculate.setEnabled(True)
-        self.btn_calculate.setText("⚙️ Calculate Band Structure")
-        if not success:
-            QMessageBox.warning(self, "Remote TB bands", message)
+    def _attach_w90_h_dict_from_cache(self, ctx):
+        """Hybrid path: H_dict for ARPES push without rebuilding gen_TB locally."""
+        w90_file = ctx.get("w90_file")
+        if not w90_file or getattr(self.engine.chinook, "H_dict", None) is not None:
             return
-        eigenvalues, eigenvectors, orb_labels, fermi_energy = result
+        from tensorspec.core.dft.w90_tb_cache import load_parsed_tb
+
+        disk = load_parsed_tb(w90_file, ctx["is_soc"], ctx["onsite_e"])
+        if not disk:
+            return
+        tb_dict, _basis_args, a_qe = disk
+        self.engine.chinook.H_dict = tb_dict
+        if a_qe is not None:
+            self.engine.chinook.A_qe = a_qe
+
+    def _on_tb_bands_done(self, success, message, result):
+        self._tb_run_cluster = None
+        self._set_tb_running(False)
+        if message == "Cancelled." or message == "Hybrid run cancelled.":
+            return
+        if not success:
+            QMessageBox.warning(self, "TB band calculation", message)
+            return
+
         ctx = getattr(self, "_pending_band_ctx", None)
         if not ctx:
-            QMessageBox.warning(self, "Remote TB bands", "Internal state lost.")
+            QMessageBox.warning(self, "TB band calculation", "Internal state lost.")
             return
         ctx = dict(ctx)
+
+        if len(result) == 4:
+            eigenvalues, eigenvectors, orb_labels, fermi_energy = result
+            ctx["fermi_energy"] = fermi_energy
+        else:
+            eigenvalues, eigenvectors, orb_labels = result
+            fermi_energy = ctx.get("fermi_energy", 0.0)
+
         ctx["eigenvalues"] = eigenvalues
         ctx["eigenvectors"] = eigenvectors
         ctx["orb_labels"] = orb_labels
-        ctx["fermi_energy"] = fermi_energy
-        self._warm_local_tb_for_push(ctx)
+        self._attach_w90_h_dict_from_cache(ctx)
         self._finalize_and_plot_bands(ctx)
-        QMessageBox.information(
-            self,
-            "Remote TB bands",
-            f"{message}\nPlotted locally.",
-        )
-
-    def _warm_local_tb_for_push(self, ctx):
-        """Build local Chinook TB cache after remote-only diag (for Push to Workspace)."""
-        w90_file = ctx.get("w90_file")
-        if not w90_file or getattr(self.engine.chinook, "tb_model", None) is not None:
-            return
-        try:
-            k_one = np.asarray(ctx["k_vecs"][:1], dtype=float)
-            self.engine.solve_bands(
-                k_one,
-                onsite_e=ctx["onsite_e"],
-                use_soc=ctx["is_soc"],
-                soc_strength=ctx["soc_val"],
-                w90_filepath=w90_file,
-                cutoffs=ctx["ui_cutoffs"],
-                tb_mode=ctx["tb_mode"],
-                orbital_shifts=ctx["orbital_shifts"],
-                need_eigenvectors=False,
-                diag_engine="chinook",
-                diag_device="cpu",
+        if self.tb_panel.is_hybrid_mode():
+            QMessageBox.information(
+                self,
+                "Hybrid TB bands",
+                f"{message}\nPlotted locally.",
             )
-        except Exception as exc:
-            print(f"WARN: local TB warm-build skipped: {exc}", flush=True)
+
+    def _on_tb_remote_done(self, success, message, result):
+        """Back-compat wrapper."""
+        self._on_tb_bands_done(success, message, result)
 
     def _finalize_and_plot_bands(self, ctx):
         is_2d = ctx["is_2d"]
@@ -611,32 +976,38 @@ class DFTSuite(QWidget):
             if is_2d
             else f"{mode_tag} Bands ({template_name.split()[0]} Path){soc_title_tag}"
         )
-        basis_coords = []
-        if self.engine.crystal_structure is not None:
-            basis_coords = [site.coords.tolist() for site in self.engine.crystal_structure]
 
         # Ultra-Deep Hunt for Chinook objects
         found_basis, found_h_dict, found_tb_model = None, None, None
-        
-        # Access the underlying chinook engine inside the router
         chinook_engine = self.engine.chinook
-        
-        found_basis = getattr(chinook_engine, 'basis', None)
-        found_h_dict = getattr(chinook_engine, 'H_dict', None)
-        
+        found_basis = getattr(chinook_engine, "basis", None)
+        found_h_dict = getattr(chinook_engine, "H_dict", None)
+
         for attr_name in dir(chinook_engine):
-            if attr_name.startswith('__'): continue
+            if attr_name.startswith("__"):
+                continue
             attr_val = getattr(chinook_engine, attr_name)
             type_name = type(attr_val).__name__
-            
-            if 'TB_model' in type_name:
+            if "TB_model" in type_name:
                 found_tb_model = attr_val
                 break
 
         if found_tb_model is not None:
-            if found_basis is None: found_basis = getattr(found_tb_model, 'basis', None)
-            if found_h_dict is None: found_h_dict = getattr(found_tb_model, 'H_dict', None)
-            
+            if found_basis is None:
+                found_basis = getattr(found_tb_model, "basis", None)
+            if found_h_dict is None:
+                found_h_dict = getattr(found_tb_model, "H_dict", None)
+            tb_basis = getattr(found_tb_model, "basis", None)
+            if isinstance(tb_basis, (list, tuple)) and tb_basis:
+                found_basis = tb_basis
+
+        basis_coords = _orbital_positions_for_workspace(
+            chinook_engine, found_basis, self.engine.crystal_structure
+        )
+        recip_matrix, recip_source = _recip_matrix_for_workspace(
+            chinook_engine, self.engine.crystal_structure
+        )
+        basis_quality = getattr(chinook_engine, "_last_wannier_basis_quality", None)
 
         # 4. Cache data for pushing (onsite/EF must travel to ARPES)
         # Wannier/SK solve already folds onsite_e into H_dict diagonals.
@@ -665,9 +1036,10 @@ class DFTSuite(QWidget):
             # 0 for Wannier (already in H); QE EF for non-W90 if needed later.
             'arpes_e_fermi_shift': 0.0 if is_w90 else float(fermi_energy),
             'title': title,
-            # --- NEW: EXPLICITLY PACK LATTICE VECTORS ---
             'structure': self.engine.crystal_structure,
-            'recip_matrix': self.engine.crystal_structure.lattice.reciprocal_lattice.matrix if self.engine.crystal_structure else None
+            'recip_matrix': recip_matrix,
+            'recip_matrix_source': recip_source,
+            'wannier_basis_quality': basis_quality,
         }
         
         if is_2d:
@@ -682,6 +1054,12 @@ class DFTSuite(QWidget):
         print(f"onsite_e packed: {self.active_bands_data.get('onsite_e')}")
         print(f"orbital_shifts packed: {self.active_bands_data.get('orbital_shifts')}")
         print(f"arpes_e_fermi_shift: {self.active_bands_data.get('arpes_e_fermi_shift')}")
+        print(f"recip_matrix_source: {self.active_bands_data.get('recip_matrix_source')}")
+        if basis_quality:
+            print(
+                f"wannier_basis: {basis_quality.get('unique_centers')} unique centres, "
+                f"ok={basis_quality.get('ok')}, source={basis_quality.get('basis_source')}"
+            )
         print(f"e_fermi packed into dict: {self.active_bands_data.get('e_fermi', 'NOT DEFINED')}")
         # -----------------------------
 
@@ -828,9 +1206,36 @@ class DFTSuite(QWidget):
         self.figure.subplots_adjust(left=0.15, right=0.85, top=0.85, bottom=0.15)
         self.canvas.draw()
             
+    def _confirm_arpes_basis_quality(self, payload: dict) -> bool:
+        """Warn before workspace push when Wannier basis looks too coarse for ARPES."""
+        w90 = payload.get("w90_filepath")
+        if not w90:
+            return True
+
+        quality = payload.get("wannier_basis_quality")
+        if quality is None:
+            quality = getattr(
+                self.engine.chinook, "_last_wannier_basis_quality", None
+            )
+        if not quality or quality.get("ok"):
+            return True
+
+        msg = quality.get("message") or "Wannier basis may be wrong for ARPES."
+        reply = QMessageBox.warning(
+            self,
+            "ARPES Basis Warning",
+            f"{msg}\n\nPush to workspace anyway?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
+
     def push_bands_to_workspace(self):
         if not hasattr(self, 'active_bands_data'):
             QMessageBox.warning(self, "Warning", "No band structure calculated yet.")
+            return
+
+        if not self._confirm_arpes_basis_quality(self.active_bands_data):
             return
             
         dim_str = "2D" if self.active_bands_data.get('is_2d') else "1D"
@@ -857,6 +1262,14 @@ class DFTSuite(QWidget):
         global_workspace._data[name] = payload
         
         dim_str_display = "2D Mesh" if payload.get('is_2d') else "1D Path"
+        recip_src = payload.get("recip_matrix_source", "cif")
+        bq = payload.get("wannier_basis_quality") or {}
+        basis_line = ""
+        if bq:
+            basis_line = (
+                f"\nWannier centres: {bq.get('unique_centers', '?')} unique "
+                f"(source={bq.get('basis_source', '?')})"
+            )
         QMessageBox.information(
             self,
             "Success",
@@ -864,6 +1277,8 @@ class DFTSuite(QWidget):
             f"onsite_e = {payload.get('onsite_e')} eV\n"
             f"QE Fermi = {payload.get('fermi_energy')} eV\n"
             f"ARPES eigenvalue shift = {payload.get('arpes_e_fermi_shift', 0.0)} eV\n"
+            f"Reciprocal lattice for ARPES: {recip_src}"
+            f"{basis_line}\n\n"
             f"(onsite is baked into H_dict for ARPES)\n\n"
             f"Load it in the ARPES Suite.",
         )

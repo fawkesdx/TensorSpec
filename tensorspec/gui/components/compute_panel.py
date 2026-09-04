@@ -13,6 +13,7 @@ from matplotlib.figure import Figure
 
 from tensorspec.core.compute.cluster_live_monitor import fetch_cluster_snapshot
 from tensorspec.core.compute import cluster_paths as cp
+from tensorspec.gui.services.nersc_auth import refresh_sshproxy_login
 
 CONFIG_FILE = os.path.expanduser('~/.tensorspec_clusters.json')
 
@@ -436,7 +437,7 @@ class ComputeManagerPanel(QDialog):
         self.slurm_account_input = QLineEdit()
         self.slurm_account_input.setPlaceholderText("SLURM only — e.g. m1234")
         self.slurm_qos_input = QLineEdit()
-        self.slurm_qos_input.setPlaceholderText("SLURM only — e.g. regular_0 (debug max 30 min)")
+        self.slurm_qos_input.setPlaceholderText("SLURM only — e.g. regular (not regular_0 on als)")
         self.slurm_constraint_input = QLineEdit()
         self.slurm_constraint_input.setPlaceholderText("SLURM only — cpu or gpu")
         self.slurm_walltime_input = QLineEdit()
@@ -505,13 +506,21 @@ class ComputeManagerPanel(QDialog):
         
         self.test_btn = QPushButton("Test Connection")
         self.test_btn.clicked.connect(self.test_connection)
-        
+
+        self.nersc_login_btn = QPushButton("🔑 Refresh NERSC Login")
+        self.nersc_login_btn.setToolTip(
+            "For NERSC / Perlmutter only — runs sshproxy (MFA). "
+            "Hidden / disabled for Daemon-style clusters."
+        )
+        self.nersc_login_btn.clicked.connect(self.refresh_nersc_login)
+
         self.provision_btn = QPushButton("⚙️ Auto-Setup Remote Environment")
         self.provision_btn.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; padding: 5px;")
         self.provision_btn.clicked.connect(self.provision_cluster_environment)
         
         action_layout.addWidget(self.remove_btn)
         action_layout.addStretch()
+        action_layout.addWidget(self.nersc_login_btn)
         action_layout.addWidget(self.test_btn)
         action_layout.addWidget(self.provision_btn)
         
@@ -621,6 +630,27 @@ class ComputeManagerPanel(QDialog):
         self.update_table()
         self.save_config()
 
+    def refresh_nersc_login(self):
+        selected_rows = self.table.selectionModel().selectedRows()
+        if not selected_rows:
+            QMessageBox.information(
+                self,
+                "Info",
+                "Select a NERSC cluster (e.g. Perlmutter) in the table first.",
+            )
+            return
+        row = selected_rows[0].row()
+        cluster = self.clusters[row]
+        if not cp.uses_sshproxy(cluster):
+            QMessageBox.information(
+                self,
+                "Not NERSC",
+                f"'{cluster.get('name')}' is not a NERSC sshproxy cluster.\n"
+                "Use Test Connection for Daemon / password hosts.",
+            )
+            return
+        refresh_sshproxy_login(self, cluster)
+
     def test_connection(self):
         selected_rows = self.table.selectionModel().selectedRows()
         if not selected_rows:
@@ -642,7 +672,14 @@ class ComputeManagerPanel(QDialog):
             ssh.close()
             QMessageBox.information(self, "Connection Successful", f"Connected to '{cluster['name']}' ({cluster['host']})!\nDetected on cluster: {detected_str or 'Basic shell'}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to connect to '{cluster['name']}':\n{str(e)}")
+            hint = ""
+            if cp.uses_sshproxy(cluster):
+                hint = "\n\nTip: click 🔑 Refresh NERSC Login first (sshproxy MFA)."
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to connect to '{cluster['name']}':\n{str(e)}{hint}",
+            )
 
     def provision_cluster_environment(self):
         selected_rows = self.table.selectionModel().selectedRows()
