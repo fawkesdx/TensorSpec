@@ -262,7 +262,7 @@ class QEGeneratorPanel(QWidget):
         self.spin_pw_cores = QSpinBox()
         self.spin_pw_cores.setRange(1, 256)
         self.spin_pw_cores.setValue(128)
-        self.spin_pw_cores.setToolTip("MPI ranks for pw.x (scf + nscf). Perlmutter: up to 128 on one CPU node.")
+        self.spin_pw_cores.setToolTip("MPI ranks for pw.x (scf + nscf). HPC CPU nodes: often up to 128 ranks.")
         self.spin_wannier_cores = QSpinBox()
         self.spin_wannier_cores.setRange(1, 256)
         self.spin_wannier_cores.setValue(36)
@@ -284,7 +284,7 @@ class QEGeneratorPanel(QWidget):
         self.combo_pw_backend.addItem("GPU (CUDA pw.x)", "gpu")
         self.combo_pw_backend.setToolTip(
             "GPU uses Quantum ESPRESSO use_gpu=.true. (not GrizzlyME). "
-            "Requires pw.x built with CUDA (remote-cluster qe conda env). "
+            "Requires pw.x built with CUDA (remote QE GPU env). "
             "Mac/local conda pw.x is usually CPU-only."
         )
         self.combo_gpu_device = QComboBox()
@@ -339,7 +339,7 @@ class QEGeneratorPanel(QWidget):
         fetch_row = QHBoxLayout()
         self.btn_nersc_login = QPushButton("🔑 Refresh NERSC Login")
         self.btn_nersc_login.setToolTip(
-            "Run sshproxy for NERSC MFA (Perlmutter). Hidden for Daemon / local."
+            "Run sshproxy for NERSC MFA. Hidden for Daemon / local."
         )
         self.btn_nersc_login.clicked.connect(self.refresh_nersc_login)
         self.btn_fetch_wan = QPushButton("📥 Fetch ARPES Package")
@@ -388,7 +388,7 @@ class QEGeneratorPanel(QWidget):
     def refresh_nersc_login(self):
         cluster = self.get_selected_cluster()
         if not cluster:
-            QMessageBox.information(self, "Info", "Select Perlmutter (NERSC) as Compute Target.")
+            QMessageBox.information(self, "Info", "Select a NERSC / sshproxy cluster as Compute Target.")
             return
         refresh_sshproxy_login(self, cluster)
 

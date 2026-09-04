@@ -27,7 +27,7 @@ class ComputeModeTests(unittest.TestCase):
         self.assertIsNone(cm.combo_cluster(combo))
 
     def test_hybrid_entry(self):
-        cluster = {"name": "remote-cluster", "host": "gpu.example.edu", "user": "YOUR_USER"}
+        cluster = {"name": "Local GPU", "host": "gpu.example.edu", "user": "alice"}
         combo = _FakeCombo(cm.hybrid_entry(cluster))
         self.assertTrue(cm.is_hybrid_mode(combo))
         self.assertEqual(cm.combo_cluster(combo)["host"], "gpu.example.edu")
@@ -39,7 +39,7 @@ class ComputeModeTests(unittest.TestCase):
         self.assertEqual(cm.combo_cluster(combo), cluster)
 
     def test_hybrid_fast_diag_w90(self):
-        cluster = {"host": "gpu.example.edu", "user": "YOUR_USER"}
+        cluster = {"host": "gpu.example.edu", "user": "alice"}
         combo = _FakeCombo(cm.hybrid_entry(cluster))
         engine, device = cm.effective_band_diag(
             combo, "chinook", "cpu", auto_gpu=True, w90_loaded=True

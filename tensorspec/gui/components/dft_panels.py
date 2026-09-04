@@ -35,7 +35,7 @@ class TightBindingPanel(QWidget):
         populate_compute_target_combo(self.combo_tb_target)
         self.combo_tb_target.setToolTip(
             "Local only = everything on this Mac.\n"
-            "Hybrid = upload TB job to your server (remote-cluster etc.), "
+            "Hybrid = upload TB job to your remote cluster, "
             "run band diag there, download result, plot here."
         )
         self.lbl_tb_exec = QLabel("")

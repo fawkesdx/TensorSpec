@@ -1,16 +1,16 @@
 # GrizzlyME full-GPU remote path — Implementation Plan
 
-> **For agentic workers:** Implement task-by-task. Do not kill remote-cluster chinook jobs.
+> **For agentic workers:** Implement task-by-task. Do not kill remote chinook jobs.
 
 **Goal:** Single-process Grizzly CUDA full-cube path in the remote runner so GPU maps beat max-safe-CPU chinook wall time.
 
-**Architecture:** Add `--layout {slices,full}` to `chinook_remote_runner_template.py`. `full` = one `GrizzlyExperiment` over the whole angle cube. GUI passes `--layout full` for spinless remote + CUDA. Phase 0 timing script for the remote cluster A/B after the current job finishes.
+**Architecture:** Add `--layout {slices,full}` to `chinook_remote_runner_template.py`. `full` = one `GrizzlyExperiment` over the whole angle cube. GUI passes `--layout full` for spinless remote + CUDA. Phase 0 timing script for remote A/B after the current job finishes.
 
 **Tech Stack:** Python 3.10+, chinook, grizzlyme, PyTorch CUDA, Paramiko GUI upload of template.
 
 **Global Constraints:**
 - Branch work stays in TensorSpec_GUI / GrizzlyME; never merge HTML TensorSpec to main for this.
-- Do not disturb running remote-cluster chinook processes.
+- Do not disturb running remote chinook processes.
 - SARPES → always `slices` + chinook.
 - No private hostnames in public GrizzlyME docs.
 
@@ -60,7 +60,7 @@
 
 ---
 
-### Task 4: Stage on the remote cluster (no kill)
+### Task 4: Stage on remote host (no kill)
 
 **Files:** upload template + timing script to `chinook_gui_run/`
 

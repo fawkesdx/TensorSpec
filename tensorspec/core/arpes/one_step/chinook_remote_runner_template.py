@@ -36,7 +36,7 @@ def _load_runner_module(module_name: str, path: str):
     return mod
 
 
-# Load shared kmesh module (uploaded beside this script on the remote cluster).
+# Load shared kmesh module (uploaded beside this script on the remote host).
 _RUNNER_DIR = os.path.dirname(os.path.abspath(__file__))
 _KMESH_PATH = os.path.join(_RUNNER_DIR, "chinook_arpes_kmesh.py")
 if not os.path.isfile(_KMESH_PATH):

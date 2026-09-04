@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Module 1 — mid-grid Grizzly scale probe (remote-cluster run dir).
+"""Module 1 — mid-grid Grizzly scale probe (remote run dir).
 
 Does NOT touch GUI default ``chinook_arpes_cube.npz``. Writes cube + JSON
 under ``scale_bench/`` so interactive TensorSpec Fetch stays safe.
 
-Run on the remote cluster inside the GUI run directory (tb_data.npz + physics present)::
+Run on the remote host inside the GUI run directory (tb_data.npz + physics present)::
 
     python -u bench_grizzly_scale.py --ntheta 40 --nphi 10 --ne 40 \\
         --device cuda --layout full

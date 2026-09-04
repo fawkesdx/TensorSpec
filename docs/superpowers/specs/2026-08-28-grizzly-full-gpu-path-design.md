@@ -6,7 +6,7 @@
 
 ## Goal
 
-Wall-clock ARPES intensity cubes on the remote cluster **faster than chinook at max safe CPU workers** for the same TB + grid, by feeding the GPU a single (or chunked-in-one-process) Grizzly pipeline — not N process-pool θ-slices fighting CUDA.
+Wall-clock ARPES intensity cubes on a remote GPU host **faster than chinook at max safe CPU workers** for the same TB + grid, by feeding the GPU a single (or chunked-in-one-process) Grizzly pipeline — not N process-pool θ-slices fighting CUDA.
 
 Success bar: GPU path wall ≪ chinook-on-max-safe-CPUs; `nvidia-smi` shows sustained util during Mk/diag/spectral; cube parity via `compare_arpes_cubes.py` (rel L2).
 

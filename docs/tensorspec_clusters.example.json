@@ -1,29 +1,30 @@
 [
   {
-    "name": "remote-cluster",
+    "name": "Local GPU",
     "host": "gpu.example.edu",
     "user": "YOUR_USER",
     "password": "",
     "mode": "Daemon",
     "paths": {
-      "heavy_root": "/mnt/data/YOUR_USER/tensorspec_heavy",
-      "tmp_dir": "/mnt/data/YOUR_USER/tmp"
+      "heavy_root": "/scratch/YOUR_USER/tensorspec_heavy",
+      "tmp_dir": "/scratch/YOUR_USER/tmp"
     }
   },
   {
-    "name": "Perlmutter",
+    "name": "HPC SLURM",
     "host": "hpc.example.edu",
-    "user": "YOUR_NERSC_USER",
+    "user": "YOUR_HPC_USER",
     "password": "",
     "mode": "SLURM",
+    "auth": "sshproxy",
     "paths": {
-      "heavy_root": "/pscratch/sd/X/YOUR_NERSC_USER/tensorspec_heavy",
-      "tmp_dir": "/pscratch/sd/X/YOUR_NERSC_USER/tmp",
+      "heavy_root": "/scratch/YOUR_HPC_USER/tensorspec_heavy",
+      "tmp_dir": "/scratch/YOUR_HPC_USER/tmp",
       "qe_module": "espresso/7.5-libxc-7.0.0-cpu",
-      "ssh_key": "~/.ssh/nersc",
+      "ssh_key": "~/.ssh/cluster_key",
       "slurm": {
         "account": "YOUR_PROJECT",
-        "qos": "regular_0",
+        "qos": "regular",
         "constraint": "cpu",
         "walltime": "06:00:00",
         "nodes": 1

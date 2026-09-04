@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run scale-ladder rungs sequentially; append results to scale_bench/LADDER.jsonl.
 
-Intended for the remote cluster ``chinook_gui_run``. Skips rungs whose result JSON exists
+Intended for remote ``chinook_gui_run``. Skips rungs whose result JSON exists
 unless ``--force``.
 """
 

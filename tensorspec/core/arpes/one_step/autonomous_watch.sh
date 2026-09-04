@@ -1,11 +1,16 @@
 #!/bin/bash
 # Unattended post-ladder: wait, summarize, retry OOM with smaller theta_chunk.
+#
+# Required env:
+#   TENSORSPEC_RUN_DIR — chinook_gui_run directory
+#   TENSORSPEC_PYTHON  — python with TensorSpec + deps
 set -u
-cd /scratch/YOUR_USER/tensorspec_heavy/chinook_gui_run
+RUN_DIR=${TENSORSPEC_RUN_DIR:?set TENSORSPEC_RUN_DIR to chinook_gui_run path}
+PY=${TENSORSPEC_PYTHON:?set TENSORSPEC_PYTHON to venv python}
+cd "$RUN_DIR"
 OUT=scale_bench
 LOG=$OUT/autonomous_watch.log
 STATUS=$OUT/AUTONOMOUS_STATUS.md
-PY=/home/YOUR_USER/TensorSpec/TensorSpec_env/bin/python
 exec >>"$LOG" 2>&1
 echo "==== watch start $(date -Is) ===="
 

@@ -1,7 +1,7 @@
 # Grizzly CUDA fast path (kmesh hybrid)
 
 **Date:** 2026-08-30  
-**Status:** implemented locally; stage to the remote cluster after in-flight 200³ job.
+**Status:** implemented locally; stage to remote host after in-flight 200³ job.
 
 ## Bottleneck (before)
 
@@ -27,16 +27,16 @@
 run_grizzly_arpes(..., use_grizzly_spectral=False)  # old Chinook CPU spectral
 ```
 
-## Deploy to the remote cluster (after current job)
+## Deploy to remote host (after current job)
 
 ```bash
 scp tensorspec/core/arpes/one_step/chinook_arpes_kmesh.py \
     tensorspec/core/arpes/one_step/chinook_remote_runner_template.py \
-    remote:/scratch/YOUR_USER/tensorspec_heavy/chinook_gui_run/
+    remote:$TENSORSPEC_RUN_DIR/
 
 # GrizzlyME spectral.py if not installed via pip:
 scp GrizzlyME/grizzly/spectral.py \
-    remote:~/TensorSpec/TensorSpec_env/lib/python3.10/site-packages/grizzly/spectral.py
+    remote:$TENSORSPEC_REPO/TensorSpec_env/lib/python3.10/site-packages/grizzly/spectral.py
 ```
 
 Re-run a ladder rung (e.g. 80×40×40) with/without `use_grizzly_spectral` to measure win.

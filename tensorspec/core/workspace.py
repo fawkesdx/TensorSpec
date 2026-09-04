@@ -51,7 +51,7 @@ class WorkspaceManager:
     
     def push_remote_run(self, name, cluster_name, remote_path, engine):
         """
-        Stores a pointer to a remote DFT calculation output folder (e.g. on the remote cluster).
+        Stores a pointer to a remote DFT calculation output folder.
         engine should be 'SPRKKR' or 'QE'.
         """
         self._data[name] = {

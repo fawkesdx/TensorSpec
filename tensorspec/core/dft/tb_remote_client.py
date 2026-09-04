@@ -142,7 +142,7 @@ def run_remote_tb_bands(
 
         env_exports = f"export PYTHONPATH={tensorspec_home}:$PYTHONPATH"
         if str(job.get("diag_device", "cpu")).lower() == "cuda":
-            # Prefer the less-loaded V100 when both exist (remote-cluster has 2).
+            # Prefer the less-loaded GPU when multiple devices exist.
             env_exports += " && export CUDA_VISIBLE_DEVICES=1"
 
         cmd = (

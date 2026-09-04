@@ -1,7 +1,7 @@
 """
 Shared θ,φ → K_bulk kinematics and Chinook ARPES execution.
 
-Used by local chinook_wrapper and remote-cluster remote runner so both paths
+Used by local chinook_wrapper and remote runner so both paths
 apply the same hkl projection, V0 refraction, and bulk-frame polarization.
 """
 from __future__ import annotations

@@ -120,10 +120,10 @@ def test_load_private_key_nersc_rsa_pem():
 
 
 def test_uses_sshproxy_and_arpes_fetch_filter():
-    assert uses_sshproxy({"host": "hpc.example.edu", "user": "u"})
-    assert uses_sshproxy({"host": "x.lbl.gov", "auth": "sshproxy"})
+    assert uses_sshproxy({"host": "login.nersc.gov", "user": "u"})
+    assert uses_sshproxy({"host": "gpu.example.edu", "auth": "sshproxy"})
     assert not uses_sshproxy({"host": "gpu.example.edu", "mode": "Daemon"})
-    assert not uses_sshproxy({"host": "hpc.example.edu", "auth": "password"})
+    assert not uses_sshproxy({"host": "login.nersc.gov", "auth": "password"})
 
     assert is_arpes_fetch_candidate("wannier90_hr.dat")
     assert is_arpes_fetch_candidate("scf.out")

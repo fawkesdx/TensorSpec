@@ -19,7 +19,7 @@ SPRKKR/
 GrizzlyME/
 AGENT_HANDOFF.md
 
-# Local Daemon / debug scratch (never push)
+# Local lab / debug scratch (never push)
 check_*.py
 verify_*.py
 test_sprkkr.py
@@ -58,3 +58,8 @@ bottom.py
 
 # Agent scratch (never push)
 .superpowers/
+
+# Local cluster credentials / paths (never push)
+tensorspec_clusters.json
+.tensorspec_clusters.json
+**/tensorspec_clusters.local.json

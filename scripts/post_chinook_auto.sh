@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # Wait for active chinook job (parent PID) to finish, then run Grizzly A/B plan.
 # Idempotent via DONE / STARTED markers.
+#
+# Required env (no hard-coded personal paths):
+#   TENSORSPEC_RUN_DIR   — remote/local chinook_gui_run directory
+#   TENSORSPEC_PYTHON    — python with TensorSpec + deps
+# Usage: post_chinook_auto.sh <parent_pid>
 set -euo pipefail
 
-RUN_DIR=/scratch/YOUR_USER/tensorspec_heavy/chinook_gui_run
-PY=/home/YOUR_USER/TensorSpec/TensorSpec_env/bin/python
-PARENT_PID=${1:-4077260}
+RUN_DIR=${TENSORSPEC_RUN_DIR:?set TENSORSPEC_RUN_DIR to chinook_gui_run path}
+PY=${TENSORSPEC_PYTHON:?set TENSORSPEC_PYTHON to venv python}
+PARENT_PID=${1:?usage: $0 <parent_pid>}
 MARKER_DIR="$RUN_DIR/post_chinook_auto"
 LOG="$MARKER_DIR/watcher.log"
 
@@ -35,21 +40,17 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     echo "Found 'completed successfully' in sys.out.full"
     break
   fi
-  # any remaining active workers of the finished tree?
   if ! pgrep -f "chinook_remote_runner.py --tb_file" >/dev/null 2>&1; then
     echo "No chinook_remote_runner processes left"
     break
   fi
-  # ignore stale 0%CPU zombie-ish parents older than 1 day if only those remain
   sleep 30
 done
 
 cd "$RUN_DIR"
 
-# Rename fresh cube if present and not already archived
 if [[ -f chinook_arpes_cube.npz ]]; then
   if [[ ! -f chinook_arpes_cube_chinook.npz ]]; then
-    # Prefer rename when cube mtime is newer than Aug 27 (old cube was Aug 26)
     cube_mtime=$(stat -c %Y chinook_arpes_cube.npz)
     if [[ "$cube_mtime" -gt 1756500000 ]]; then
       cp -a chinook_arpes_cube.npz chinook_arpes_cube_chinook.npz
@@ -77,7 +78,6 @@ $PY -u time_grizzly_vs_chinook_slice.py \
 
 echo "==== Phase 1: full-cube Grizzly CUDA $(date -Is) ===="
 touch "$MARKER_DIR/STARTED_GRIZZLY"
-# Move aside default out path so we don't overwrite chinook archive mid-write
 nohup $PY -u chinook_remote_runner.py \
   --tb_file tb_data.npz \
   --theta_min -15.0 --theta_max 15.0 --ntheta 200 \
@@ -101,7 +101,7 @@ if [[ -f chinook_arpes_cube_chinook.npz && -f chinook_arpes_cube_grizzly.npz ]];
     chinook_arpes_cube_chinook.npz chinook_arpes_cube_grizzly.npz \
     | tee "$MARKER_DIR/compare.txt" || true
 else
-  echo "Missing cubes for compare:" 
+  echo "Missing cubes for compare:"
   ls -lah chinook_arpes_cube_chinook.npz chinook_arpes_cube_grizzly.npz 2>&1 || true
   echo "--- sys.out.grizzly tail ---"
   tail -n 80 "$RUN_DIR/sys.out.grizzly" || true

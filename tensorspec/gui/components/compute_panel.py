@@ -509,8 +509,8 @@ class ComputeManagerPanel(QDialog):
 
         self.nersc_login_btn = QPushButton("🔑 Refresh NERSC Login")
         self.nersc_login_btn.setToolTip(
-            "For NERSC / Perlmutter only — runs sshproxy (MFA). "
-            "Hidden / disabled for Daemon-style clusters."
+            "For NERSC / sshproxy clusters only — runs sshproxy (MFA). "
+            "Hidden / disabled for Daemon / password-style clusters."
         )
         self.nersc_login_btn.clicked.connect(self.refresh_nersc_login)
 
@@ -636,7 +636,7 @@ class ComputeManagerPanel(QDialog):
             QMessageBox.information(
                 self,
                 "Info",
-                "Select a NERSC cluster (e.g. Perlmutter) in the table first.",
+                "Select a NERSC / sshproxy cluster in the table first.",
             )
             return
         row = selected_rows[0].row()
