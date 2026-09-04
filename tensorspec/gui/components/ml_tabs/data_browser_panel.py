@@ -21,9 +21,9 @@ from PySide6.QtWidgets import (
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.workspace import global_workspace
 from tensorspec.gui.components.ml_tabs.legacy_data import convert_to_tensor_data, tensor_to_ml_dict
-from tensorspec.gui.maestroai.maestro_loader import LoadWorker
-from tensorspec.gui.maestroai.maestro_fermi_viewer import FermiViewerWindow
-from tensorspec.gui.maestroai.maestroai_guides import MasterGuideDialog
+from tensorspec.gui.ml.maestro_loader import LoadWorker
+from tensorspec.gui.ml.maestro_fermi_viewer import FermiViewerWindow
+from tensorspec.gui.ml.maestroai_guides import MasterGuideDialog
 
 
 class DataBrowserPanel(QWidget):

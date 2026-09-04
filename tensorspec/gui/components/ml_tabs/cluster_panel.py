@@ -8,9 +8,9 @@ from PySide6.QtWidgets import (
 )
 
 from tensorspec.gui.components.ml_tabs.layout import split_panel
-from tensorspec.gui.maestroai.maestroai_clustering import ClusterWorker
-from tensorspec.gui.maestroai.maestroai_guides import ClusterGuideDialog
-from tensorspec.gui.maestroai.maestroai_viewers import DendrogramDialog, MplCanvas
+from tensorspec.gui.ml.maestroai_clustering import ClusterWorker
+from tensorspec.gui.ml.maestroai_guides import ClusterGuideDialog
+from tensorspec.gui.ml.maestroai_viewers import DendrogramDialog, MplCanvas
 
 
 class ClusterPanel(QWidget):

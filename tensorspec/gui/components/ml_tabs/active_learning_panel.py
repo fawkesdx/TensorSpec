@@ -5,9 +5,9 @@ from PySide6.QtWidgets import (
 )
 
 from tensorspec.gui.components.ml_tabs.layout import split_panel
-from tensorspec.gui.maestroai.maestroai_active_learning import ActiveLearningWorker
-from tensorspec.gui.maestroai.maestroai_guides import ActiveLearningGuideDialog
-from tensorspec.gui.maestroai.maestroai_viewers import MplCanvas
+from tensorspec.gui.ml.maestroai_active_learning import ActiveLearningWorker
+from tensorspec.gui.ml.maestroai_guides import ActiveLearningGuideDialog
+from tensorspec.gui.ml.maestroai_viewers import MplCanvas
 
 
 class ActiveLearningPanel(QWidget):

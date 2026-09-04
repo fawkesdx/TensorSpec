@@ -13,9 +13,9 @@ from tensorspec.gui.components.ml_tabs.layout import scrollable, tab_group
 from tensorspec.gui.components.ml_tabs.simulate_al_panel import SimulateALPanel
 from tensorspec.gui.components.ml_tabs.ssl_panel import SSLTrainingPanel
 from tensorspec.gui.components.ml_tabs.supervised_panel import SupervisedPanel
-from tensorspec.gui.maestroai.build_pipeline_tab import BuildPipelineTab
-from tensorspec.gui.maestroai.model_warehouse_tab import ModelWarehouseTab
-from tensorspec.gui.maestroai.train_model_tab import TrainModelTab
+from tensorspec.gui.ml.build_pipeline_tab import BuildPipelineTab
+from tensorspec.gui.ml.model_warehouse_tab import ModelWarehouseTab
+from tensorspec.gui.ml.train_model_tab import TrainModelTab
 from tensorspec.gui.ml_session import MLSession
 
 

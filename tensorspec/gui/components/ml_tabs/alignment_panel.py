@@ -6,12 +6,12 @@ from PySide6.QtWidgets import (
 )
 
 from tensorspec.gui.components.ml_tabs.layout import split_panel
-from tensorspec.gui.maestroai.maestro_fermi_viewer import FermiViewerWindow
-from tensorspec.gui.maestroai.maestroai_alignment import (
+from tensorspec.gui.ml.maestro_fermi_viewer import FermiViewerWindow
+from tensorspec.gui.ml.maestroai_alignment import (
     AzimuthalTwistWorker, CoupledAzimuthTiltWorker, NormalTiltWorker,
 )
-from tensorspec.gui.maestroai.maestroai_guides import AlignmentGuideDialog
-from tensorspec.gui.maestroai.maestroai_viewers import AzimuthTemplateViewer, MplCanvas
+from tensorspec.gui.ml.maestroai_guides import AlignmentGuideDialog
+from tensorspec.gui.ml.maestroai_viewers import AzimuthTemplateViewer, MplCanvas
 
 
 class AlignmentPanel(QWidget):

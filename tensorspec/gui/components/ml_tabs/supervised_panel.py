@@ -8,8 +8,8 @@ from PySide6.QtWidgets import (
 )
 
 from tensorspec.gui.components.ml_tabs.layout import scrollable
-from tensorspec.gui.maestroai.maestroai_guides import SupGuideDialog
-from tensorspec.gui.maestroai.maestroai_training_sup import SupTestWorker, SupTrainWorker
+from tensorspec.gui.ml.maestroai_guides import SupGuideDialog
+from tensorspec.gui.ml.maestroai_training_sup import SupTestWorker, SupTrainWorker
 
 
 class SupervisedPanel(QWidget):

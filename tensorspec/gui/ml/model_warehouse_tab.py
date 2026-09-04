@@ -115,7 +115,7 @@ class ModelWarehouseTab(QWidget):
                 self.parent_app.processEvents()
 
             try:
-                cache_dir = 'tensorspec/gui/maestroai/model_warehouse/pretrained'
+                cache_dir = 'tensorspec/gui/ml/model_warehouse/pretrained'
                 os.makedirs(cache_dir, exist_ok=True)
                 torch.hub.set_dir(cache_dir)
 
