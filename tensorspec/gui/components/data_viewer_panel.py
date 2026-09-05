@@ -108,6 +108,28 @@ class SliceWidget(QFrame):
         self.combo_profile_mode.addItems(["Raw (Sum)", "Mean", "Normalized to Max"])
         self.combo_profile_mode.currentIndexChanged.connect(self.redraw)
         row1.addWidget(self.combo_profile_mode)
+
+        row1.addWidget(QLabel("Contrast %:"))
+        self.sl_contrast = QSlider(Qt.Horizontal)
+        self.sl_contrast.setRange(1, 100)
+        self.sl_contrast.setValue(100)
+        self.sl_contrast.setFixedWidth(80)
+        self.sl_contrast.setToolTip(
+            "Scale color limits from data min toward max (100% = full range)."
+        )
+        self.sl_contrast.valueChanged.connect(self.redraw)
+        row1.addWidget(self.sl_contrast)
+
+        row1.addWidget(QLabel("γ:"))
+        self.spin_gamma = QDoubleSpinBox()
+        self.spin_gamma.setRange(0.1, 5.0)
+        self.spin_gamma.setValue(1.0)
+        self.spin_gamma.setSingleStep(0.1)
+        self.spin_gamma.setDecimals(2)
+        self.spin_gamma.setFixedWidth(60)
+        self.spin_gamma.setToolTip("Gamma for intensity display (1 = linear).")
+        self.spin_gamma.valueChanged.connect(self.redraw)
+        row1.addWidget(self.spin_gamma)
         
         # NEW: Zen Mode Toggle Button
         self.btn_toggle = QPushButton("👁️ Toggle UI")
@@ -467,16 +489,35 @@ class SliceWidget(QFrame):
         self.im_main.set_data(sliced)
         self.im_main.set_extent(extent)
         if is_ml_label_layer(layer_text):
-            self.im_main.set_clim(-0.5, 19.5)
+            import matplotlib.colors as mcolors
+
+            self.im_main.set_norm(mcolors.Normalize(vmin=-0.5, vmax=19.5))
             try:
                 import matplotlib as mpl
                 self.im_main.set_cmap(mpl.colormaps["tab20"].with_extremes(under="#333333"))
             except Exception:
                 self.im_main.set_cmap("tab20")
         else:
-            vmin, vmax = np.nanmin(sliced), np.nanmax(sliced)
-            self.im_main.set_clim(vmin, vmax)
-            self.im_main.set_cmap('magma')
+            import matplotlib.colors as mcolors
+
+            finite = sliced[np.isfinite(sliced)]
+            if finite.size == 0:
+                vmin, vmax = 0.0, 1.0
+            else:
+                vmin = float(np.nanmin(finite))
+                vmax = float(np.nanmax(finite))
+            if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+                vmax = vmin + 1.0
+            c_scale = max(0.01, float(self.sl_contrast.value()) / 100.0)
+            vmax_adj = vmin + (vmax - vmin) * c_scale + 1e-8
+            gamma = float(self.spin_gamma.value())
+            self.im_main.set_cmap("magma")
+            if abs(gamma - 1.0) < 1e-6:
+                self.im_main.set_norm(mcolors.Normalize(vmin=vmin, vmax=vmax_adj))
+            else:
+                self.im_main.set_norm(
+                    mcolors.PowerNorm(gamma=gamma, vmin=vmin, vmax=vmax_adj)
+                )
         
         self.ax_main.set_xlabel(self.combo_x.currentText())
         self.ax_main.set_ylabel(self.combo_y.currentText())
@@ -1052,7 +1093,12 @@ class DataViewerPanel(QWidget):
         return (0, 0, 0, 0)
 
     def get_dispersion_contrast(self):
-        return 100
+        """Match Maestro4DViewer API for ML cluster/dendrogram contrast."""
+        for view in self._iter_slice_widgets():
+            sl = getattr(view, "sl_contrast", None)
+            if sl is not None:
+                return float(sl.value()) / 100.0
+        return 1.0
 
     def sync_ml_layers(self, source_dict: dict):
         """Merge ML domain / label arrays into viewer metadata and refresh layer combos."""
