@@ -45,6 +45,7 @@ if not os.path.isfile(_KMESH_PATH):
 _kmesh = _load_runner_module("chinook_arpes_kmesh", _KMESH_PATH)
 run_chinook_arpes = _kmesh.run_chinook_arpes
 run_grizzly_arpes = _kmesh.run_grizzly_arpes
+build_grizzly_me_shell = _kmesh.build_grizzly_me_shell
 apply_chinook_runtime_patches = _kmesh.apply_chinook_runtime_patches
 
 _SCHEDULE_PATH = os.path.join(_RUNNER_DIR, "grizzly_cuda_schedule.py")
@@ -55,7 +56,7 @@ _sched = _load_runner_module("grizzly_cuda_schedule", _SCHEDULE_PATH)
 format_device_summary = _sched.format_device_summary
 plan_theta_chunk = _sched.plan_theta_chunk
 probe_cuda_devices = _sched.probe_cuda_devices
-resolve_gpu_ids = _sched.resolve_gpu_ids
+select_gpu_ids = _sched.select_gpu_ids
 shrink_chunk_schedule = _sched.shrink_chunk_schedule
 
 # Set in main() before ProcessPoolExecutor (inherited by fork workers).
@@ -151,9 +152,11 @@ def load_tb_model_from_npz(tb_file: str, e_fermi: float = 0.0):
     }
     bulk_basis = []
     for i, b in enumerate(basis_list):
+        # GrizzlyME v1: all orbital.spin must be +1 (Chinook sets exp.spin if any -1).
+        # Wannier spinor hr.dat carries spin in the 324×324 H — not via spin tags.
         bulk_basis.append(
             olib.orbital(
-                i, i, str(b["label"]), b["pos"], int(b.get("Z", 1)), spin=b.get("spin", 1.0)
+                i, i, str(b["label"]), b["pos"], int(b.get("Z", 1)), spin=1.0
             )
         )
     tb_model = tb_lib.TB_model(bulk_basis, tb_dict, klib.kpath(np.array([[0, 0, 0]])))
@@ -192,6 +195,13 @@ def _multigpu_theta_worker(gpu_id: int, task_queue, result_queue, payload: dict)
     phis = np.asarray(payload["phis"], dtype=float)
     e_axis = np.asarray(payload["e_axis"], dtype=float)
 
+    me_shell = None
+    me_mode = str(physics.get("matrix_element_mode", "Full Matrix Elements"))
+    if "Off" not in me_mode:
+        build_shell = kmesh.build_grizzly_me_shell
+        me_shell = build_shell(tb_model, physics, b_matrix, e_axis)
+        print(f"GPU worker {gpu_id}: hoisted ME shell ready", flush=True)
+
     while True:
         item = task_queue.get()
         if item is None:
@@ -213,9 +223,11 @@ def _multigpu_theta_worker(gpu_id: int, task_queue, result_queue, payload: dict)
                 fermi_shift=0.0,
                 device="cuda",
                 profile_stages=True,
+                me_shell=me_shell,
             )
-        except RuntimeError as exc:
-            result_queue.put(("error", bi, i0, str(exc)))
+        except Exception as exc:
+            # Do not kill the whole multi-GPU job on one bad θ-block.
+            result_queue.put(("error", bi, i0, f"{type(exc).__name__}: {exc}"))
             continue
         result_queue.put(("ok", bi, i0, i1, np.asarray(Ig, dtype=np.float32), time.perf_counter() - t0))
         try:
@@ -284,31 +296,36 @@ def _run_full_cube_multigpu(
     for p in procs:
         p.start()
 
-    done = 0
-    errors = []
-    while done < n_blocks:
-        msg = result_q.get()
-        if msg[0] == "error":
-            _, bi, i0, err = msg
-            errors.append((bi, i0, err))
-            done += 1
-            print(f"  GPU block {bi} idx[{i0}:?] ERROR: {err[:200]}", flush=True)
-            continue
-        _, bi, i0, i1, Ig, wall = msg
-        cube[i0:i1, :, :] = _normalize_full_cube(Ig, i1 - i0, nphi, ne)
-        done += 1
-        print(f"  block {bi + 1}/{n_blocks} idx[{i0}:{i1}] wall={wall:.2f}s", flush=True)
+    try:
+        from grizzly_multigpu_collect import collect_multigpu_block_results
+    except ImportError:
+        from tensorspec.core.arpes.one_step.grizzly_multigpu_collect import (
+            collect_multigpu_block_results,
+        )
 
-    for p in procs:
-        p.join(timeout=30)
+    _completed, errors = collect_multigpu_block_results(
+        result_q,
+        procs,
+        cube,
+        blocks,
+        nphi=nphi,
+        ne=ne,
+        poll_s=60.0,
+        is_oom=_is_oom_error,
+        terminate_procs=True,
+    )
 
     if errors:
-        first_err = errors[0][2]
-        if _is_oom_error(RuntimeError(first_err)):
-            raise RuntimeError(first_err)
-        raise RuntimeError(
-            f"{len(errors)} θ-block(s) failed on multi-GPU path; first: {first_err}"
+        print(
+            f"WARN: {len(errors)} θ-block(s) failed (left as zeros); "
+            f"first: {errors[0][2][:200]}",
+            flush=True,
         )
+        if len(errors) >= n_blocks:
+            raise RuntimeError(
+                f"All {n_blocks} θ-blocks failed; cube is empty. "
+                f"First error: {errors[0][2][:300]}"
+            )
 
     print(f"  full-cube wall (multi-GPU): {time.perf_counter() - t_all:.2f}s", flush=True)
     return cube
@@ -366,6 +383,13 @@ def run_full_cube_grizzly(
         )
         cube = np.zeros((ntheta, nphi, ne), dtype=np.float32)
         n_blocks = (ntheta + theta_chunk - 1) // theta_chunk
+        me_shell = None
+        me_mode = str(physics.get("matrix_element_mode", "Full Matrix Elements"))
+        if "Off" not in me_mode:
+            print("Hoisting Full-ME datacube/radint shell (once per job)...", flush=True)
+            me_shell = build_grizzly_me_shell(
+                tb_model, physics, B_matrix, np.asarray(e_axis, dtype=float)
+            )
         for i_block, i0 in enumerate(range(0, ntheta, theta_chunk)):
             i1 = min(i0 + theta_chunk, ntheta)
             th = thetas[i0:i1]
@@ -389,6 +413,7 @@ def run_full_cube_grizzly(
                     fermi_shift=0.0,
                     device=device,
                     profile_stages=True,
+                    me_shell=me_shell,
                 )
             except RuntimeError as exc:
                 if _is_oom_error(exc):
@@ -507,6 +532,22 @@ def run_single_theta_slice(theta_idx, theta_val, phis, e_axis, sarpes_str, spin_
     return theta_idx, slice_intensity
 
 
+def _record_paper_timing(*, out_file: str, wall_s: float, **meta) -> None:
+    """Append durable timing sidecar (survives sys.out.full overwrites on re-submit)."""
+    from datetime import datetime, timezone
+
+    record = {
+        "utc": datetime.now(timezone.utc).isoformat(),
+        "out_file": out_file,
+        "wall_s": round(float(wall_s), 2),
+        **meta,
+    }
+    sidecar = os.path.splitext(out_file)[0] + ".timing.jsonl"
+    with open(sidecar, "a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+    print(f"  timing record: {sidecar} wall_s={record['wall_s']}", flush=True)
+
+
 def main():
     global USE_GRIZZLY, GRIZZLY_DEVICE
 
@@ -560,8 +601,8 @@ def main():
     parser.add_argument(
         "--ngpus",
         type=int,
-        default=0,
-        help="FULL layout CUDA: GPUs to use (0=all visible). θ-blocks run in parallel.",
+        default=1,
+        help="FULL layout CUDA: GPUs to use (1=fast in-process; 0=all visible; N>1 parallel θ-blocks).",
     )
     parser.add_argument("--out_file", type=str, default="chinook_arpes_cube.npz")
     parser.add_argument(
@@ -759,13 +800,27 @@ def main():
 
     used_layout = layout
     cuda_devices = probe_cuda_devices() if (USE_GRIZZLY and GRIZZLY_DEVICE == "cuda") else []
-    gpu_ids = resolve_gpu_ids(int(args.ngpus), cuda_devices) if cuda_devices else []
+    gpu_ids = []
+    if cuda_devices:
+        gpu_ids, effective_ngpus, gpu_warnings = select_gpu_ids(
+            int(args.ngpus), cuda_devices
+        )
+        for w in gpu_warnings:
+            print(f"WARNING: {w}", flush=True)
+        if effective_ngpus != int(args.ngpus):
+            print(
+                f"GPU safety: requested ngpus={args.ngpus}, using {effective_ngpus} "
+                f"ids={gpu_ids}",
+                flush=True,
+            )
     if cuda_devices:
         print(f"CUDA devices: {format_device_summary(cuda_devices)}", flush=True)
         if gpu_ids:
             print(f"Using GPU ids: {gpu_ids}", flush=True)
 
     requested_chunk = int(args.theta_chunk) if args.theta_chunk else 0
+    used_theta_chunk = 0
+    t_compute = time.perf_counter()
     if layout == "full":
         if requested_chunk > 0:
             first_chunk = requested_chunk
@@ -828,6 +883,7 @@ def main():
             sys.exit(1)
     else:
         cube = _run_slices_path()
+    wall_s = float(time.perf_counter() - t_compute)
 
     print(f"Saving ARPES intensity cube to {args.out_file}...", flush=True)
     np.savez_compressed(
@@ -840,11 +896,33 @@ def main():
         layout=np.array(used_layout),
         device=np.array(GRIZZLY_DEVICE if USE_GRIZZLY else "n/a"),
         theta_chunk=np.array(used_theta_chunk if used_layout == "full" else 0),
+        wall_s=np.array(wall_s),
+        ngpus=np.array(len(gpu_ids) if gpu_ids else 0),
+        ntheta=np.array(int(args.ntheta)),
+        nphi=np.array(int(args.nphi)),
+        ne=np.array(int(args.ne)),
+    )
+    _record_paper_timing(
+        out_file=args.out_file,
+        wall_s=wall_s,
+        engine=engine_name,
+        layout=used_layout,
+        device=GRIZZLY_DEVICE if USE_GRIZZLY else "n/a",
+        theta_chunk=int(used_theta_chunk if used_layout == "full" else 0),
+        ngpus=len(gpu_ids) if gpu_ids else 0,
+        gpu_ids=list(gpu_ids) if gpu_ids else [],
+        ntheta=int(args.ntheta),
+        nphi=int(args.nphi),
+        ne=int(args.ne),
+        e_min=float(args.e_min),
+        e_max=float(args.e_max),
+        matrix_element_mode=str(global_physics.get("matrix_element_mode", "")),
     )
     print(
         f"Remote ARPES calculation completed successfully "
         f"(engine={engine_name}, layout={used_layout}"
         + (f", theta_chunk={used_theta_chunk}" if used_layout == "full" else "")
+        + f", wall_s={wall_s:.2f}"
         + ")!",
         flush=True,
     )

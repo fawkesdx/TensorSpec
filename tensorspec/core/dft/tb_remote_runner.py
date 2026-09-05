@@ -75,6 +75,32 @@ def main() -> int:
     w90_path = str(run_dir / w90_name) if w90_name else None
     job["_w90_path"] = w90_path
 
+    use_soc = bool(job.get("use_soc", False))
+    onsite_e = float(job.get("onsite_e", 0.0))
+    cache_name = job.get("w90_cache_basename")
+    if w90_path and cache_name:
+        cache_path = run_dir / cache_name
+        if cache_path.is_file():
+            import pickle
+
+            try:
+                with cache_path.open("rb") as f:
+                    payload = pickle.load(f)
+                source_key = engine._w90_source_key(w90_path, use_soc, onsite_e)
+                engine.seed_w90_parsed(
+                    source_key,
+                    payload["tb_dict"],
+                    payload["basis_args"],
+                    payload.get("A_qe"),
+                )
+                n_hop = len(payload.get("tb_dict", {}).get("list", []))
+                print(
+                    f"W90 TB cache loaded on server ({n_hop} hops, skip hr.dat parse)",
+                    flush=True,
+                )
+            except Exception as exc:
+                print(f"WARN: W90 cache load failed, will parse hr.dat: {exc}", flush=True)
+
     t0 = time.perf_counter()
     eigenvalues, eigenvectors, orb_labels = _solve_bands(engine, k_vecs, job)
     fermi_energy = float(job.get("fermi_energy", 0.0))

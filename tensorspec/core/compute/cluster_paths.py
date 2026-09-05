@@ -171,6 +171,73 @@ def is_slurm(cluster: Optional[Mapping[str, Any]]) -> bool:
     return str(cluster.get("mode", "")).upper() == "SLURM"
 
 
+def uses_sshproxy(cluster: Optional[Mapping[str, Any]]) -> bool:
+    """True for NERSC-style auth (sshproxy), not Daemon password/key hosts.
+
+    Detect via ``auth: sshproxy`` in cluster JSON, or host containing ``nersc.gov``.
+    """
+    if not cluster:
+        return False
+    auth = str(
+        cluster.get("auth")
+        or _lookup(cluster, "auth", "auth")
+        or ""
+    ).lower()
+    if auth == "sshproxy":
+        return True
+    if auth in ("password", "key", "none"):
+        return False
+    host = str(cluster.get("host") or "").lower()
+    return "nersc.gov" in host
+
+
+# Flat files useful for local ARPES / Chinook / Grizzly after a QE+Wannier run.
+# Skips wavefunctions and large Wannier intermediates (.mmn/.amn/.eig/.chk).
+_ARPES_FETCH_EXACT = frozenset({"sys.out.full"})
+_ARPES_FETCH_SUFFIXES = (
+    "_hr.dat",
+    ".out",
+    ".wout",
+    ".win",
+    ".in",
+    ".xyz",
+    ".gnu",
+    ".kpt",
+)
+_ARPES_FETCH_SKIP_SUFFIXES = (".mmn", ".amn", ".eig", ".chk", ".wfc", ".save")
+
+
+def is_arpes_fetch_candidate(filename: str) -> bool:
+    """Return True if ``filename`` should be downloaded for ARPES follow-up work."""
+    name = os.path.basename(filename)
+    lower = name.lower()
+    if any(lower.endswith(s) for s in _ARPES_FETCH_SKIP_SUFFIXES):
+        return False
+    if lower in _ARPES_FETCH_EXACT:
+        return True
+    return any(lower.endswith(s) for s in _ARPES_FETCH_SUFFIXES)
+
+
+def sshproxy_command(cluster: Mapping[str, Any]) -> list[str]:
+    """Build ``sshproxy`` argv for this cluster's configured key path."""
+    import shutil
+
+    if not uses_sshproxy(cluster):
+        raise ValueError("Cluster does not use NERSC sshproxy auth")
+    exe = shutil.which("sshproxy")
+    if not exe:
+        raise FileNotFoundError(
+            "sshproxy not found in PATH. Install NERSC sshproxy, then retry."
+        )
+    user = str(cluster.get("user") or "").strip()
+    if not user:
+        raise ValueError("Cluster missing user for sshproxy")
+    key = ssh_key_path(cluster) or os.path.expanduser("~/.ssh/nersc")
+    key_dir = os.path.dirname(key) or os.path.expanduser("~/.ssh")
+    key_name = os.path.basename(key) or "nersc"
+    return [exe, "-u", user, "-o", key_name, "-k", key_dir]
+
+
 def slurm_account(cluster: Mapping[str, Any]) -> str:
     return str(_slurm_block(cluster).get("account") or _lookup(cluster, "slurm_account", "slurm_account") or "")
 
@@ -228,6 +295,30 @@ def ssh_key_path(cluster: Mapping[str, Any]) -> Optional[str]:
     return os.path.expanduser(key)
 
 
+def load_private_key(path: str):
+    """Load PEM/OpenSSH private key for Paramiko (NERSC sshproxy uses RSA PEM)."""
+    import paramiko
+
+    key_path = os.path.expanduser(path)
+    if not os.path.isfile(key_path):
+        raise FileNotFoundError(f"SSH key not found: {key_path}")
+
+    loaders = (
+        paramiko.RSAKey.from_private_key_file,
+        paramiko.Ed25519Key.from_private_key_file,
+        paramiko.ECDSAKey.from_private_key_file,
+    )
+    errors: list[str] = []
+    for loader in loaders:
+        try:
+            return loader(key_path)
+        except Exception as exc:
+            errors.append(str(exc))
+    raise paramiko.ssh_exception.SSHException(
+        f"Could not load SSH private key {key_path}: {'; '.join(errors)}"
+    )
+
+
 def mpi_launch_prefix(
     cluster: Optional[Mapping[str, Any]],
     ranks: int,
@@ -239,6 +330,40 @@ def mpi_launch_prefix(
     if is_slurm(cluster):
         return f"srun -n {ranks} --cpu-bind=cores "
     return f"mpirun --use-hwthread-cpus --oversubscribe -np {ranks} "
+
+
+def adapt_pipeline_mpi_launcher(
+    script: str,
+    cluster: Optional[Mapping[str, Any]],
+) -> str:
+    """Rewrite MPI launch prefixes to match the selected compute target.
+
+    SLURM (HPC) → ``srun -n N --cpu-bind=cores``
+    Daemon / local → ``mpirun --use-hwthread-cpus --oversubscribe -np N``
+
+    Rank counts are preserved. Safe to call at Generate and again at Run so
+    switching Compute Target after Generate still uploads the right launcher.
+    """
+    import re
+
+    if not script:
+        return script
+    want_srun = is_slurm(cluster)
+    pattern = (
+        r"(?:"
+        r"srun\s+-n\s+(\d+)(?:\s+--cpu-bind=cores)?\s+"
+        r"|"
+        r"mpirun(?:\s+--use-hwthread-cpus\s+--oversubscribe)?\s+-np\s+(\d+)\s+"
+        r")"
+    )
+
+    def _replace(match: re.Match) -> str:
+        ranks = match.group(1) or match.group(2)
+        if want_srun:
+            return f"srun -n {ranks} --cpu-bind=cores "
+        return f"mpirun --use-hwthread-cpus --oversubscribe -np {ranks} "
+
+    return re.sub(pattern, _replace, script)
 
 
 def slurm_sbatch_header(
@@ -306,7 +431,7 @@ def ssh_connect(client, cluster: Mapping[str, Any], *, timeout: int = 10) -> Non
     if pwd:
         kwargs["password"] = pwd
     if key:
-        kwargs["key_filename"] = key
+        kwargs["pkey"] = load_private_key(key)
         kwargs["allow_agent"] = False
         kwargs["look_for_keys"] = False
     client.connect(**kwargs)

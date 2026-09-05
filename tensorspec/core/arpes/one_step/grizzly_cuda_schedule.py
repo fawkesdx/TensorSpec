@@ -54,12 +54,62 @@ def resolve_gpu_ids(ngpus: int, devices: Optional[Sequence[CudaDeviceInfo]] = No
       0 / negative → all visible devices
       N>0 → first N device indices
     """
+    ids, _, _ = select_gpu_ids(ngpus, devices)
+    return ids
+
+
+def select_gpu_ids(
+    ngpus: int,
+    devices: Optional[Sequence[CudaDeviceInfo]] = None,
+    *,
+    min_free_bytes: int = 10 * 1024**3,
+) -> Tuple[List[int], int, List[str]]:
+    """
+    Pick GPU indices for a job with safety clamps.
+
+    Returns (gpu_ids, effective_ngpus, warning_messages).
+    Prefers devices with the most free VRAM; skips tight GPUs when alternatives exist.
+    """
     devs = list(devices) if devices is not None else probe_cuda_devices()
+    warnings: List[str] = []
     if not devs:
-        return []
-    if ngpus <= 0 or ngpus >= len(devs):
-        return [d.index for d in devs]
-    return [devs[i].index for i in range(ngpus)]
+        return [], 0, warnings
+
+    n_visible = len(devs)
+    requested = n_visible if ngpus <= 0 or ngpus >= n_visible else max(1, int(ngpus))
+
+    ranked = sorted(devs, key=lambda d: d.free_bytes, reverse=True)
+    roomy = [d for d in ranked if d.free_bytes >= min_free_bytes]
+
+    if requested == 1:
+        pick = roomy[0] if roomy else ranked[0]
+        if pick.free_bytes < min_free_bytes:
+            warnings.append(
+                f"GPU {pick.index} has only {pick.free_bytes / 1024**3:.1f} GiB free "
+                f"(<{min_free_bytes / 1024**3:.0f} GiB guideline); may OOM."
+            )
+        return [pick.index], 1, warnings
+
+    if len(roomy) >= requested:
+        pool = roomy
+    elif roomy:
+        warnings.append(
+            f"Only {len(roomy)} GPU(s) have >={min_free_bytes / 1024**3:.0f} GiB free; "
+            f"using {len(roomy)} instead of {requested}."
+        )
+        pool = roomy
+    else:
+        warnings.append(
+            f"No GPU has >={min_free_bytes / 1024**3:.0f} GiB free; best-effort on top {requested}."
+        )
+        pool = ranked
+
+    effective = min(requested, len(pool))
+    if effective < requested:
+        warnings.append(f"Clamped GPU request {requested} -> {effective} (visible/usable).")
+
+    ids = [pool[i].index for i in range(effective)]
+    return ids, effective, warnings
 
 
 def tb_hopping_stats(tb_model: Any) -> Tuple[int, int]:

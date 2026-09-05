@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from tensorspec.core.compute.cluster_paths import heavy_root, job_dir
 
 # TensorSpec + ab-initio processes we care about in the job list.
 _JOB_GREP = (
@@ -14,7 +16,7 @@ _JOB_GREP = (
 _REMOTE_SNAPSHOT_BASH = r"""
 set +e
 USER_NAME="__USER__"
-HEAVY="/mnt/data/${USER_NAME}/tensorspec_heavy"
+HEAVY="__HEAVY__"
 
 echo '###GPU_SUMMARY###'
 nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total --format=csv,noheader 2>/dev/null
@@ -35,6 +37,63 @@ grep -h "Using GPU ids" "${HEAVY}"/*/*.full 2>/dev/null | tail -n 1
 echo '###LATEST_LOG###'
 ls -t "${HEAVY}"/*/*.{full,out,log} 2>/dev/null | head -n 1
 """
+
+
+def _infer_job_from_processes(jobs_text: str) -> Optional[str]:
+    """Map a running command line to a job_dir key (qe, chinook, sprkkr, tb)."""
+    for line in jobs_text.splitlines():
+        parts = line.split(None, 5)
+        if len(parts) < 6:
+            continue
+        cmd = parts[5].lower()
+        if "chinook_remote_runner" in cmd or "arpes_map_runner" in cmd:
+            return "chinook"
+        if "tb_remote_runner" in cmd:
+            return "tb"
+        if any(x in cmd for x in ("run_pipeline", "pw.x", "pw2wannier", "wannier90")):
+            return "qe"
+        if any(x in cmd for x in ("kkrscf", "kkrspec", "kkrgen")):
+            return "sprkkr"
+    return None
+
+
+def _resolve_latest_log(
+    ssh,
+    cluster: Dict[str, Any],
+    *,
+    log_jobs: Optional[Sequence[str]] = None,
+    my_jobs_raw: str = "",
+    global_fallback: str = "",
+) -> str:
+    """Pick log file for tail display — suite-specific dirs before global newest."""
+    candidates: List[str] = []
+
+    jobs = list(log_jobs) if log_jobs else []
+    if not jobs:
+        inferred = _infer_job_from_processes(my_jobs_raw)
+        if inferred:
+            jobs = [inferred]
+
+    for job in jobs:
+        run_dir = job_dir(cluster, job)
+        candidates.extend(
+            [
+                f"{run_dir}/sys.out.full",
+                f"{run_dir}/sys.out",
+            ]
+        )
+
+    if candidates:
+        quoted = " ".join(f'"{p}"' for p in candidates)
+        _, stdout, _ = ssh.exec_command(
+            f"ls -t {quoted} 2>/dev/null | head -n 1",
+            timeout=8,
+        )
+        picked = stdout.read().decode(errors="replace").strip()
+        if picked:
+            return picked
+
+    return global_fallback.strip()
 
 
 def _classify_job(cmd: str) -> str:
@@ -206,11 +265,22 @@ def _format_my_jobs(jobs_text: str, gpu_hint: str) -> Tuple[str, int]:
     return "[ Your TensorSpec / DFT Jobs ]\n" + body + "\n", max_elapsed
 
 
-def fetch_cluster_snapshot(ssh, cluster: Dict[str, Any]) -> Dict[str, Any]:
-    """One polling cycle: GPUs, per-user GPU procs, jobs, latest log tail."""
+def fetch_cluster_snapshot(
+    ssh,
+    cluster: Dict[str, Any],
+    *,
+    log_jobs: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
+    """One polling cycle: GPUs, per-user GPU procs, jobs, log tail.
+
+    log_jobs: prefer logs under these job dirs (``qe``, ``chinook``, ``sprkkr``, ``tb``).
+    When omitted, infer from running processes; else fall back to newest log under heavy_root.
+    """
     user = cluster.get("user") or "user"
+    heavy = heavy_root(cluster)
     script = (
         _REMOTE_SNAPSHOT_BASH.replace("__USER__", user)
+        .replace("__HEAVY__", heavy)
         .replace("__JOB_GREP__", _JOB_GREP)
     )
     _, stdout, stderr = ssh.exec_command(f"bash -s <<'EOSNAP'\n{script}\nEOSNAP", timeout=20)
@@ -222,7 +292,14 @@ def fetch_cluster_snapshot(ssh, cluster: Dict[str, Any]) -> Dict[str, Any]:
     gpu_apps = _parse_section(raw, "GPU_APPS")
     my_jobs_raw = _parse_section(raw, "MY_JOBS")
     gpu_hint = _parse_section(raw, "GPU_HINT")
-    latest_log = _parse_section(raw, "LATEST_LOG")
+    latest_log_global = _parse_section(raw, "LATEST_LOG")
+    latest_log = _resolve_latest_log(
+        ssh,
+        cluster,
+        log_jobs=log_jobs,
+        my_jobs_raw=my_jobs_raw,
+        global_fallback=latest_log_global,
+    )
 
     my_gpu, other_gpu = _parse_gpu_apps(gpu_apps, uuid_map, ssh, user)
 

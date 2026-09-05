@@ -60,6 +60,9 @@ class DFTEngineRouter:
     def solve_bands(self, *args, **kwargs):
         return self.chinook.solve_bands(*args, **kwargs)
 
+    def prepare_tb_for_arpes(self, *args, **kwargs):
+        return self.chinook.prepare_tb_for_arpes(*args, **kwargs)
+
     def parse_qe_xml(self, filepath: str):
         """
         Parses Quantum ESPRESSO's data-file-schema.xml to extract ab-initio bands.

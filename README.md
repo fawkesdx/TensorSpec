@@ -9,7 +9,11 @@ Originally developed for ARPES (Angle-Resolved Photoemission Spectroscopy), it g
 
 The goal of this project is to provide a unified data structure for high-dimensional data and seamlessly integrate classical analysis with modern Machine Learning workflows.
 
-## Key Features
+## Remote GPU cluster (optional)
+
+To run GrizzlyME CUDA ARPES on your own GPU server (not lab-specific): see **[docs/REMOTE_GPU_SETUP.md](docs/REMOTE_GPU_SETUP.md)** and `docs/tensorspec_clusters.example.json`.
+
+---
 
 ### 1. Universal Hierarchical Data Structure (In Development)
 Move beyond technique-specific file formats and flat structs. `TensorSpec` utilizes a **Hierarchical Data Tree architecture** powered by `xarray.DataTree` (NeXus/HDF5 aligned) to organize high-dimensional data, metadata, and analytical provenance:

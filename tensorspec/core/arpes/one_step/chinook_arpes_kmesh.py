@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import sys
 import time
+from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 import numpy as np
@@ -597,11 +598,240 @@ def _datacube_without_mk(ctx) -> None:
     exp.serial_Mk = _noop_mk
     exp.thread_Mk = _noop_mk
     try:
-        exp.datacube()
+        _datacube_call_with_radint_cache(exp)
     finally:
         exp.serial_Mk = orig_serial
         exp.thread_Mk = orig_thread
     _restore_emission_angles_after_datacube(ctx)
+
+
+def _datacube_call_with_radint_cache(exp) -> None:
+    """``datacube()`` with GrizzlyME radint cache (memory + optional disk)."""
+    import chinook.radint_lib as radint_lib
+
+    from grizzly.radint_cache import DEFAULT_RADINT_CACHE, make_radint_cache_key
+
+    cache_key = make_radint_cache_key(exp)
+    cached = DEFAULT_RADINT_CACHE.get(cache_key)
+    orig_make = radint_lib.make_radint_pointer
+    if cached is not None:
+        bfuncs_c, pointers_c = cached
+
+        def _cached_make(_rad_dict, _basis, _Eb):
+            return bfuncs_c, pointers_c
+
+        radint_lib.make_radint_pointer = _cached_make
+    try:
+        exp.datacube()
+    finally:
+        radint_lib.make_radint_pointer = orig_make
+    if cached is None and hasattr(exp, "Bfuncs") and hasattr(exp, "radint_pointers"):
+        DEFAULT_RADINT_CACHE.put(cache_key, exp.Bfuncs, exp.radint_pointers)
+
+
+@dataclass
+class GrizzlyMeShell:
+    """Basis-level Chinook ME tables reused across θ-blocks (Tier 1 hoist)."""
+
+    basis: Any
+    prefactors: np.ndarray
+    Largs: Any
+    Margs: Any
+    Gbasis: Any
+    orbital_pointers: Any
+    proj_arr: Any
+    Bfuncs: Any
+    radint_pointers: Any
+    dig_range: Tuple[float, float]
+    nstates: int
+    spin: bool
+    hv: float
+    W: float
+    mfp: float
+
+
+def build_grizzly_me_shell(
+    tb_model,
+    physics: Mapping[str, Any],
+    B_matrix: np.ndarray,
+    e_axis: np.ndarray,
+    *,
+    A_bulk: Optional[np.ndarray] = None,
+) -> GrizzlyMeShell:
+    """
+    One-time Full-ME setup: radial integrals + Ylm/Gaunt tables for fixed TB/physics.
+
+    Safe to reuse across θ-chunks when φ, E, hv, and matrix-element mode are unchanged.
+    """
+    apply_chinook_runtime_patches()
+    from chinook.ARPES_lib import all_Y, experiment as experiment_fn, projection_map
+    from grizzly.radint_cache import DEFAULT_RADINT_CACHE, dig_range_from_cube, make_radint_cache_key
+
+    e_axis = np.asarray(e_axis, dtype=float)
+    ne = max(1, len(e_axis))
+    if A_bulk is None:
+        _, A_bulk, _, _, _, _, _ = build_k_bulk_mesh(
+            {"X": [0.0, 0.0, 1], "Y": [0.0, 0.0, 1], "E": [float(e_axis[0]), float(e_axis[-1]), ne]},
+            hv=float(physics["hv"]),
+            work_function=float(physics["work_function"]),
+            inner_potential=float(physics["inner_potential"]),
+            slit_angle=float(physics.get("slit_angle", 0.0)),
+            manip_theta=float(physics.get("manip_theta", 0.0)),
+            manip_azimuth=float(physics.get("manip_azimuth", 0.0)),
+            manip_tilt=float(physics.get("manip_tilt", 0.0)),
+            incidence_angle=float(physics.get("incidence_angle", 55.0)),
+            polarization=str(physics.get("polarization", "Linear Horizontal (p-pol)")),
+            hkl=tuple(physics.get("hkl", (0, 0, 1))),
+            B_matrix=B_matrix,
+            lin_pol_angle=float(physics.get("lin_pol_angle", 45.0)),
+        )
+
+    me_mode = str(physics.get("matrix_element_mode", "Full Matrix Elements"))
+    is_full = "Full" in me_mode
+    se_width = float(physics.get("se_width", 0.01))
+    res_e = float(physics.get("res_E", 0.02))
+    res_k = float(physics.get("res_k", 0.02))
+    stub_cube = {
+        "X": [0.0, 0.0, 1],
+        "Y": [0.0, 0.0, 1],
+        "E": [float(e_axis[0]), float(e_axis[-1]), ne],
+    }
+    arpes_dict = {
+        "cube": stub_cube,
+        "ang": 0.0,
+        "E": e_axis,
+        "hv": float(physics["hv"]),
+        "W": float(physics["work_function"]),
+        "V0": float(physics["inner_potential"]),
+        "T": float(physics.get("temperature", 10.0)),
+        "pol": np.asarray(A_bulk, dtype=float),
+        "ME": is_full,
+        "SE": ["constant", se_width],
+        "resolution": {"E": res_e, "k": res_k},
+    }
+
+    exp = experiment_fn(tb_model, arpes_dict)
+    exp.ME = is_full
+    exp.diagonalize = lambda *args, **kwargs: None
+    exp.basis = exp.rot_basis()
+    dig_range = dig_range_from_cube(exp.cube)
+
+    cache_key = make_radint_cache_key(exp)
+    cached_radint = DEFAULT_RADINT_CACHE.get(cache_key)
+    prefactors = np.array(
+        [o.sigma * np.exp((-0.5 / abs(exp.mfp)) * abs(o.depth)) for o in exp.basis]
+    )
+    Largs, Margs, Gmats, orbital_pointers = all_Y(exp.basis)
+    Gbasis = Gmats[orbital_pointers]
+    proj_arr = projection_map(exp.basis)
+
+    if cached_radint is not None:
+        Bfuncs, radint_pointers = cached_radint
+        print(
+            f"ME shell: radint cache HIT "
+            f"(mem={DEFAULT_RADINT_CACHE.hits} disk={DEFAULT_RADINT_CACHE.disk_hits})",
+            flush=True,
+        )
+    else:
+        import chinook.radint_lib as radint_lib
+
+        rad_dict = {
+            "hv": exp.hv,
+            "W": exp.W,
+            "rad_type": exp.rad_type,
+            "rad_args": exp.rad_args,
+            "phase_shifts": exp.phase_shifts,
+        }
+        print("ME shell: building radial integrals (once per job/TB key)...", flush=True)
+        t0 = time.perf_counter()
+        Bfuncs, radint_pointers = radint_lib.make_radint_pointer(rad_dict, exp.basis, dig_range)
+        DEFAULT_RADINT_CACHE.put(cache_key, Bfuncs, radint_pointers)
+        print(f"ME shell: radint wall={time.perf_counter() - t0:.2f}s", flush=True)
+
+    nstates = len(exp.basis)
+    spin = bool(getattr(exp, "spin", False))
+    return GrizzlyMeShell(
+        basis=exp.basis,
+        prefactors=prefactors,
+        Largs=Largs,
+        Margs=Margs,
+        Gbasis=Gbasis,
+        orbital_pointers=orbital_pointers,
+        proj_arr=proj_arr,
+        Bfuncs=Bfuncs,
+        radint_pointers=radint_pointers,
+        dig_range=dig_range,
+        nstates=nstates,
+        spin=spin,
+        hv=float(exp.hv),
+        W=float(exp.W),
+        mfp=float(exp.mfp),
+    )
+
+
+def _apply_me_shell_peaks(ctx, shell: GrizzlyMeShell) -> None:
+    """Attach hoisted ME tables and build block-specific peak list.
+
+    Empty peak lists are allowed (θ-block with no bands in the energy window);
+    callers must treat ``exp.pks`` length 0 as zero intensity.
+    """
+    exp = ctx["exp"]
+    num_x, num_y = ctx["num_x"], ctx["num_y"]
+    Eb = np.asarray(exp.val, dtype=float).reshape(-1)
+    lo, hi = shell.dig_range
+    nstates = shell.nstates
+    rows = []
+    for i in range(len(Eb)):
+        e = Eb[i]
+        if lo <= e <= hi:
+            k_idx = i // nstates
+            rows.append([i, k_idx // num_x, k_idx % num_x, e])
+    if not rows:
+        print(
+            f"WARN: no states in energy window dig_range=({lo:.4f},{hi:.4f}) eV; "
+            f"Eband=[{float(np.nanmin(Eb)):.3f},{float(np.nanmax(Eb)):.3f}] eV "
+            f"(Nk×Nb={Eb.size}). Returning empty peaks for this θ-block.",
+            flush=True,
+        )
+        exp.pks = np.zeros((0, 4), dtype=float)
+        exp.Mk = np.zeros((0, 2, 3), dtype=complex)
+        exp.basis = shell.basis
+        exp.prefactors = shell.prefactors
+        exp.Largs = shell.Largs
+        exp.Margs = shell.Margs
+        exp.Gbasis = shell.Gbasis
+        exp.orbital_pointers = shell.orbital_pointers
+        exp.proj_arr = shell.proj_arr
+        exp.Bfuncs = shell.Bfuncs
+        exp.radint_pointers = shell.radint_pointers
+        exp.spin = shell.spin
+        exp.hv = shell.hv
+        exp.W = shell.W
+        exp.mfp = shell.mfp
+        th_k, ph_k = _kbulk_emission_angles(ctx["K_BULK"])
+        exp.ph = ph_k
+        exp.th = th_k
+        return
+
+    exp.pks = np.asarray(rows, dtype=float)
+    exp.Mk = np.zeros((len(exp.pks), 2, 3), dtype=complex)
+    exp.basis = shell.basis
+    exp.prefactors = shell.prefactors
+    exp.Largs = shell.Largs
+    exp.Margs = shell.Margs
+    exp.Gbasis = shell.Gbasis
+    exp.orbital_pointers = shell.orbital_pointers
+    exp.proj_arr = shell.proj_arr
+    exp.Bfuncs = shell.Bfuncs
+    exp.radint_pointers = shell.radint_pointers
+    exp.spin = shell.spin
+    exp.hv = shell.hv
+    exp.W = shell.W
+    exp.mfp = shell.mfp
+    th_k, ph_k = _kbulk_emission_angles(ctx["K_BULK"])
+    exp.ph = ph_k
+    k_idx = (np.asarray(exp.pks[:, 0], dtype=np.int64) // nstates)
+    exp.th = th_k[k_idx]
 
 
 def _chinook_serial_mk(exp) -> None:
@@ -662,6 +892,7 @@ def run_grizzly_arpes(
     experiment_fn=None,
     use_grizzly_spectral: Optional[bool] = None,
     profile_stages: bool = False,
+    me_shell: Optional[GrizzlyMeShell] = None,
 ) -> np.ndarray:
     """
     Same kmesh physics as run_chinook_arpes; Mk via GrizzlyME.
@@ -697,8 +928,32 @@ def run_grizzly_arpes(
     exp = ctx["exp"]
     require_spinless(exp, feature="run_grizzly_arpes")
     _finalize_me_geometry(ctx)
-    _datacube_without_mk(ctx)
-    t_datacube = time.perf_counter()
+    if me_shell is not None:
+        t_dc0 = time.perf_counter()
+        _apply_me_shell_peaks(ctx, me_shell)
+        t_datacube = time.perf_counter()
+        if profile_stages and t_datacube - t_dc0 > 0.05:
+            print(
+                f"  ME shell peaks wall={t_datacube - t_dc0:.2f}s (hoisted radint/Ylm)",
+                flush=True,
+            )
+    else:
+        _datacube_without_mk(ctx)
+        t_datacube = time.perf_counter()
+
+    # θ-block with no bands in the ARPES energy window → silent zeros
+    if getattr(exp, "pks", None) is None or len(exp.pks) == 0:
+        if profile_stages:
+            print(
+                f"  grizzly stages: setup={t_setup - t0:.2f}s "
+                f"datacube={t_datacube - t_setup:.2f}s "
+                f"mk=0.00s spectral=0.00s (empty window) "
+                f"total={time.perf_counter() - t0:.2f}s",
+                flush=True,
+            )
+        return np.zeros(
+            (ctx["num_x"], ctx["num_y"], ctx["num_e"]), dtype=float
+        )
 
     exp.Mk = compute_all_Mk(exp, device=str(device))
     t_mk = time.perf_counter()

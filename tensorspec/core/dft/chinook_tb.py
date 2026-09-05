@@ -33,6 +33,7 @@ class ChinookTightBindingEngine:
             "true",
             "yes",
         )
+        self._last_wannier_basis_quality = None
 
         # Materials Database for Slater-Koster hopping parameters
         self.materials_db = {
@@ -113,6 +114,267 @@ class ChinookTightBindingEngine:
             return s_orbs + p_orbs + d_orbs
         else:
             return s_orbs + p_orbs
+
+    @staticmethod
+    def assess_wannier_basis_quality(
+        flat_pos, num_wann: int, basis_source: str = "unknown"
+    ) -> dict:
+        """Heuristic ARPES readiness check from WF centre spread."""
+        pos = np.asarray(flat_pos, dtype=float)
+        if pos.size == 0:
+            return {
+                "ok": False,
+                "unique_centers": 0,
+                "num_wann": int(num_wann),
+                "basis_source": basis_source,
+                "min_ok": 0,
+                "message": "No orbital positions for Wannier basis.",
+            }
+
+        n_unique = len(np.unique(np.round(pos.reshape(-1, 3), decimals=4), axis=0))
+        num_wann = int(num_wann)
+        min_ok = (
+            max(20, num_wann // 8) if num_wann >= 50 else max(5, num_wann // 4)
+        )
+
+        ok = n_unique >= min_ok
+        if basis_source == "cif_fallback" and num_wann >= 50:
+            ok = False
+        elif basis_source == "wout_cif" and n_unique < min_ok:
+            ok = False
+
+        message = None
+        if not ok:
+            message = (
+                f"ARPES basis suspect: {n_unique} unique WF centres for "
+                f"num_wann={num_wann} (source={basis_source}; need ≥{min_ok}). "
+                "Place wannier90.win + wannier90.wout beside hr.dat, load matching "
+                "bulk CIF, then Prepare TB for ARPES. Circle-ish ARPES often means "
+                "this mismatch."
+            )
+
+        return {
+            "ok": ok,
+            "unique_centers": n_unique,
+            "num_wann": num_wann,
+            "basis_source": basis_source,
+            "min_ok": min_ok,
+            "message": message,
+        }
+
+    @staticmethod
+    def _resolve_wannier_wout_path(work_dir: str) -> str:
+        """Prefer wannier90.wout — never scf.out/nscf.out (also end in .out)."""
+        preferred = os.path.join(work_dir, "wannier90.wout")
+        if os.path.isfile(preferred):
+            return preferred
+        for name in sorted(os.listdir(work_dir)):
+            if name.endswith(".wout"):
+                return os.path.join(work_dir, name)
+        return preferred
+
+    @staticmethod
+    def _resolve_wannier_win_path(work_dir: str, w90_filepath: str) -> str:
+        """Only look beside hr.dat — never a sibling QE folder (friend's Wannier safety)."""
+        candidates = [
+            os.path.join(work_dir, "wannier90.win"),
+            os.path.join(
+                work_dir,
+                os.path.basename(w90_filepath).replace("_hr.dat", ".win"),
+            ),
+        ]
+        for path in candidates:
+            if os.path.isfile(path):
+                return path
+        return candidates[0]
+
+    @staticmethod
+    def _parse_wannier_final_centers(wout_path: str, num_wann: int) -> list:
+        """WF centres from the Final State block only (skip Initial State duplicate)."""
+        if not os.path.isfile(wout_path):
+            return []
+        try:
+            with open(wout_path, "r") as f:
+                lines = f.readlines()
+        except OSError as exc:
+            print(f"Failed to read Wannier centers: {exc}")
+            return []
+
+        start = 0
+        for idx, line in enumerate(lines):
+            if line.strip() == "Final State":
+                start = idx + 1
+                break
+
+        centers = []
+        for line in lines[start:]:
+            if "WF centre and spread" not in line:
+                continue
+            parts = line.split("(")[1].split(")")[0].split(",")
+            centers.append([float(x.strip()) for x in parts])
+
+        if len(centers) >= num_wann:
+            return centers[-num_wann:]
+        return centers
+
+    @staticmethod
+    def _parse_wannier_win_metadata(win_path: str) -> dict:
+        meta = {
+            "spinors": False,
+            "atoms": [],
+            "projections": {},
+        }
+        if not os.path.isfile(win_path):
+            return meta
+
+        section = None
+        with open(win_path, "r") as f:
+            for raw in f:
+                line = raw.strip()
+                if line.startswith("spinors"):
+                    meta["spinors"] = "true" in line.lower()
+                elif line == "begin projections":
+                    section = "projections"
+                    continue
+                elif line == "end projections":
+                    section = None
+                    continue
+                elif line == "begin atoms_frac":
+                    section = "atoms_frac"
+                    continue
+                elif line == "end atoms_frac":
+                    section = None
+                    continue
+
+                if section == "projections" and line and ":" in line:
+                    elem, shells = line.split(":", 1)
+                    meta["projections"][elem.strip()] = [
+                        s.strip() for s in shells.split(";") if s.strip()
+                    ]
+                elif section == "atoms_frac" and line:
+                    meta["atoms"].append(line.split()[0])
+
+        return meta
+
+    def _orbitals_for_projection_shells(self, element_symbol: str, shells: list) -> list:
+        full = self._get_orbital_basis(element_symbol)
+        s_orbs = full[0:1]
+        p_orbs = full[1:4] if len(full) > 3 else []
+        d_orbs = full[4:9] if len(full) > 4 else []
+        selected = []
+        for shell in shells:
+            key = shell.lower()
+            if key == "s":
+                selected.extend(s_orbs)
+            elif key == "p":
+                selected.extend(p_orbs)
+            elif key == "d":
+                selected.extend(d_orbs)
+        return selected or list(full)
+
+    def _build_wannier_flat_basis(
+        self, win_path: str, centers: list, num_wann: int, use_soc: bool
+    ):
+        """Build Chinook basis rows in Wannier90 hr.dat index order."""
+        from pymatgen.core import Element
+
+        meta = self._parse_wannier_win_metadata(win_path)
+        spinors = bool(meta.get("spinors"))
+        flat_atoms = []
+        flat_Z = {}
+        flat_pos = []
+        flat_orbs = []
+
+        if meta.get("atoms") and meta.get("projections"):
+            idx = 0
+            for atom_sym in meta["atoms"]:
+                clean = "".join(c for c in atom_sym if c.isalpha())
+                shells = meta["projections"].get(clean) or meta["projections"].get(atom_sym)
+                if not shells:
+                    for key, val in meta["projections"].items():
+                        if key.lower() == clean.lower():
+                            shells = val
+                            break
+                if not shells:
+                    shells = ["s", "p", "d"]
+                z_num = int(Element(clean).Z)
+                spatial_orbs = self._orbitals_for_projection_shells(clean, shells)
+                repeats = 2 if spinors else (2 if use_soc else 1)
+                for orb in spatial_orbs:
+                    for _ in range(repeats):
+                        flat_atoms.append(idx)
+                        flat_Z[idx] = z_num
+                        if idx < len(centers):
+                            flat_pos.append(np.array(centers[idx], dtype=float))
+                        else:
+                            flat_pos.append(np.zeros(3, dtype=float))
+                        flat_orbs.append([orb])
+                        idx += 1
+                        if idx >= num_wann:
+                            break
+                    if idx >= num_wann:
+                        break
+                if idx >= num_wann:
+                    break
+
+            if idx == num_wann:
+                print(
+                    f"Wannier basis from {os.path.basename(win_path)}: "
+                    f"{num_wann} orbitals ({'spinor' if spinors else 'scalar'}), "
+                    f"{len(set(tuple(np.round(p, 4)) for p in flat_pos))} unique WF centres",
+                    flush=True,
+                )
+                return flat_atoms, flat_Z, flat_pos, flat_orbs, spinors
+
+        return None
+
+    def _build_cif_basis_with_wout_centers(
+        self, centers: list, num_wann: int, use_soc: bool
+    ):
+        """
+        Friend's bundle (CIF + hr + wout, no .win): CIF s/p/d labels + wout WF centres.
+        Index order may still differ from Wannier90 without .win — ask for .win if ARPES looks wrong.
+        """
+        if not self.crystal_structure or len(centers) < num_wann:
+            return None
+
+        spatial = []
+        for site in self.crystal_structure:
+            for orb in self._get_orbital_basis(site.species_string):
+                spatial.append((int(site.specie.number), orb))
+
+        n_spatial = len(spatial)
+        if n_spatial == 0:
+            return None
+
+        spinors = num_wann == 2 * n_spatial
+        if spinors:
+            expanded = []
+            for z_num, orb in spatial:
+                expanded.append((z_num, orb))
+                expanded.append((z_num, orb))
+            spatial = expanded
+        elif num_wann != n_spatial:
+            return None
+
+        flat_atoms = []
+        flat_Z = {}
+        flat_pos = []
+        flat_orbs = []
+        for idx, (z_num, orb) in enumerate(spatial):
+            flat_atoms.append(idx)
+            flat_Z[idx] = z_num
+            flat_pos.append(np.array(centers[idx], dtype=float))
+            flat_orbs.append([orb])
+
+        print(
+            f"Wannier basis (CIF + wout centres, no .win): {num_wann} orbitals "
+            f"({'spinor' if spinors else 'scalar'}), "
+            f"{len(set(tuple(np.round(p, 4)) for p in flat_pos))} unique WF centres. "
+            "Orbital order is guessed from CIF — add wannier90.win for exact mapping.",
+            flush=True,
+        )
+        return flat_atoms, flat_Z, flat_pos, flat_orbs, spinors
 
     def export_chinook_dictionary(self, shells=None, onsite_e=0.0, use_soc=False, soc_strength=0.5, tb_mode="Slater-Koster (Rigorous)", orbital_shifts=None):
         if not self.crystal_structure:
@@ -247,13 +509,20 @@ class ChinookTightBindingEngine:
             tuple(tuple(row) for row in s.lattice.matrix.tolist()),
         )
 
-    def _w90_source_key(self, w90_filepath, use_soc, onsite_e):
+    def _w90_source_key(self, w90_filepath, use_soc, onsite_e, hop_tol=1e-6):
         path = os.path.abspath(w90_filepath)
         try:
             mtime = os.path.getmtime(path)
         except OSError:
             mtime = 0.0
-        return (path, mtime, use_soc, float(onsite_e), self._structure_fingerprint())
+        return (
+            path,
+            mtime,
+            use_soc,
+            float(onsite_e),
+            float(hop_tol),
+            self._structure_fingerprint(),
+        )
 
     def _manual_source_key(
         self,
@@ -278,36 +547,149 @@ class ChinookTightBindingEngine:
             shift_items,
         )
 
-    def _get_wannier_tb(self, w90_filepath, use_soc, onsite_e):
-        key = self._w90_source_key(w90_filepath, use_soc, onsite_e)
+    def seed_w90_parsed(self, source_key, tb_dict, basis_args, A_qe=None):
+        """Inject pre-parsed W90 TB (hybrid remote cache path)."""
+        if A_qe is not None:
+            self.A_qe = A_qe
+        self._w90_parse_cache[source_key] = (tb_dict, basis_args)
+
+    def _get_wannier_tb(self, w90_filepath, use_soc, onsite_e, hop_tol=1e-6):
+        hop_tol = float(hop_tol)
+        key = self._w90_source_key(w90_filepath, use_soc, onsite_e, hop_tol)
         if key in self._w90_parse_cache:
+            tb_dict, basis_args = self._w90_parse_cache[key]
+            num_wann = len(basis_args.get("atoms", [])) if basis_args else 0
+            if num_wann:
+                self._last_wannier_basis_quality = self.assess_wannier_basis_quality(
+                    basis_args.get("pos", []),
+                    num_wann,
+                    (basis_args or {}).get("basis_source", "memory"),
+                )
             return self._w90_parse_cache[key], key, True
+
+        from tensorspec.core.dft.w90_tb_cache import load_parsed_tb, save_parsed_tb
+
+        disk = load_parsed_tb(w90_filepath, use_soc, onsite_e, hop_tol)
+        if disk is not None:
+            tb_dict, basis_args, a_qe = disk
+            if a_qe is not None:
+                self.A_qe = a_qe
+            self._wannier_spinors_flag = bool(
+                (basis_args or {}).get("wannier_spinors", False)
+            )
+            num_wann = len(basis_args.get("atoms", [])) if basis_args else 0
+            if num_wann:
+                self._last_wannier_basis_quality = self.assess_wannier_basis_quality(
+                    basis_args.get("pos", []),
+                    num_wann,
+                    (basis_args or {}).get("basis_source", "cached"),
+                )
+            parsed = (tb_dict, basis_args)
+            self._w90_parse_cache[key] = parsed
+            print(
+                f"W90 TB disk cache HIT ({len(tb_dict.get('list', []))} hops, "
+                f"hop_tol={hop_tol:g})",
+                flush=True,
+            )
+            return parsed, key, True
+
         tb_dict, basis_args = self.export_wannier_dictionary(
-            w90_filepath, use_soc, onsite_e
+            w90_filepath, use_soc, onsite_e, hop_tol=hop_tol
+        )
+        save_parsed_tb(
+            w90_filepath,
+            use_soc,
+            onsite_e,
+            tb_dict,
+            basis_args,
+            getattr(self, "A_qe", None),
+            hop_tol=hop_tol,
         )
         self._w90_parse_cache[key] = (tb_dict, basis_args)
         return (tb_dict, basis_args), key, False
+
+    def _orbital_list_from_basis(self, basis):
+        """Chinook gen_basis returns a dict with 'bulk'; TB_model may hold a list."""
+        if isinstance(basis, dict):
+            if "bulk" in basis:
+                return list(basis["bulk"])
+            if "orbitals" in basis:
+                return list(basis["orbitals"])
+            return []
+        if isinstance(basis, (list, tuple)):
+            return list(basis)
+        return list(getattr(basis, "orbitals", []) or [])
+
+    @staticmethod
+    def _basis_looks_spinor(orbs_list) -> bool:
+        """True when Wannier spinor doubling is interleaved (label pairs)."""
+        n = len(orbs_list)
+        if n < 2 or n % 2:
+            return False
+        checks = 0
+        matches = 0
+        for i in range(0, min(n, 64), 2):
+            a = orbs_list[i]
+            b = orbs_list[i + 1]
+            la = getattr(a, "label", None)
+            lb = getattr(b, "label", None)
+            if la is None or lb is None:
+                continue
+            checks += 1
+            if la == lb:
+                matches += 1
+        return checks > 0 and matches == checks
+
+    def _assign_wannier_spins(self, orbs_list, *, use_soc: bool, wannier_spinors: bool):
+        """Keep orbital.spin=+1 for Wannier spinor hr.dat (spin is in H, not ARPES tags).
+
+        Chinook ARPES sets exp.spin=True if any orbital has spin=-1; GrizzlyME v1
+        rejects that as 'spin-resolved'. SARPES uses --engine chinook, not Grizzly.
+        """
+        if not orbs_list:
+            return
+        if wannier_spinors or self._basis_looks_spinor(orbs_list):
+            for b_obj in orbs_list:
+                b_obj.spin = 1.0
+            print(
+                f"Wannier spinor hr.dat: {len(orbs_list)} orbitals, spin tag +1 each "
+                f"(spinor physics in H matrix; GrizzlyME-compatible)",
+                flush=True,
+            )
+            return
+        if use_soc:
+            half = len(orbs_list) // 2
+            for idx, b_obj in enumerate(orbs_list):
+                b_obj.spin = 1.0 if idx < half else -1.0
 
     def _build_chinook_tb(self, tb_dict, basis_args, w90_filepath, use_soc):
         if self._tb_debug:
             print("\n--- CHINOOK BUILD STEPS ---")
         basis = build_lib.gen_basis(basis_args)
 
-        if w90_filepath and use_soc:
-            orbs_list = basis if isinstance(basis, list) else getattr(basis, "orbitals", [])
-            for idx, b_obj in enumerate(orbs_list):
-                b_obj.spin = 1.0 if idx < (len(orbs_list) // 2) else -1.0
+        orbs_list = self._orbital_list_from_basis(basis)
+        wannier_spinors = bool(
+            getattr(self, "_wannier_spinors_flag", False)
+            or (basis_args or {}).get("wannier_spinors", False)
+        )
+        if w90_filepath:
+            self._assign_wannier_spins(
+                orbs_list, use_soc=use_soc, wannier_spinors=wannier_spinors
+            )
+            self._wannier_spinors_flag = wannier_spinors or self._basis_looks_spinor(
+                orbs_list
+            )
 
         if self._tb_debug:
             print(
                 f"1. Successfully built basis! "
-                f"(Total Orbitals: {len(getattr(basis, 'orbitals', basis))})"
+                f"(Total Orbitals: {len(orbs_list)})"
             )
             print("\n--- DEEP ORBITAL DEBUG ---")
             print(f"Atomic Numbers (Z) passed: {basis_args['Z']}")
             print(f"Orbitals passed: {basis_args['orbs']}")
             print("Orbitals Chinook actually generated and kept:")
-            for b_obj in basis:
+            for b_obj in orbs_list:
                 try:
                     print(f"  Atom {getattr(b_obj, 'atom', '?')} -> {b_obj.__dict__}")
                 except Exception:
@@ -408,7 +790,7 @@ class ChinookTightBindingEngine:
 
         if w90_filepath:
             (tb_dict, basis_args), source_key, parse_hit = self._get_wannier_tb(
-                w90_filepath, use_soc, onsite_e
+                w90_filepath, use_soc, onsite_e, hop_tol=1e-6
             )
         else:
             source_key = self._manual_source_key(
@@ -534,6 +916,87 @@ class ChinookTightBindingEngine:
 
         return eigenvalues, eigenvectors, orb_labels
 
+    def prepare_tb_for_arpes(
+        self,
+        w90_filepath,
+        *,
+        use_soc: bool = False,
+        onsite_e: float = 0.0,
+        hop_tol: float = 1e-4,
+        quick_diag: bool = True,
+    ):
+        """
+        Parse + build TB for ARPES workspace push — skip full k-path diagonalization.
+
+        hop_tol defaults stricter than band-plot path so huge third-party hr.dat
+        (tens of millions of hops) becomes tractable.
+        """
+        if build_lib is None or klib is None:
+            raise ImportError("Chinook is not installed properly.")
+        if not self.crystal_structure:
+            raise ValueError("No structure loaded.")
+        if not w90_filepath:
+            raise ValueError("Wannier90 hr.dat required for Prepare TB for ARPES.")
+
+        hop_tol = float(hop_tol)
+        t_total = time.perf_counter()
+        (tb_dict, basis_args), source_key, parse_hit = self._get_wannier_tb(
+            w90_filepath, use_soc, onsite_e, hop_tol=hop_tol
+        )
+        t_parse = time.perf_counter()
+
+        build_hit = False
+        if source_key == self._tb_build_cache_key and self._tb_build_cache is not None:
+            basis, tb_model = self._tb_build_cache
+            build_hit = True
+        else:
+            basis, tb_model = self._build_chinook_tb(
+                tb_dict, basis_args, w90_filepath, use_soc
+            )
+            self._tb_build_cache_key = source_key
+            self._tb_build_cache = (basis, tb_model)
+        t_build = time.perf_counter()
+
+        eigenvalues = None
+        if quick_diag:
+            gamma = np.array([[0.0, 0.0, 0.0]], dtype=float)
+            self._diagonalize_tb(
+                tb_model,
+                gamma,
+                need_eigenvectors=False,
+                use_soc=use_soc,
+                w90_filepath=w90_filepath,
+                diag_engine="chinook",
+                diag_device="cpu",
+            )
+            eigenvalues = np.real(tb_model.Eband)
+
+        n_hops = len(tb_dict.get("list", []))
+        n_orbs = len(self._orbital_list_from_basis(basis))
+        stats = {
+            "n_hops": n_hops,
+            "n_orbs": n_orbs,
+            "hop_tol": hop_tol,
+            "parse_s": t_parse - t_total,
+            "build_s": t_build - t_parse,
+            "total_s": time.perf_counter() - t_total,
+            "parse_hit": parse_hit,
+            "build_hit": build_hit,
+        }
+        print(
+            f"Prepare TB for ARPES: hops={n_hops:,} orbs={n_orbs} "
+            f"hop_tol={hop_tol:g} parse={stats['parse_s']:.2f}s "
+            f"build={stats['build_s']:.2f}s total={stats['total_s']:.2f}s",
+            flush=True,
+        )
+        return {
+            "tb_dict": tb_dict,
+            "basis": basis,
+            "tb_model": tb_model,
+            "eigenvalues": eigenvalues,
+            "stats": stats,
+        }
+
     
     def get_kpath_template(self, lattice_type="hexagonal", a=3.0, b=3.0):
         if lattice_type == "hexagonal":
@@ -601,16 +1064,26 @@ class ChinookTightBindingEngine:
             node_idx.append(len(np.vstack(k_vecs)) - 1)
         return np.vstack(k_vecs), np.concatenate(k_dist), node_idx, labels
 
-    def export_wannier_dictionary(self, w90_filepath, use_soc=False, onsite_e=0.0):
+    def export_wannier_dictionary(
+        self, w90_filepath, use_soc=False, onsite_e=0.0, hop_tol=1e-6
+    ):
         """
         Parses wannier90_hr.dat natively to bypass Chinook's strict/buggy W90 importer.
         Dynamically extracts QE's lattice to reverse basis-vector rotation.
+
+        hop_tol: drop hoppings with |t| <= hop_tol (default 1e-6). Raise for large
+        third-party hr.dat so Prepare-for-ARPES / band build stays tractable.
         """
         if not self.crystal_structure:
             raise ValueError("Please load a crystal structure first.")
 
+        hop_tol = float(hop_tol)
         t0 = time.perf_counter()
-        print(f"Parsing Wannier90 Hamiltonian natively: {w90_filepath}")
+        print(
+            f"Parsing Wannier90 Hamiltonian natively: {w90_filepath} "
+            f"(hop_tol={hop_tol:g})",
+            flush=True,
+        )
 
         # Header only (comment / num_wann / nrpts / degeneracy weights)
         with open(w90_filepath, "r") as f:
@@ -682,20 +1155,14 @@ class ChinookTightBindingEngine:
             except Exception as e:
                 print(f"Lattice alignment failed: {e}")
 
-        # --- FALLBACK: Use wannier90.wout if scf.out is missing ---
-        wout_files = [
-            f for f in os.listdir(work_dir) if f.endswith(".wout") or f.endswith(".out")
-        ]
-        wout = (
-            os.path.join(work_dir, wout_files[0])
-            if wout_files
-            else os.path.join(work_dir, "wannier90.wout")
-        )
+        # --- FALLBACK: Use wannier90.wout lattice if scf.out is missing ---
+        wout_path = self._resolve_wannier_wout_path(work_dir)
+        win_path = self._resolve_wannier_win_path(work_dir, w90_filepath)
 
-        if (not os.path.exists(scf_out) or not A_qe_found) and os.path.exists(wout):
+        if (not os.path.exists(scf_out) or not A_qe_found) and os.path.exists(wout_path):
             try:
                 qe_a = []
-                with open(wout, "r") as f:
+                with open(wout_path, "r") as f:
                     lines_wout = f.readlines()
                 for i, line in enumerate(lines_wout):
                     if "Lattice Vectors" in line:
@@ -718,29 +1185,36 @@ class ChinookTightBindingEngine:
         flat_Z = {}
         flat_pos = []
         flat_orbs = []
+        wannier_spinors = False
+        basis_source = "cif_fallback"
 
-        # --- EXTRACT EXACT WANNIER CENTERS FROM wout ---
-        centers = []
-        if os.path.exists(wout):
-            try:
-                with open(wout, "r") as f:
-                    lines_wout = f.readlines()
-                for line in lines_wout:
-                    if "WF centre and spread" in line:
-                        parts = line.split("(")[1].split(")")[0].split(",")
-                        centers.append([float(x) for x in parts])
-            except Exception as e:
-                print(f"Failed to read Wannier centers: {e}")
-
-        if len(centers) > 0:
-            print(f"Found {len(centers)} exact Wannier centers from .wout!")
-            for i in range(num_wann):
-                flat_atoms.append(i)
-                flat_Z[i] = 1  # Dummy element
-                flat_pos.append(np.array(centers[i % len(centers)]))
-                flat_orbs.append(["10"])
+        centers = self._parse_wannier_final_centers(wout_path, num_wann)
+        built = None
+        if os.path.isfile(win_path):
+            built = self._build_wannier_flat_basis(win_path, centers, num_wann, use_soc)
+        if built is not None:
+            flat_atoms, flat_Z, flat_pos, flat_orbs, wannier_spinors = built
+            basis_source = "win"
+        elif len(centers) >= num_wann:
+            built = self._build_cif_basis_with_wout_centers(centers, num_wann, use_soc)
+            if built is not None:
+                flat_atoms, flat_Z, flat_pos, flat_orbs, wannier_spinors = built
+                basis_source = "wout_cif"
+            else:
+                print(
+                    f"Found {len(centers)} WF centres in {os.path.basename(wout_path)} "
+                    f"but CIF orbital count does not match num_wann={num_wann}. "
+                    "Load matching CIF or add wannier90.win.",
+                    flush=True,
+                )
         else:
-            print("Warning: No Wannier centers found. Falling back to CIF projection guess.")
+            print(
+                f"Warning: No WF centres in {os.path.basename(wout_path)}. "
+                "Falling back to CIF atom sites (ARPES matrix elements may be wrong).",
+                flush=True,
+            )
+
+        if not flat_atoms:
             idx = 0
             for i, site in enumerate(self.crystal_structure):
                 for orb in self._get_orbital_basis(site.species_string):
@@ -749,6 +1223,12 @@ class ChinookTightBindingEngine:
                     flat_pos.append(np.array(site.coords, dtype=float))
                     flat_orbs.append([orb])
                     idx += 1
+            if len(flat_atoms) != num_wann and not wannier_spinors:
+                print(
+                    f"Warning: CIF basis count ({len(flat_atoms)}) != num_wann ({num_wann}). "
+                    "Wannier index ↔ orbital mapping may be wrong for ARPES.",
+                    flush=True,
+                )
 
         # --- Vectorized hoppings (same physics as former line loop) ---
         R_qe = hop[:, 0:3]
@@ -775,7 +1255,14 @@ class ChinookTightBindingEngine:
         t_real[onsite_mask] = t_real[onsite_mask] - ef + float(onsite_e)
 
         t_ij = (t_real + 1j * t_imag) / weights
-        keep = np.abs(t_ij) > 1e-6
+        keep = np.abs(t_ij) > hop_tol
+        n_raw = int(t_ij.shape[0])
+        n_keep = int(np.count_nonzero(keep))
+        print(
+            f"Hop filter |t|>{hop_tol:g}: kept {n_keep:,} / {n_raw:,} "
+            f"({100.0 * n_keep / max(n_raw, 1):.2f}%)",
+            flush=True,
+        )
 
         R_qe_k = R_qe[keep]
         i_k = i_idx[keep]
@@ -796,16 +1283,19 @@ class ChinookTightBindingEngine:
         dR = R_cart + tau_j - tau_i
 
         # Chinook list H expects Python rows [i, j, dx, dy, dz, complex]
+        # Build from pre-cast arrays (much faster than per-row int/float/complex in a tight loop).
+        ik = i_k.astype(np.int64, copy=False)
+        jk = j_k.astype(np.int64, copy=False)
+        dr = dR.astype(np.float64, copy=False)
+        tk = np.asarray(t_k, dtype=np.complex128, copy=False)
+        n_hop = tk.shape[0]
         explicit_hopping = [
-            [int(i_k[n]), int(j_k[n]), float(dR[n, 0]), float(dR[n, 1]), float(dR[n, 2]), complex(t_k[n])]
-            for n in range(t_k.shape[0])
+            [int(ik[n]), int(jk[n]), dr[n, 0], dr[n, 1], dr[n, 2], tk[n]]
+            for n in range(n_hop)
         ]
 
-        if use_soc:
-            # --- CRITICAL FIX: BYPASS CHINOOK'S SOC DUPLICATOR ---
-            # Wannier90 already generated the full spinor matrix.
-            # If we tell Chinook 'soc': True, it will duplicate indices and crash!
-            # Instead, we manually double the basis arrays here and hide SOC from Chinook.
+        if use_soc and not wannier_spinors:
+            # Wannier90 spinor hr.dat is already 2× — do not duplicate again.
             n_orbs = len(flat_atoms)
             flat_atoms = flat_atoms + [a + n_orbs for a in flat_atoms]
 
@@ -821,6 +1311,7 @@ class ChinookTightBindingEngine:
         else:
             spin_dict = {"bool": False, "soc": False}
 
+        self._wannier_spinors_flag = wannier_spinors
         tb_dict = {
             "type": "list",
             "list": explicit_hopping,
@@ -839,7 +1330,20 @@ class ChinookTightBindingEngine:
             "pos": flat_pos,
             "orbs": flat_orbs,
             "spin": spin_dict,
+            "wannier_spinors": bool(wannier_spinors),
+            "basis_source": basis_source,
         }
+
+        quality = self.assess_wannier_basis_quality(flat_pos, num_wann, basis_source)
+        self._last_wannier_basis_quality = quality
+        if quality.get("message"):
+            print(f"Warning: {quality['message']}", flush=True)
+        else:
+            print(
+                f"Wannier basis OK for ARPES: {quality['unique_centers']} unique WF centres, "
+                f"num_wann={num_wann}, source={basis_source}",
+                flush=True,
+            )
 
         print(
             f"Successfully extracted {len(explicit_hopping)} non-zero hopping elements "
