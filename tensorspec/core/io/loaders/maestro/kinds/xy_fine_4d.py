@@ -8,6 +8,7 @@ from tensorspec.core.io.loaders.maestro.reshape import (
     detector_dims_for_buffer,
     flatten_aborted_buffer,
     load_spectra_buffer,
+    recover_partial_grid,
     scan_cycles,
 )
 from tensorspec.core.io.loaders.maestro.types import ScanPlan
@@ -44,6 +45,9 @@ def load(
     shape = tuple(int(dim) for dim in dataset.shape)
     paxis, actual, num_cycles = scan_cycles(f, shape, expected)
     warning = abort_truncate_warning(expected, actual)
+    partial_grid = (
+        recover_partial_grid(actual, (n_y, n_x)) if warning else None
+    )
 
     n_e, n_a, energy, angle, energy_unit, angle_unit = detector_dims_for_buffer(
         dataset,
@@ -53,7 +57,14 @@ def load(
     )
 
     buffer = load_spectra_buffer(dataset)
-    if warning:
+    if partial_grid is not None:
+        flat_data = flatten_aborted_buffer(
+            buffer, shape, paxis, n_e, n_a, kind_id=KIND_ID
+        )
+        data = flat_data[: partial_grid.kept_points].reshape(
+            *partial_grid.kept_shape, n_e, n_a
+        )
+    elif warning:
         data = flatten_aborted_buffer(
             buffer, shape, paxis, n_e, n_a, kind_id=KIND_ID
         )
@@ -104,10 +115,25 @@ def load(
     }
     if num_cycles is not None:
         metadata["scan_plan"]["num_cycles"] = num_cycles
-    if warning:
+    if partial_grid is not None:
+        metadata["partial_scan"] = {
+            "expected": expected,
+            "actual": actual,
+            "kept_rows": partial_grid.kept_rows,
+        }
+    elif warning:
         metadata["truncate_warning"] = warning
 
-    if warning:
+    if partial_grid is not None:
+        labels = ["Y", "X", "Energy", "Angle"]
+        axes = [
+            y_axis[: partial_grid.kept_shape[0]],
+            x_axis,
+            energy,
+            angle,
+        ]
+        units = [y_motor.units, x_motor.units, energy_unit, angle_unit]
+    elif warning:
         labels = ["Point", "Energy", "Angle"]
         axes = [np.arange(actual), energy, angle]
         units = ["index", energy_unit, angle_unit]

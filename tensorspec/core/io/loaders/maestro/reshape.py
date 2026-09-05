@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import h5py
 import numpy as np
 
@@ -116,6 +118,39 @@ def abort_truncate_warning(expected: int, actual: int) -> str | None:
             f"Aborted scan: truncated from {expected} to {actual} points."
         )
     return None
+
+
+@dataclass(frozen=True)
+class PartialGrid:
+    kept_points: int
+    kept_shape: tuple[int, ...]   # slow→fast scan dims after truncation
+    kept_rows: int
+    truncated_axis: int           # index in kept_shape that was shortened
+
+
+def recover_partial_grid(actual: int, scan_shape: tuple[int, ...]) -> PartialGrid | None:
+    if not scan_shape:
+        return None
+    fastest = scan_shape[-1]
+    if fastest <= 0:
+        return None
+    complete = actual // fastest
+    if complete < 1:
+        return None
+    kept_shape = list(scan_shape)
+    # Outermost axis shortens when product of trailing dims == fastest
+    # For standard XY: scan_shape=(n_y, n_x), fastest=n_x, kept=(complete, n_x)
+    kept_shape[0] = complete
+    if int(np.prod(kept_shape)) * 1 != complete * fastest:
+        # general: only support shortening axis 0 when prod(scan_shape[1:]) == fastest
+        if int(np.prod(scan_shape[1:])) != fastest:
+            return None
+    return PartialGrid(
+        kept_points=complete * fastest,
+        kept_shape=tuple(kept_shape),
+        kept_rows=complete,
+        truncated_axis=0,
+    )
 
 
 def flatten_aborted_buffer(
