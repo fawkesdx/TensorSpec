@@ -338,6 +338,15 @@ def preprocess_file(
             config,
             sample=replace(config.sample, index_roles=mode.index_roles),
         )
+        unsupported_trim_roles = sorted(
+            set(effective_config.trim.ranges) & set(mode.index_roles)
+        )
+        if unsupported_trim_roles:
+            roles = ", ".join(unsupported_trim_roles)
+            raise ValueError(
+                f"scan-role trim for {roles} is not supported in "
+                f"{mode.name} emission"
+            )
         calibration = _detector_calibration(descriptor, effective_config)
         trim, axes_by_role = _trimmed_axes(
             descriptor,

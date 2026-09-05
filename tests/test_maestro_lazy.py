@@ -75,6 +75,25 @@ def test_defl_x_read_block_uses_canonical_flat_index(tmp_path):
         desc.close()
 
 
+def test_focus_xy_read_block_uses_canonical_flat_index(tmp_path):
+    path = tmp_path / "focus-index-order.h5"
+    _write_focus_xy_fine_h5(
+        path, nx=2, ny=3, n_defl=4, n_e=5, n_a=6
+    )
+    with h5py.File(path, "r") as f:
+        eager = load_with_kind(f, str(path))["data"]
+
+    desc = open_maestro(str(path))
+    try:
+        for index in range(int(np.prod(desc.shape[:-2]))):
+            np.testing.assert_array_equal(
+                desc.read_block(index),
+                eager.reshape(-1, *eager.shape[-2:])[index],
+            )
+    finally:
+        desc.close()
+
+
 def test_partial_defl_x_recovers_acquisition_grid_then_maps_shape(tmp_path):
     path = tmp_path / "line-partial.h5"
     _write_defl_x_h5(path, n_defl=3, n_x=4, n_e=5, n_a=6)

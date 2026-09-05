@@ -3,6 +3,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from tensorspec.core.io.loaders.maestro.lazy import open_maestro
 from tensorspec.core.ml.ssl.calibrate import (
@@ -87,6 +88,19 @@ def test_preprocess_fermi3d_stacks_each_spatial_point(tmp_path):
     assert sample.dtype == np.float16
     assert metadata["index"] == {"y": 0, "x": 0}
     assert dataset[-1][1]["index"] == {"y": 1, "x": 1}
+
+
+@pytest.mark.parametrize("mode", ["disp2d", "fermi3d"])
+def test_preprocess_rejects_unapplied_spatial_trim(tmp_path, mode):
+    src = tmp_path / "f5.h5"
+    _write_focus_xy_fine_h5(
+        src, nx=2, ny=2, n_defl=3, n_e=8, n_a=8
+    )
+    config = _config(mode)
+    config.trim.ranges["x"] = (0.0, 0.0)
+
+    with pytest.raises(ValueError, match=r"scan-role trim.*x.*not supported"):
+        preprocess_file(str(src), str(tmp_path / "ds"), config)
 
 
 def test_slit_trim_uses_same_calibrated_degree_axis_as_resampling(tmp_path):
