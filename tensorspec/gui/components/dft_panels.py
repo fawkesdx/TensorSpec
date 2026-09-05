@@ -199,11 +199,31 @@ class TightBindingPanel(QWidget):
         tb_form.addRow("Band diag engine:", self.combo_band_diag)
         tb_form.addRow("Grizzly device:", self.combo_band_device)
 
+        self.spin_qe_fermi = QDoubleSpinBox()
+        self.spin_qe_fermi.setRange(-100.0, 100.0)
+        self.spin_qe_fermi.setDecimals(4)
+        self.spin_qe_fermi.setValue(0.0)
+        self.spin_qe_fermi.setSingleStep(0.1)
+        self.spin_qe_fermi.setToolTip(
+            "QE Fermi energy (eV). Auto-filled from nscf.out / scf.out / "
+            "FERMI_ENERGY.txt beside hr.dat. Folded into H at Prepare; "
+            "not the same as On-site E."
+        )
+        self.lbl_qe_fermi_src = QLabel("QE EF source: none — enter if known")
+        self.lbl_qe_fermi_src.setStyleSheet("color: gray; font-size: 10px;")
+        self._qe_fermi_auto = True
+        self.spin_qe_fermi.valueChanged.connect(self._on_qe_fermi_edited)
+        tb_form.addRow("QE Fermi (eV):", self.spin_qe_fermi)
+        tb_form.addRow("", self.lbl_qe_fermi_src)
+
         self.spin_onsite = QDoubleSpinBox()
         self._sync_tb_target()
         self.spin_onsite.setRange(-10.0, 10.0)
         self.spin_onsite.setValue(0.0)
         self.spin_onsite.setSingleStep(0.1)
+        self.spin_onsite.setToolTip(
+            "Extra rigid on-site shift (eV) after QE Fermi is folded into H."
+        )
         tb_form.addRow("On-site E (eV):", self.spin_onsite)
 
         # --- NEW: Orbital-Specific Energy Shifts ---
@@ -316,11 +336,39 @@ class TightBindingPanel(QWidget):
         use_grizzly = self.combo_band_diag.currentData() == "grizzly"
         self.combo_band_device.setEnabled(use_grizzly)
 
+    def qe_fermi_eV(self) -> float:
+        return float(self.spin_qe_fermi.value())
+
+    def _set_qe_fermi_ui(self, value: float, source: str) -> None:
+        self._qe_fermi_auto = True
+        self.spin_qe_fermi.blockSignals(True)
+        self.spin_qe_fermi.setValue(float(value))
+        self.spin_qe_fermi.blockSignals(False)
+        if source == "none":
+            self.lbl_qe_fermi_src.setText("QE EF source: none — enter if known")
+            self.lbl_qe_fermi_src.setStyleSheet("color: #d9534f; font-size: 10px;")
+        else:
+            self.lbl_qe_fermi_src.setText(
+                f"QE EF: {float(value):.4f} eV (from {source})"
+            )
+            self.lbl_qe_fermi_src.setStyleSheet("color: #2b5c8f; font-size: 10px;")
+
+    def _on_qe_fermi_edited(self, _value=None) -> None:
+        if self._qe_fermi_auto:
+            self._qe_fermi_auto = False
+            return
+        self.lbl_qe_fermi_src.setText(
+            f"QE EF: {self.qe_fermi_eV():.4f} eV (manual)"
+        )
+        self.lbl_qe_fermi_src.setStyleSheet("color: #8a6d3b; font-size: 10px;")
+
     def load_w90_file(self):
         """Opens a file dialog to load the Wannier90 hopping data."""
         fname, _ = QFileDialog.getOpenFileName(self, 'Open Wannier90 HR File', '', "Data files (*.dat);;All files (*.*)")
         if fname:
             import os
+            from tensorspec.core.dft.qe_fermi import detect_qe_fermi_eV
+
             work_dir = os.path.dirname(fname)
             wout = os.path.join(work_dir, "wannier90.wout")
             scf_out = os.path.join(work_dir, "scf.out")
@@ -335,6 +383,9 @@ class TightBindingPanel(QWidget):
             filename_short = fname.split('/')[-1]
             self.lbl_w90_status.setText(f"Status: Using {filename_short}")
             self.lbl_w90_status.setStyleSheet("color: blue; font-weight: bold;")
+            ef, src = detect_qe_fermi_eV(work_dir)
+            self._set_qe_fermi_ui(ef, src)
+            self._qe_fermi_auto = False
             self._sync_tb_target()
             
             self.spin_t1.setEnabled(False)

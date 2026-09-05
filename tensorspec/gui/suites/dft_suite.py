@@ -121,7 +121,9 @@ class TBBandLocalRunnerThread(QThread):
                 self.finished_signal.emit(False, "Cancelled.", None)
                 return
             result = (
-                np.asarray(eigenvalues, dtype=float) - self.fermi_energy,
+                np.asarray(eigenvalues, dtype=float)
+                if self.solve_kwargs.get("w90_filepath")
+                else np.asarray(eigenvalues, dtype=float) - self.fermi_energy,
                 eigenvectors,
                 orb_labels,
             )
@@ -555,7 +557,7 @@ class DFTSuite(QWidget):
         hop_tol = self.tb_panel.hop_tol()
         is_soc = self.tb_panel.chk_soc.isChecked()
         onsite_e = float(self.tb_panel.spin_onsite.value())
-        fermi_energy = self._fermi_energy_from_w90(w90_file)
+        fermi_energy = float(self.tb_panel.qe_fermi_eV())
         orbital_shifts = {
             "0": float(self.tb_panel.spin_onsite_s.value()),
             "1": float(self.tb_panel.spin_onsite_p.value()),
@@ -574,6 +576,7 @@ class DFTSuite(QWidget):
         self._set_tb_running(True, "⏳ Preparing TB for ARPES...")
         print(
             f"Prepare TB for ARPES: {w90_file} hop_tol={hop_tol:g} "
+            f"qe_fermi={fermi_energy:.4f} eV "
             f"(Wannier hr.dat — TB mode '{self.tb_panel.combo_tb_mode.currentText()}' ignored)",
             flush=True,
         )
@@ -585,6 +588,7 @@ class DFTSuite(QWidget):
                 "onsite_e": onsite_e,
                 "hop_tol": hop_tol,
                 "quick_diag": True,
+                "qe_fermi": fermi_energy,
             },
             parent=self,
         )
@@ -621,7 +625,8 @@ class DFTSuite(QWidget):
 
         eigenvalues = result.get("eigenvalues")
         if eigenvalues is not None:
-            eigenvalues = np.asarray(eigenvalues, dtype=float) - fermi_energy
+            # W90 path folds QE EF into H during parse — do not subtract again.
+            eigenvalues = np.asarray(eigenvalues, dtype=float)
 
         self.active_bands_data = {
             "type": "band_structure",
@@ -641,6 +646,7 @@ class DFTSuite(QWidget):
             "tb_model": result.get("tb_model"),
             "fermi_energy": fermi_energy,
             "e_fermi": fermi_energy,
+            "qe_fermi_eV": fermi_energy,
             "onsite_e": onsite_e,
             "orbital_shifts": orbital_shifts,
             "tb_mode": tb_mode,
@@ -773,7 +779,7 @@ class DFTSuite(QWidget):
                 '2': float(self.tb_panel.spin_onsite_d.value()),
             }
             tb_mode = self.tb_panel.combo_tb_mode.currentText()
-            fermi_energy = self._fermi_energy_from_w90(w90_file)
+            fermi_energy = float(self.tb_panel.qe_fermi_eV())
 
             if w90_file:
                 warn = format_w90_cost_warning(
@@ -819,7 +825,9 @@ class DFTSuite(QWidget):
                     )
                 w90_key = None
                 if w90_file:
-                    w90_key = w90_cache_key_for(w90_file, is_soc, onsite_e)
+                    w90_key = w90_cache_key_for(
+                        w90_file, is_soc, onsite_e, qe_fermi=fermi_energy
+                    )
                 job = build_job_payload(
                     self.engine.crystal_structure,
                     k_vecs,
@@ -871,6 +879,7 @@ class DFTSuite(QWidget):
                 need_eigenvectors=need_evecs,
                 diag_engine=diag_engine,
                 diag_device=diag_device,
+                qe_fermi=fermi_energy,
             )
             self._tb_local_thread = TBBandLocalRunnerThread(
                 self.engine, k_vecs, solve_kwargs, fermi_energy, parent=self
@@ -884,20 +893,13 @@ class DFTSuite(QWidget):
             return
 
     def _fermi_energy_from_w90(self, w90_file):
-        fermi_energy = 0.0
+        """Legacy helper — prefer tb_panel.qe_fermi_eV() in UI paths."""
         if not w90_file:
-            return fermi_energy
-        work_dir = os.path.dirname(w90_file)
-        for out_name in ("nscf.out", "scf.out"):
-            out_path = os.path.join(work_dir, out_name)
-            if os.path.exists(out_path):
-                with open(out_path, "r") as f:
-                    for line in f:
-                        if "the Fermi energy is" in line:
-                            fermi_energy = float(line.split()[4])
-                if fermi_energy != 0.0:
-                    break
-        return fermi_energy
+            return 0.0
+        from tensorspec.core.dft.qe_fermi import detect_qe_fermi_eV
+
+        val, _src = detect_qe_fermi_eV(os.path.dirname(w90_file))
+        return float(val)
 
     def _attach_w90_h_dict_from_cache(self, ctx):
         """Hybrid path: H_dict for ARPES push without rebuilding gen_TB locally."""
@@ -906,7 +908,12 @@ class DFTSuite(QWidget):
             return
         from tensorspec.core.dft.w90_tb_cache import load_parsed_tb
 
-        disk = load_parsed_tb(w90_file, ctx["is_soc"], ctx["onsite_e"])
+        disk = load_parsed_tb(
+            w90_file,
+            ctx["is_soc"],
+            ctx["onsite_e"],
+            qe_fermi=float(ctx.get("fermi_energy", 0.0) or 0.0),
+        )
         if not disk:
             return
         tb_dict, _basis_args, a_qe = disk

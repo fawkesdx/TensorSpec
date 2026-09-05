@@ -27,6 +27,7 @@ def _solve_bands(engine, k_vecs, job: dict):
         "need_eigenvectors": bool(job.get("need_eigenvectors", True)),
         "diag_engine": str(job.get("diag_engine", "chinook")),
         "diag_device": str(job.get("diag_device", "cpu")),
+        "qe_fermi": float(job.get("fermi_energy", job.get("qe_fermi", 0.0))),
     }
     params = inspect.signature(engine.solve_bands).parameters
     missing = [
@@ -77,6 +78,7 @@ def main() -> int:
 
     use_soc = bool(job.get("use_soc", False))
     onsite_e = float(job.get("onsite_e", 0.0))
+    qe_fermi = float(job.get("fermi_energy", job.get("qe_fermi", 0.0)))
     cache_name = job.get("w90_cache_basename")
     if w90_path and cache_name:
         cache_path = run_dir / cache_name
@@ -86,7 +88,9 @@ def main() -> int:
             try:
                 with cache_path.open("rb") as f:
                     payload = pickle.load(f)
-                source_key = engine._w90_source_key(w90_path, use_soc, onsite_e)
+                source_key = engine._w90_source_key(
+                    w90_path, use_soc, onsite_e, qe_fermi=qe_fermi
+                )
                 engine.seed_w90_parsed(
                     source_key,
                     payload["tb_dict"],
@@ -103,8 +107,13 @@ def main() -> int:
 
     t0 = time.perf_counter()
     eigenvalues, eigenvectors, orb_labels = _solve_bands(engine, k_vecs, job)
-    fermi_energy = float(job.get("fermi_energy", 0.0))
-    eigenvalues = np.asarray(eigenvalues, dtype=float) - fermi_energy
+    fermi_energy = qe_fermi
+    # W90 parse folds QE EF into H — keep eigenvalues EF-relative (no second subtract).
+    # Manual SK jobs leave fermi_energy at 0 unless UI set it without hr.dat.
+    if not w90_path and fermi_energy:
+        eigenvalues = np.asarray(eigenvalues, dtype=float) - fermi_energy
+    else:
+        eigenvalues = np.asarray(eigenvalues, dtype=float)
 
     out_path = Path(args.out)
     if eigenvectors is None:

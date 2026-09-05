@@ -509,7 +509,7 @@ class ChinookTightBindingEngine:
             tuple(tuple(row) for row in s.lattice.matrix.tolist()),
         )
 
-    def _w90_source_key(self, w90_filepath, use_soc, onsite_e, hop_tol=1e-6):
+    def _w90_source_key(self, w90_filepath, use_soc, onsite_e, hop_tol=1e-6, qe_fermi=0.0):
         path = os.path.abspath(w90_filepath)
         try:
             mtime = os.path.getmtime(path)
@@ -521,6 +521,7 @@ class ChinookTightBindingEngine:
             use_soc,
             float(onsite_e),
             float(hop_tol),
+            float(qe_fermi),
             self._structure_fingerprint(),
         )
 
@@ -553,9 +554,14 @@ class ChinookTightBindingEngine:
             self.A_qe = A_qe
         self._w90_parse_cache[source_key] = (tb_dict, basis_args)
 
-    def _get_wannier_tb(self, w90_filepath, use_soc, onsite_e, hop_tol=1e-6):
+    def _get_wannier_tb(
+        self, w90_filepath, use_soc, onsite_e, hop_tol=1e-6, qe_fermi=0.0
+    ):
         hop_tol = float(hop_tol)
-        key = self._w90_source_key(w90_filepath, use_soc, onsite_e, hop_tol)
+        qe_fermi = float(qe_fermi)
+        key = self._w90_source_key(
+            w90_filepath, use_soc, onsite_e, hop_tol, qe_fermi=qe_fermi
+        )
         if key in self._w90_parse_cache:
             tb_dict, basis_args = self._w90_parse_cache[key]
             num_wann = len(basis_args.get("atoms", [])) if basis_args else 0
@@ -569,7 +575,9 @@ class ChinookTightBindingEngine:
 
         from tensorspec.core.dft.w90_tb_cache import load_parsed_tb, save_parsed_tb
 
-        disk = load_parsed_tb(w90_filepath, use_soc, onsite_e, hop_tol)
+        disk = load_parsed_tb(
+            w90_filepath, use_soc, onsite_e, hop_tol, qe_fermi=qe_fermi
+        )
         if disk is not None:
             tb_dict, basis_args, a_qe = disk
             if a_qe is not None:
@@ -594,7 +602,11 @@ class ChinookTightBindingEngine:
             return parsed, key, True
 
         tb_dict, basis_args = self.export_wannier_dictionary(
-            w90_filepath, use_soc, onsite_e, hop_tol=hop_tol
+            w90_filepath,
+            use_soc,
+            onsite_e,
+            hop_tol=hop_tol,
+            qe_fermi=qe_fermi,
         )
         save_parsed_tb(
             w90_filepath,
@@ -604,6 +616,7 @@ class ChinookTightBindingEngine:
             basis_args,
             getattr(self, "A_qe", None),
             hop_tol=hop_tol,
+            qe_fermi=qe_fermi,
         )
         self._w90_parse_cache[key] = (tb_dict, basis_args)
         return (tb_dict, basis_args), key, False
@@ -776,6 +789,7 @@ class ChinookTightBindingEngine:
         need_eigenvectors: bool = True,
         diag_engine: str = "chinook",
         diag_device: str = "cpu",
+        qe_fermi: float = 0.0,
     ):
         if build_lib is None or klib is None:
             raise ImportError("Chinook is not installed properly. Cannot calculate bands.")
@@ -790,7 +804,11 @@ class ChinookTightBindingEngine:
 
         if w90_filepath:
             (tb_dict, basis_args), source_key, parse_hit = self._get_wannier_tb(
-                w90_filepath, use_soc, onsite_e, hop_tol=1e-6
+                w90_filepath,
+                use_soc,
+                onsite_e,
+                hop_tol=1e-6,
+                qe_fermi=qe_fermi,
             )
         else:
             source_key = self._manual_source_key(
@@ -924,6 +942,7 @@ class ChinookTightBindingEngine:
         onsite_e: float = 0.0,
         hop_tol: float = 1e-4,
         quick_diag: bool = True,
+        qe_fermi: float = 0.0,
     ):
         """
         Parse + build TB for ARPES workspace push — skip full k-path diagonalization.
@@ -941,7 +960,11 @@ class ChinookTightBindingEngine:
         hop_tol = float(hop_tol)
         t_total = time.perf_counter()
         (tb_dict, basis_args), source_key, parse_hit = self._get_wannier_tb(
-            w90_filepath, use_soc, onsite_e, hop_tol=hop_tol
+            w90_filepath,
+            use_soc,
+            onsite_e,
+            hop_tol=hop_tol,
+            qe_fermi=qe_fermi,
         )
         t_parse = time.perf_counter()
 
@@ -1065,7 +1088,7 @@ class ChinookTightBindingEngine:
         return np.vstack(k_vecs), np.concatenate(k_dist), node_idx, labels
 
     def export_wannier_dictionary(
-        self, w90_filepath, use_soc=False, onsite_e=0.0, hop_tol=1e-6
+        self, w90_filepath, use_soc=False, onsite_e=0.0, hop_tol=1e-6, qe_fermi=None
     ):
         """
         Parses wannier90_hr.dat natively to bypass Chinook's strict/buggy W90 importer.
@@ -1073,6 +1096,9 @@ class ChinookTightBindingEngine:
 
         hop_tol: drop hoppings with |t| <= hop_tol (default 1e-6). Raise for large
         third-party hr.dat so Prepare-for-ARPES / band build stays tractable.
+
+        qe_fermi: if not None, fold this EF into onsite hoppings (UI value).
+        Otherwise auto-detect from nscf/scf/FERMI_ENERGY.txt beside hr.dat.
         """
         if not self.crystal_structure:
             raise ValueError("Please load a crystal structure first.")
@@ -1114,10 +1140,22 @@ class ChinookTightBindingEngine:
         # QE defines a different basis (a1, a2) than PyMatgen for hexagonal cells.
         # We find the integer transformation matrix T to perfectly map the W90 cells back to PyMatgen.
         T_mat = np.eye(3)
-        ef = 0.0  # NEW: Initialize Fermi Level
         work_dir = os.path.dirname(w90_filepath)
         scf_out = os.path.join(work_dir, "scf.out")
         A_qe_found = False
+
+        from tensorspec.core.dft.qe_fermi import detect_qe_fermi_eV
+
+        if qe_fermi is not None:
+            ef = float(qe_fermi)
+            print(f"QE Fermi from UI/caller: {ef:.4f} eV", flush=True)
+        else:
+            ef, ef_src = detect_qe_fermi_eV(work_dir)
+            if ef_src != "none":
+                print(f"QE Fermi from {ef_src}: {ef:.4f} eV", flush=True)
+            else:
+                print("QE Fermi not found beside hr.dat; using 0.0 eV", flush=True)
+
         if os.path.exists(scf_out):
             try:
                 alat_ang = 1.0
@@ -1125,14 +1163,7 @@ class ChinookTightBindingEngine:
                 with open(scf_out, "r") as f:
                     lines_scf = f.readlines()
                 for k_idx, line in enumerate(lines_scf):
-                    # --- NEW: Extract Fermi Energy from QE Log ---
-                    if "the Fermi energy is" in line:
-                        ef = float(line.split("is")[1].split("ev")[0].strip())
-                    elif "highest occupied, lowest unoccupied" in line:
-                        parts = line.split(":")[-1].split()
-                        ef = (float(parts[0]) + float(parts[1])) / 2.0
-
-                    elif "lattice parameter (alat)" in line:
+                    if "lattice parameter (alat)" in line:
                         alat_bohr = float(line.split("=")[1].split()[0])
                         alat_ang = alat_bohr * 0.5291772109
                     elif "crystal axes: (cart. coord. in units of alat)" in line:

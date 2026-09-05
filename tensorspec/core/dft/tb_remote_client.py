@@ -189,7 +189,23 @@ def run_remote_tb_bands(
                 remote_hr = f"{remote_dir}/{HR_NAME}"
                 _upload_if_changed(sftp, w90_filepath, remote_hr, log)
                 work_dir = os.path.dirname(os.path.abspath(w90_filepath))
-                for aux in ("wannier90.wout", "scf.out", "nscf.out"):
+                # Friend/QE bundles: win + centres + FERMI_ENERGY; outs only if present.
+                # Drop stale remote scf/nscf so an old leftover cannot poison EF/basis.
+                for stale in ("scf.out", "nscf.out"):
+                    if not os.path.isfile(os.path.join(work_dir, stale)):
+                        try:
+                            sftp.remove(f"{remote_dir}/{stale}")
+                            log(f"Removed stale remote {stale}")
+                        except OSError:
+                            pass
+                for aux in (
+                    "wannier90.wout",
+                    "wannier90.win",
+                    "wannier90_centres.xyz",
+                    "FERMI_ENERGY.txt",
+                    "scf.out",
+                    "nscf.out",
+                ):
                     local_aux = os.path.join(work_dir, aux)
                     if os.path.isfile(local_aux):
                         _upload_if_changed(sftp, local_aux, f"{remote_dir}/{aux}", log)

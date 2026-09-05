@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 CACHE_DIR = Path(os.path.expanduser("~/.tensorspec_cache/w90_tb"))
-CACHE_VERSION = 6  # v6: basis_source + ARPES quality metadata in basis_args
+CACHE_VERSION = 7  # v7: qe_fermi in cache key
 REMOTE_CACHE_NAME = "w90_tb_cache.pkl"
 
 
@@ -19,6 +19,7 @@ def cache_key(
     use_soc: bool,
     onsite_e: float,
     hop_tol: float = 1e-6,
+    qe_fermi: float = 0.0,
 ) -> str:
     path = os.path.abspath(w90_filepath)
     try:
@@ -28,7 +29,7 @@ def cache_key(
         mtime, size = 0, 0
     raw = (
         f"v{CACHE_VERSION}|{path}|{mtime}|{size}|{use_soc}|"
-        f"{float(onsite_e):.12g}|{float(hop_tol):.12g}"
+        f"{float(onsite_e):.12g}|{float(hop_tol):.12g}|{float(qe_fermi):.12g}"
     )
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
@@ -43,9 +44,10 @@ def load_parsed_tb(
     use_soc: bool,
     onsite_e: float,
     hop_tol: float = 1e-6,
+    qe_fermi: float = 0.0,
 ) -> Optional[Tuple[dict, dict, Optional[Any]]]:
     """Return (tb_dict, basis_args, A_qe) or None."""
-    key = cache_key(w90_filepath, use_soc, onsite_e, hop_tol)
+    key = cache_key(w90_filepath, use_soc, onsite_e, hop_tol, qe_fermi=qe_fermi)
     path = local_cache_path(key)
     if not path.is_file():
         return None
@@ -67,8 +69,9 @@ def save_parsed_tb(
     basis_args: dict,
     A_qe,
     hop_tol: float = 1e-6,
+    qe_fermi: float = 0.0,
 ) -> Path:
-    key = cache_key(w90_filepath, use_soc, onsite_e, hop_tol)
+    key = cache_key(w90_filepath, use_soc, onsite_e, hop_tol, qe_fermi=qe_fermi)
     path = local_cache_path(key)
     payload = {
         "key": key,
