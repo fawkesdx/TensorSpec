@@ -55,6 +55,17 @@ class ScanPlan:
                 return x_motor, y_motor
         return None
 
+    def motors_slow_to_fast(self) -> list[ScanMotor]:
+        """Motors in C-order reshape order (outer/slow → inner/fast).
+
+        Maestro ``Low_Level_Scan`` lists lower loop index first, but that
+        loop is the *inner* (fastest) axis. Within a multi-motor loop the
+        earlier listed motor is also faster. Flat point index therefore
+        varies as ``reversed(loop0..loopN motors)``.
+        """
+        fast_to_slow = [motor for loop in self.loops for motor in loop.motors]
+        return list(reversed(fast_to_slow))
+
 
 def _is_angle_motor(name: str) -> bool:
     label = name.casefold()

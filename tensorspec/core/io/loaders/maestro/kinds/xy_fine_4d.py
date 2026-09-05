@@ -56,6 +56,18 @@ def load(
         is_fixed=True,
     )
 
+    # Slow→fast: Y outer, X inner (see ScanPlan.motors_slow_to_fast).
+    motors_slow_to_fast = plan.motors_slow_to_fast()
+    if [m.name.casefold() for m in motors_slow_to_fast] != [
+        y_motor.name.casefold(),
+        x_motor.name.casefold(),
+    ]:
+        raise ValueError(
+            f"{KIND_ID}: unexpected motor nesting "
+            f"{[m.name for m in motors_slow_to_fast]!r}."
+        )
+    scan_shape = (n_y, n_x)
+
     buffer = load_spectra_buffer(dataset)
     if partial_grid is not None:
         flat_data = flatten_aborted_buffer(
@@ -70,7 +82,7 @@ def load(
         )
     elif paxis == 0:
         d1, d2 = shape[1], shape[2]
-        block = buffer.reshape(n_y, n_x, d1, d2)
+        block = buffer.reshape(*scan_shape, d1, d2)
         if (d1, d2) == (n_e, n_a):
             data = block
         elif (d1, d2) == (n_a, n_e):
@@ -82,7 +94,7 @@ def load(
             )
     elif paxis == 2:
         d1, d2 = shape[0], shape[1]
-        block = buffer.reshape(d1, d2, n_y, n_x)
+        block = buffer.reshape(d1, d2, *scan_shape)
         if (d1, d2) == (n_e, n_a):
             data = np.transpose(block, (2, 3, 0, 1))
         elif (d1, d2) == (n_a, n_e):

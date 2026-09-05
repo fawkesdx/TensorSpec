@@ -55,10 +55,15 @@ def load(
         is_fixed=True,
     )
 
-    motors_in_order = [motor for loop in plan.loops for motor in loop.motors]
-    scan_shape = tuple(motor.n for motor in motors_in_order)
-    scan_roles = [_motor_role(motor) for motor in motors_in_order]
+    # Slow→fast C-order: Y outer, X mid, Defl inner (see ScanPlan.motors_slow_to_fast).
+    motors_slow_to_fast = plan.motors_slow_to_fast()
+    scan_shape = tuple(motor.n for motor in motors_slow_to_fast)
+    scan_roles = [_motor_role(motor) for motor in motors_slow_to_fast]
     role_axis = {role: idx for idx, role in enumerate(scan_roles)}
+    if set(role_axis) != {"y", "x", "defl"}:
+        raise ValueError(
+            f"{KIND_ID}: expected y/x/defl scan roles, got {sorted(role_axis)}."
+        )
     out_scan = (role_axis["y"], role_axis["x"], role_axis["defl"])
 
     buffer = load_spectra_buffer(dataset)

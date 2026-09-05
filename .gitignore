@@ -63,3 +63,4 @@ bottom.py
 tensorspec_clusters.json
 .tensorspec_clusters.json
 **/tensorspec_clusters.local.json
+.worktrees/

@@ -131,7 +131,7 @@ class SliceWidget(QFrame):
         self.slider_dx = QSlider(Qt.Horizontal); self.slider_dx.setRange(0, 100); self.slider_dx.setFixedWidth(50)
         self.spin_dx.valueChanged.connect(self.slider_dx.setValue)
         self.slider_dx.valueChanged.connect(self.spin_dx.setValue)
-        self.spin_dx.valueChanged.connect(self.redraw)
+        self.spin_dx.valueChanged.connect(self._on_delta_changed)
         row2.addWidget(self.spin_dx); row2.addWidget(self.slider_dx)
         
         row2.addWidget(QLabel("ΔY:"))
@@ -139,7 +139,7 @@ class SliceWidget(QFrame):
         self.slider_dy = QSlider(Qt.Horizontal); self.slider_dy.setRange(0, 100); self.slider_dy.setFixedWidth(50)
         self.spin_dy.valueChanged.connect(self.slider_dy.setValue)
         self.slider_dy.valueChanged.connect(self.spin_dy.setValue)
-        self.spin_dy.valueChanged.connect(self.redraw)
+        self.spin_dy.valueChanged.connect(self._on_delta_changed)
         row2.addWidget(self.spin_dy); row2.addWidget(self.slider_dy)
         
         row2.addWidget(QLabel("  |  "))
@@ -191,10 +191,25 @@ class SliceWidget(QFrame):
         # Automatically collapse GridSpec unused space on boot
         self.toggle_profiles()
 
-        # --- NEW: Sync Crosshairs Checkbox ---
+        # Cross-file sync is OFF by default; only matching Sync group IDs link.
         self.chk_sync = QCheckBox("🔗 Sync")
-        self.chk_sync.setToolTip("Lock crosshairs across all open windows with matching axes.")
+        self.chk_sync.setChecked(False)
+        self.chk_sync.setToolTip(
+            "Opt-in crosshair lock with other open viewers that share the same Sync group "
+            "and matching axis labels. Off by default — viewers stay independent."
+        )
+        self.spin_sync_group = QSpinBox()
+        self.spin_sync_group.setRange(1, 99)
+        self.spin_sync_group.setValue(1)
+        self.spin_sync_group.setPrefix("grp ")
+        self.spin_sync_group.setFixedWidth(70)
+        self.spin_sync_group.setEnabled(False)
+        self.spin_sync_group.setToolTip(
+            "Only viewers with Sync ON and this same group number share crosshairs."
+        )
+        self.chk_sync.toggled.connect(self.spin_sync_group.setEnabled)
         row1.addWidget(self.chk_sync)
+        row1.addWidget(self.spin_sync_group)
 
     def _populate_dropdowns(self):
         self.combo_x.blockSignals(True)
@@ -270,12 +285,15 @@ class SliceWidget(QFrame):
             
             slider.valueChanged.connect(
                 lambda val, dim=i: self.parent_panel.update_global_coord(
-                    dim, val, cross_sync=self.chk_sync.isChecked()
+                    dim, val, cross_sync=self._want_cross_sync(),
+                    sync_group=self._sync_group_id(),
                 )
             )
             spin.valueChanged.connect(
                 lambda val, dim=i, arr=ax_arr: self.parent_panel.update_global_coord(
-                    dim, int((np.abs(arr - val)).argmin()), cross_sync=self.chk_sync.isChecked()
+                    dim, int((np.abs(arr - val)).argmin()),
+                    cross_sync=self._want_cross_sync(),
+                    sync_group=self._sync_group_id(),
                 )
             )
             
@@ -290,6 +308,66 @@ class SliceWidget(QFrame):
         self._update_ortho_combo()
         self._rebuild_sliders()
         self.parent_panel.broadcast_redraw()
+
+    def _want_cross_sync(self) -> bool:
+        return bool(self.chk_sync.isChecked())
+
+    def _sync_group_id(self) -> int | None:
+        if not self.chk_sync.isChecked():
+            return None
+        return int(self.spin_sync_group.value())
+
+    def _on_delta_changed(self):
+        """Publish integration half-widths for this panel's X/Y dims to the dashboard."""
+        self.parent_panel.update_halfwidth(self.x_idx, self.spin_dx.value(), broadcast=False)
+        self.parent_panel.update_halfwidth(self.y_idx, self.spin_dy.value(), broadcast=True)
+
+    def _sync_delta_spins_from_global(self):
+        half = self.parent_panel.global_halfwidths
+        self.spin_dx.blockSignals(True)
+        self.slider_dx.blockSignals(True)
+        self.spin_dy.blockSignals(True)
+        self.slider_dy.blockSignals(True)
+        self.spin_dx.setValue(int(half.get(self.x_idx, 0)))
+        self.slider_dx.setValue(int(half.get(self.x_idx, 0)))
+        self.spin_dy.setValue(int(half.get(self.y_idx, 0)))
+        self.slider_dy.setValue(int(half.get(self.y_idx, 0)))
+        self.spin_dx.blockSignals(False)
+        self.slider_dx.blockSignals(False)
+        self.spin_dy.blockSignals(False)
+        self.slider_dy.blockSignals(False)
+
+    def _integration_slices(self):
+        """Build nd slices: full span on display axes, ±Δ window on hidden axes."""
+        coords = self.parent_panel.global_coords
+        half = self.parent_panel.global_halfwidths
+        shape = self.tensor_data.value.shape
+        slices = []
+        for i in range(self.tensor_data.ndim):
+            if i in (self.x_idx, self.y_idx):
+                slices.append(slice(None))
+                continue
+            c = int(coords[i])
+            hw = int(half.get(i, 0))
+            n = int(shape[i])
+            slices.append(slice(max(0, c - hw), min(n, c + hw + 1)))
+        return slices
+
+    def _reduce_hidden_axes(self, arr: np.ndarray, calc_mode: str) -> np.ndarray:
+        """Collapse non-display axes after windowed slicing (Sum / Mean)."""
+        reduce_axes = tuple(
+            i for i in range(arr.ndim) if i not in (self.x_idx, self.y_idx)
+        )
+        if not reduce_axes:
+            out = arr
+        elif calc_mode == "Mean":
+            out = np.mean(arr, axis=reduce_axes)
+        else:
+            out = np.sum(arr, axis=reduce_axes)
+        out = np.asarray(out)
+        if self.x_idx < self.y_idx:
+            out = out.T
+        return out
 
     def toggle_ui_controls(self):
         """Collapses or expands the integration controls and dimension sliders."""
@@ -353,12 +431,9 @@ class SliceWidget(QFrame):
             return
         
         self.sync_sliders_to_global()
-        slices = []
-        for i in range(self.tensor_data.ndim):
-            if i in (self.x_idx, self.y_idx):
-                slices.append(slice(None))
-            else:
-                slices.append(self.parent_panel.global_coords[i])
+        self._sync_delta_spins_from_global()
+        slices = self._integration_slices()
+        calc_mode = self.combo_profile_mode.currentText()
                 
         layer_text = self.combo_layer.currentText()
         layers = self.tensor_data.metadata.get('layers', {}) if self.tensor_data.metadata else {}
@@ -370,14 +445,19 @@ class SliceWidget(QFrame):
             else:
                 data_source = np.asarray(layer_data)
                 if data_source.ndim == self.tensor_data.ndim:
-                    sliced = data_source[tuple(slices)]
+                    sliced = self._reduce_hidden_axes(
+                        data_source[tuple(slices)], calc_mode
+                    )
                 elif spatial is not None:
                     sliced = spatial
                 else:
-                    sliced = self.tensor_data.value[tuple(slices)]
+                    sliced = self._reduce_hidden_axes(
+                        self.tensor_data.value[tuple(slices)], calc_mode
+                    )
         else:
-            sliced = self.tensor_data.value[tuple(slices)]
-        if self.x_idx < self.y_idx: sliced = sliced.T
+            sliced = self._reduce_hidden_axes(
+                self.tensor_data.value[tuple(slices)], calc_mode
+            )
         
         x_arr, y_arr = self.tensor_data.axes[self.x_idx], self.tensor_data.axes[self.y_idx]
         dx_step = (x_arr[-1] - x_arr[0]) / max(1, len(x_arr) - 1) if len(x_arr) > 1 else 0.1
@@ -403,8 +483,8 @@ class SliceWidget(QFrame):
         
         x_cross = self.parent_panel.global_coords[self.x_idx]
         y_cross = self.parent_panel.global_coords[self.y_idx]
-        dx_px = self.spin_dx.value()
-        dy_px = self.spin_dy.value()
+        dx_px = int(self.parent_panel.global_halfwidths.get(self.x_idx, 0))
+        dy_px = int(self.parent_panel.global_halfwidths.get(self.y_idx, 0))
         
         x1, x2 = max(0, x_cross - dx_px), min(sliced.shape[1], x_cross + dx_px + 1)
         y1, y2 = max(0, y_cross - dy_px), min(sliced.shape[0], y_cross + dy_px + 1)
@@ -417,8 +497,6 @@ class SliceWidget(QFrame):
         rect_w = (x2 - x1) * dx_step
         rect_h = (y2 - y1) * dy_step
         self.rect_window.set_bounds(rect_x, rect_y, rect_w, rect_h)
-        
-        calc_mode = self.combo_profile_mode.currentText()
 
         if self.chk_profiles.isChecked():
             if calc_mode == "Mean":
@@ -442,6 +520,9 @@ class SliceWidget(QFrame):
             
         if self.chk_ortho.isChecked() and self.combo_ortho.count() > 0:
             ortho_idx = self.combo_ortho.currentData()
+            half = self.parent_panel.global_halfwidths
+            coords = self.parent_panel.global_coords
+            shape = self.tensor_data.value.shape
             slices_ortho = []
             for i in range(self.tensor_data.ndim):
                 if i == ortho_idx:
@@ -451,8 +532,10 @@ class SliceWidget(QFrame):
                 elif i == self.y_idx:
                     slices_ortho.append(slice(y1, y2))
                 else:
-                    val = self.parent_panel.global_coords[i]
-                    slices_ortho.append(slice(val, val+1)) 
+                    c = int(coords[i])
+                    hw = int(half.get(i, 0))
+                    n = int(shape[i])
+                    slices_ortho.append(slice(max(0, c - hw), min(n, c + hw + 1)))
                     
             ortho_chunk = self.tensor_data.value[tuple(slices_ortho)]
             eval_axes = tuple(i for i in range(self.tensor_data.ndim) if i != ortho_idx)
@@ -499,23 +582,31 @@ class SliceWidget(QFrame):
         new_y_idx = int((np.abs(y_arr - event.ydata)).argmin())
         
         # 2. Update the global state manager (cross-dataset sync only if 🔗 Sync is on)
-        want_sync = bool(getattr(self, 'chk_sync', None) and self.chk_sync.isChecked())
+        want_sync = self._want_cross_sync()
+        sync_group = self._sync_group_id()
         self.parent_panel.update_global_coord(
-            self.x_idx, new_x_idx, broadcast=False, cross_sync=want_sync
+            self.x_idx, new_x_idx, broadcast=False,
+            cross_sync=want_sync, sync_group=sync_group,
         )
         self.parent_panel.update_global_coord(
-            self.y_idx, new_y_idx, broadcast=True, cross_sync=want_sync
+            self.y_idx, new_y_idx, broadcast=True,
+            cross_sync=want_sync, sync_group=sync_group,
         )
 
         # 3. Broadcast physical crosshair coords to other Sync-enabled windows
-        if want_sync and not self._is_syncing:
+        if want_sync and sync_group is not None and not self._is_syncing:
             x_label = self.combo_x.currentText()
             y_label = self.combo_y.currentText()
             
             for widget in list(GLOBAL_SYNC_REGISTRY):
                 try:
-                    if widget is not self and hasattr(widget, 'chk_sync') and widget.chk_sync.isChecked():
-                        widget.receive_sync(x_label, event.xdata, y_label, event.ydata)
+                    if widget is self:
+                        continue
+                    if not getattr(widget, 'chk_sync', None) or not widget.chk_sync.isChecked():
+                        continue
+                    if widget._sync_group_id() != sync_group:
+                        continue
+                    widget.receive_sync(x_label, event.xdata, y_label, event.ydata)
                 except RuntimeError:
                     # Clean up deleted C++ objects silently
                     GLOBAL_SYNC_REGISTRY.discard(widget)
@@ -525,39 +616,37 @@ class SliceWidget(QFrame):
         if self._is_syncing: return
         self._is_syncing = True
         
-        needs_redraw = False
-        my_x_label = self.combo_x.currentText()
-        my_y_label = self.combo_y.currentText()
-        
-        # Safely fetch current crosshair positions
         try:
-            new_x = self.vline.get_xdata()[0]
-            new_y = self.hline.get_ydata()[0]
-        except (IndexError, TypeError):
-            new_x, new_y = 0, 0
-        
-        # Check if the incoming X or Y matches our local X axis
-        if my_x_label == source_x_label:
-            new_x = source_x_val
-            needs_redraw = True
-        elif my_x_label == source_y_label:
-            new_x = source_y_val
-            needs_redraw = True
-            
-        # Check if the incoming X or Y matches our local Y axis
-        if my_y_label == source_y_label:
-            new_y = source_y_val
-            needs_redraw = True
-        elif my_y_label == source_x_label:
-            new_y = source_x_val
-            needs_redraw = True
-            
-        if needs_redraw:
-            self.vline.set_xdata([new_x, new_x])
-            self.hline.set_ydata([new_y, new_y])
-            self.redraw()
-            
-        self._is_syncing = False
+            my_x_label = self.combo_x.currentText()
+            my_y_label = self.combo_y.currentText()
+            x_arr = self.tensor_data.axes[self.x_idx]
+            y_arr = self.tensor_data.axes[self.y_idx]
+
+            if my_x_label == source_x_label:
+                new_x_idx = int((np.abs(x_arr - source_x_val)).argmin())
+                self.parent_panel.update_global_coord(
+                    self.x_idx, new_x_idx, broadcast=False, cross_sync=False
+                )
+            elif my_x_label == source_y_label:
+                new_x_idx = int((np.abs(x_arr - source_y_val)).argmin())
+                self.parent_panel.update_global_coord(
+                    self.x_idx, new_x_idx, broadcast=False, cross_sync=False
+                )
+
+            if my_y_label == source_y_label:
+                new_y_idx = int((np.abs(y_arr - source_y_val)).argmin())
+                self.parent_panel.update_global_coord(
+                    self.y_idx, new_y_idx, broadcast=True, cross_sync=False
+                )
+            elif my_y_label == source_x_label:
+                new_y_idx = int((np.abs(y_arr - source_x_val)).argmin())
+                self.parent_panel.update_global_coord(
+                    self.y_idx, new_y_idx, broadcast=True, cross_sync=False
+                )
+            else:
+                self.redraw()
+        finally:
+            self._is_syncing = False
     
     def _on_drag(self, event):
         """Allows the crosshair to update continuously while clicking and dragging."""
@@ -575,22 +664,21 @@ class SliceWidget(QFrame):
         if not path: return
 
         try:
-            slices = []
-            for i in range(self.tensor_data.ndim):
-                if i in (self.x_idx, self.y_idx): slices.append(slice(None))
-                else: slices.append(self.parent_panel.global_coords[i])
+            calc_mode = self.combo_profile_mode.currentText()
+            slices = self._integration_slices()
+            sliced = self._reduce_hidden_axes(
+                self.tensor_data.value[tuple(slices)], calc_mode
+            )
                     
-            sliced = self.tensor_data.value[tuple(slices)]
-            if self.x_idx < self.y_idx: sliced = sliced.T
-            
             x_arr, y_arr = self.tensor_data.axes[self.x_idx], self.tensor_data.axes[self.y_idx]
             x_cross = self.parent_panel.global_coords[self.x_idx]
             y_cross = self.parent_panel.global_coords[self.y_idx]
+            dx_px = int(self.parent_panel.global_halfwidths.get(self.x_idx, 0))
+            dy_px = int(self.parent_panel.global_halfwidths.get(self.y_idx, 0))
             
-            x1, x2 = max(0, x_cross - self.spin_dx.value()), min(sliced.shape[1], x_cross + self.spin_dx.value() + 1)
-            y1, y2 = max(0, y_cross - self.spin_dy.value()), min(sliced.shape[0], y_cross + self.spin_dy.value() + 1)
+            x1, x2 = max(0, x_cross - dx_px), min(sliced.shape[1], x_cross + dx_px + 1)
+            y1, y2 = max(0, y_cross - dy_px), min(sliced.shape[0], y_cross + dy_px + 1)
             
-            calc_mode = self.combo_profile_mode.currentText()
             if calc_mode == "Mean":
                 prof_x = np.mean(sliced[y1:y2, :], axis=0)
                 prof_y = np.mean(sliced[:, x1:x2], axis=1)
@@ -700,6 +788,7 @@ class DataViewerPanel(QWidget):
         
         # Central State Manager
         self.global_coords = {}
+        self.global_halfwidths = {}
         
         # Register this panel to the global sync network
         DataViewerPanel._active_instances.add(self)
@@ -722,6 +811,7 @@ class DataViewerPanel(QWidget):
     def load_data(self, tensor_data: TensorData):
         self.tensor_data = tensor_data
         self.global_coords = {i: len(ax)//2 for i, ax in enumerate(self.tensor_data.axes)}
+        self.global_halfwidths = {i: 0 for i in range(self.tensor_data.ndim)}
         
         self._clear_tree()
         self.views.clear()
@@ -775,24 +865,46 @@ class DataViewerPanel(QWidget):
         # Distribute height evenly
         self.v_splitter.setSizes([1000] * self.v_splitter.count())
 
+    @staticmethod
+    def compute_insert_slot(views, ref_row: int, ref_col: int, direction: str) -> tuple[int, int]:
+        """Lego insert: shift occupants and return (row, col) for the new panel.
+
+        ``views`` is a sequence of objects with mutable ``grid_row`` / ``grid_col``.
+        """
+        if direction == "Left":
+            row, col = ref_row, ref_col
+            for w in views:
+                if w.grid_col >= col:
+                    w.grid_col += 1
+            return row, col
+        if direction == "Right":
+            row, col = ref_row, ref_col + 1
+            for w in views:
+                if w.grid_col >= col:
+                    w.grid_col += 1
+            return row, col
+        if direction == "Top":
+            row, col = ref_row, ref_col
+            for w in views:
+                if w.grid_row >= row:
+                    w.grid_row += 1
+            return row, col
+        if direction == "Bottom":
+            row, col = ref_row + 1, ref_col
+            for w in views:
+                if w.grid_row >= row:
+                    w.grid_row += 1
+            return row, col
+        return ref_row, ref_col
+
     def spawn_view(self, x_idx: int, y_idx: int, ref_widget: SliceWidget = None, direction: str = None):
         """Creates a new SliceWidget and places it in the grid relative to ref_widget."""
         row, col = 0, 0
         
         if ref_widget and direction:
-            row, col = ref_widget.grid_row, ref_widget.grid_col
-            if direction == "Top": row -= 1
-            elif direction == "Bottom": row += 1
-            elif direction == "Left": col -= 1
-            elif direction == "Right": col += 1
-            
-            # Prevent negative indexing by shifting the entire puzzle board
-            if row < 0:
-                for w in self.views: w.grid_row += 1
-                row = 0
-            if col < 0:
-                for w in self.views: w.grid_col += 1
-                col = 0
+            row, col = self.compute_insert_slot(
+                self.views, ref_widget.grid_row, ref_widget.grid_col, direction
+            )
 
         new_widget = SliceWidget(self, x_idx, y_idx, row, col)
         self.views.append(new_widget)
@@ -848,31 +960,49 @@ class DataViewerPanel(QWidget):
                 self.views.append(widget)
             self._rebuild_grid()
 
-    def _sync_enabled(self) -> bool:
-        """True if any SliceWidget owned by this panel has 🔗 Sync checked."""
+    def _iter_slice_widgets(self):
         candidates = list(self.views)
         for win in self.detached_windows:
             try:
                 candidates.extend(win.findChildren(SliceWidget))
             except RuntimeError:
                 continue
-        for view in candidates:
+        return candidates
+
+    def accepts_sync_group(self, sync_group: int | None) -> bool:
+        """True if any owned SliceWidget has Sync ON for this group id."""
+        if sync_group is None:
+            return False
+        for view in self._iter_slice_widgets():
             chk = getattr(view, 'chk_sync', None)
-            if chk is not None and chk.isChecked():
+            if chk is not None and chk.isChecked() and view._sync_group_id() == sync_group:
                 return True
         return False
 
-    def update_global_coord(self, dim_idx: int, val_idx: int, broadcast=True, cross_sync=False):
+    def update_halfwidth(self, dim_idx: int, half_px: int, broadcast: bool = True):
+        self.global_halfwidths[dim_idx] = max(0, int(half_px))
+        if broadcast:
+            self.broadcast_redraw()
+
+    def update_global_coord(
+        self,
+        dim_idx: int,
+        val_idx: int,
+        broadcast=True,
+        cross_sync=False,
+        sync_group: int | None = None,
+    ):
         """Update this panel's cursor index.
 
         cross_sync defaults False: cross-dataset linking must be opted in via
-        🔗 Sync on the source (and peer) viewers — never the silent default.
+        🔗 Sync on the source (and peer) viewers with the same Sync group —
+        never the silent default.
         """
         self.global_coords[dim_idx] = val_idx
         
         # Caller already opted in via cross_sync=True (from chk_sync on click/slider).
-        # Still require peer Sync on so one toggled window cannot drag an untoggled peer.
-        if cross_sync and self.tensor_data is not None:
+        # Peer must also have Sync ON with the same group id.
+        if cross_sync and sync_group is not None and self.tensor_data is not None:
             phys_val = self.tensor_data.axes[dim_idx][val_idx]
             target_label = self.tensor_data.labels[dim_idx]
             target_unit = self.tensor_data.units[dim_idx]
@@ -881,14 +1011,16 @@ class DataViewerPanel(QWidget):
                 try:
                     if peer is self or peer.tensor_data is None:
                         continue
-                    if not peer._sync_enabled():
+                    if not peer.accepts_sync_group(sync_group):
                         continue
                     for p_dim_idx, (p_label, p_unit) in enumerate(zip(peer.tensor_data.labels, peer.tensor_data.units)):
                         if p_label == target_label and p_unit == target_unit:
                             peer_axis = peer.tensor_data.axes[p_dim_idx]
                             nearest_idx = int(np.argmin(np.abs(peer_axis - phys_val)))
                             if peer.global_coords.get(p_dim_idx) != nearest_idx:
-                                peer.update_global_coord(p_dim_idx, nearest_idx, broadcast=True, cross_sync=False)
+                                peer.update_global_coord(
+                                    p_dim_idx, nearest_idx, broadcast=True, cross_sync=False
+                                )
                             break 
                 except RuntimeError:
                     DataViewerPanel._active_instances.discard(peer)
@@ -964,3 +1096,9 @@ class DataViewerPanel(QWidget):
     def broadcast_redraw(self):
         for view in self.views:
             view.redraw()
+        for win in self.detached_windows:
+            try:
+                for view in win.findChildren(SliceWidget):
+                    view.redraw()
+            except RuntimeError:
+                continue
