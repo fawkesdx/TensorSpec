@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from numbers import Integral
 
 import h5py
 import numpy as np
@@ -41,13 +42,60 @@ class MaestroDescriptor:
     _n_energy: int = field(repr=False)
     _n_angle: int = field(repr=False)
     _readable_points: int = field(repr=False)
+    _canonical_scan_shape: tuple[int, ...] = field(repr=False)
+    _acquisition_scan_shape: tuple[int, ...] = field(repr=False)
+    _acquisition_from_canonical: tuple[int, ...] = field(repr=False)
 
     def read_block(self, index: int | slice) -> np.ndarray:
         """Read one point or contiguous flat C-order span as ``(E, A)`` frames."""
         if not self._file.id.valid:
             raise ValueError("Maestro descriptor is closed.")
 
-        selection = _normalize_selection(index, self._readable_points)
+        canonical_selection = _normalize_selection(
+            index, self._readable_points
+        )
+        if isinstance(canonical_selection, int):
+            selection = self._to_acquisition_index(canonical_selection)
+            return self._read_selection(selection)
+
+        canonical_indices = range(
+            canonical_selection.start, canonical_selection.stop
+        )
+        acquisition_indices = [
+            self._to_acquisition_index(point)
+            for point in canonical_indices
+        ]
+        if not acquisition_indices:
+            return np.empty(
+                (0, self._n_energy, self._n_angle),
+                dtype=self._dataset.dtype,
+            )
+        first = acquisition_indices[0]
+        if acquisition_indices == list(
+            range(first, first + len(acquisition_indices))
+        ):
+            return self._read_selection(
+                slice(first, first + len(acquisition_indices))
+            )
+        return np.stack(
+            [self._read_selection(point) for point in acquisition_indices]
+        )
+
+    def _to_acquisition_index(self, canonical_index: int) -> int:
+        canonical_coords = np.unravel_index(
+            canonical_index, self._canonical_scan_shape
+        )
+        acquisition_coords = tuple(
+            canonical_coords[canonical_axis]
+            for canonical_axis in self._acquisition_from_canonical
+        )
+        return int(
+            np.ravel_multi_index(
+                acquisition_coords, self._acquisition_scan_shape
+            )
+        )
+
+    def _read_selection(self, selection: int | slice) -> np.ndarray:
         if self._points_axis == 0:
             slab = self._dataset[selection, :, :]
         else:
@@ -103,13 +151,25 @@ def open_maestro(path: str) -> MaestroDescriptor:
             )
         )
 
-        labels, axes, units, scan_shape = _kind_layout(
+        labels, axes, units, canonical_motors = _kind_layout(
             module.KIND_ID,
             plan,
             energy,
             angle,
             energy_unit,
             angle_unit,
+        )
+        acquisition_motors = _acquisition_motors(
+            module.KIND_ID, plan, canonical_motors
+        )
+        acquisition_from_canonical = _axis_permutation(
+            acquisition_motors, canonical_motors
+        )
+        canonical_scan_shape = tuple(
+            motor.n for motor in canonical_motors
+        )
+        acquisition_scan_shape = tuple(
+            motor.n for motor in acquisition_motors
         )
         metadata: dict = {
             "kind": module.KIND_ID,
@@ -125,10 +185,20 @@ def open_maestro(path: str) -> MaestroDescriptor:
 
         readable_points = actual
         if actual < plan.expected_cycles:
-            partial = recover_partial_grid(actual, scan_shape)
+            partial = recover_partial_grid(actual, acquisition_scan_shape)
             if partial is not None:
-                scan_shape = partial.kept_shape
-                axes[0] = axes[0][: partial.kept_shape[0]]
+                acquisition_scan_shape = partial.kept_shape
+                canonical_shape = list(canonical_scan_shape)
+                canonical_axis = acquisition_from_canonical[
+                    partial.truncated_axis
+                ]
+                canonical_shape[canonical_axis] = partial.kept_shape[
+                    partial.truncated_axis
+                ]
+                canonical_scan_shape = tuple(canonical_shape)
+                axes[canonical_axis] = axes[canonical_axis][
+                    : canonical_scan_shape[canonical_axis]
+                ]
                 readable_points = partial.kept_points
                 metadata["partial_scan"] = {
                     "expected": plan.expected_cycles,
@@ -139,7 +209,9 @@ def open_maestro(path: str) -> MaestroDescriptor:
                 labels = ["Point", "Energy", "Angle"]
                 axes = [np.arange(actual), energy, angle]
                 units = ["index", energy_unit, angle_unit]
-                scan_shape = (actual,)
+                canonical_scan_shape = (actual,)
+                acquisition_scan_shape = (actual,)
+                acquisition_from_canonical = (0,)
                 metadata["truncate_warning"] = (
                     f"Aborted scan: truncated from {plan.expected_cycles} "
                     f"to {actual} points."
@@ -151,7 +223,7 @@ def open_maestro(path: str) -> MaestroDescriptor:
             labels=labels,
             axes=axes,
             units=units,
-            shape=(*scan_shape, n_e, n_a),
+            shape=(*canonical_scan_shape, n_e, n_a),
             metadata=metadata,
             _file=file,
             _dataset=dataset,
@@ -159,6 +231,9 @@ def open_maestro(path: str) -> MaestroDescriptor:
             _n_energy=n_e,
             _n_angle=n_a,
             _readable_points=readable_points,
+            _canonical_scan_shape=canonical_scan_shape,
+            _acquisition_scan_shape=acquisition_scan_shape,
+            _acquisition_from_canonical=acquisition_from_canonical,
         )
     except BaseException:
         file.close()
@@ -203,12 +278,14 @@ def _normalize_selection(
 ) -> int | slice:
     if isinstance(index, bool):
         raise TypeError("Point index must be an integer or slice.")
-    if isinstance(index, int):
-        if index < 0 or index >= n_points:
+    if isinstance(index, Integral):
+        normalized = int(index)
+        if normalized < 0 or normalized >= n_points:
             raise IndexError(
-                f"Point index {index} outside valid range 0..{n_points - 1}."
+                f"Point index {normalized} outside valid range "
+                f"0..{n_points - 1}."
             )
-        return index
+        return normalized
     if not isinstance(index, slice):
         raise TypeError("Point index must be an integer or slice.")
     if index.step not in (None, 1):
@@ -224,7 +301,7 @@ def _kind_layout(
     angle: np.ndarray,
     energy_unit: str,
     angle_unit: str,
-) -> tuple[list[str], list[np.ndarray], list[str], tuple[int, ...]]:
+) -> tuple[list[str], list[np.ndarray], list[str], list[ScanMotor]]:
     defl_motors = plan.angle_motors()
     if kind == "xy_fine_4d":
         x_motor, y_motor = _require_xy(plan, kind)
@@ -259,8 +336,41 @@ def _kind_layout(
         labels + ["Energy", "Angle"],
         axes + [energy, angle],
         units + [energy_unit, angle_unit],
-        tuple(motor.n for motor in scan_motors),
+        scan_motors,
     )
+
+
+def _acquisition_motors(
+    kind: str,
+    plan: ScanPlan,
+    canonical_motors: list[ScanMotor],
+) -> list[ScanMotor]:
+    """Return slow-to-fast motor order used by each kind's eager reshape."""
+    if kind == "xy_fine_4d":
+        # XY mesh points are stored with X varying fastest.
+        return canonical_motors
+    return [
+        motor
+        for loop in plan.loops
+        for motor in loop.motors
+    ]
+
+
+def _axis_permutation(
+    acquisition_motors: list[ScanMotor],
+    canonical_motors: list[ScanMotor],
+) -> tuple[int, ...]:
+    if len(acquisition_motors) != len(canonical_motors):
+        raise ValueError("Acquisition and canonical scan ranks differ.")
+    try:
+        return tuple(
+            canonical_motors.index(motor)
+            for motor in acquisition_motors
+        )
+    except ValueError as exc:
+        raise ValueError(
+            "Acquisition motors do not match canonical kind motors."
+        ) from exc
 
 
 def _require_xy(plan: ScanPlan, kind: str) -> tuple[ScanMotor, ScanMotor]:

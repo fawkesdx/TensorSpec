@@ -3,6 +3,7 @@ import numpy as np
 import pytest
 
 from tensorspec.core.io.loaders.maestro.lazy import open_maestro
+from tensorspec.core.io.loaders.maestro.registry import load_with_kind
 from tests.test_maestro_defl_x_line_4d import _write_defl_x_h5
 from tests.test_maestro_kinds import (
     _write_focus_xy_fine_h5,
@@ -44,6 +45,58 @@ def test_open_maestro_defl_x(tmp_path):
         assert desc.shape == (4, 3, 5, 6)
         assert desc.labels == ["X", "Slit Defl.", "Energy", "Angle"]
         assert desc.read_block(slice(1, 4)).shape == (3, 5, 6)
+    finally:
+        desc.close()
+
+
+def test_defl_x_read_block_uses_canonical_flat_index(tmp_path):
+    path = tmp_path / "line-index-order.h5"
+    _write_defl_x_h5(path, n_defl=3, n_x=4, n_e=5, n_a=6)
+    with h5py.File(path, "r") as f:
+        eager = load_with_kind(f, str(path))["data"]
+
+    desc = open_maestro(str(path))
+    try:
+        x_index, defl_index = 1, 0
+        canonical_index = int(
+            np.ravel_multi_index(
+                (x_index, defl_index), desc.shape[:-2]
+            )
+        )
+        np.testing.assert_array_equal(
+            desc.read_block(canonical_index),
+            eager[x_index, defl_index],
+        )
+        np.testing.assert_array_equal(
+            desc.read_block(slice(2, 5)),
+            eager.reshape(-1, *eager.shape[-2:])[2:5],
+        )
+    finally:
+        desc.close()
+
+
+def test_partial_defl_x_recovers_acquisition_grid_then_maps_shape(tmp_path):
+    path = tmp_path / "line-partial.h5"
+    _write_defl_x_h5(path, n_defl=3, n_x=4, n_e=5, n_a=6)
+    with h5py.File(path, "r+") as f:
+        dataset = f["2D_Data/Fixed_Spectra1"]
+        raw = dataset[:, :, :9]
+        attrs = dict(dataset.attrs)
+        del f["2D_Data/Fixed_Spectra1"]
+        dataset = f["2D_Data"].create_dataset("Fixed_Spectra1", data=raw)
+        for name, value in attrs.items():
+            dataset.attrs[name] = value
+
+    desc = open_maestro(str(path))
+    try:
+        assert desc.shape == (4, 2, 5, 6)
+        assert len(desc.axes[0]) == 4
+        assert len(desc.axes[1]) == 2
+        assert desc.metadata["partial_scan"] == {
+            "expected": 12,
+            "actual": 9,
+            "kept_rows": 2,
+        }
     finally:
         desc.close()
 
