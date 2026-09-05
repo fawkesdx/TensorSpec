@@ -146,6 +146,30 @@ def test_preprocess_refuses_existing_out_dir_without_overwrite(tmp_path):
     assert len(ShardDataset(str(out))) == 1
 
 
+def test_preprocess_append_merges_sources_and_samples(tmp_path):
+    first = tmp_path / "a.h5"
+    second = tmp_path / "b.h5"
+    _write_focus_xy_fine_h5(first, nx=1, ny=1, n_defl=2, n_e=4, n_a=4)
+    _write_focus_xy_fine_h5(second, nx=1, ny=2, n_defl=1, n_e=4, n_a=4)
+    out = tmp_path / "ds"
+
+    preprocess_file(str(first), str(out), _config("disp2d"))
+    manifest = preprocess_file(
+        str(second), str(out), _config("disp2d"), append=True
+    )
+
+    dataset = ShardDataset(str(out))
+    assert len(dataset) == 2 + 2
+    assert [source["id"] for source in manifest["sources"]] == ["a.h5", "b.h5"]
+    assert {meta["source_id"] for _, meta in dataset} == {"a.h5", "b.h5"}
+    with pytest.raises(ValueError, match="already present"):
+        preprocess_file(str(second), str(out), _config("disp2d"), append=True)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        preprocess_file(
+            str(first), str(out), _config("disp2d"), overwrite=True, append=True
+        )
+
+
 def test_norm_subsample_is_seeded_and_respects_scan_axis_trims():
     class RecordingDescriptor:
         labels = ["Y", "X", "Slit Defl.", "Energy", "Angle"]

@@ -107,17 +107,28 @@ def _validate_manifest(manifest: dict) -> None:
 class ShardWriter:
     """Buffer normalized samples and write size-bounded ``.npy`` shards."""
 
-    def __init__(self, out_dir: str, target_bytes: int = 512 * 1024 * 1024):
+    def __init__(
+        self,
+        out_dir: str,
+        target_bytes: int = 512 * 1024 * 1024,
+        *,
+        start_shard_id: int = 0,
+        sample_shape: tuple[int, ...] | None = None,
+    ):
         if target_bytes <= 0:
             raise ValueError("target_bytes must be positive")
+        if start_shard_id < 0:
+            raise ValueError("start_shard_id must be non-negative")
 
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.target_bytes = int(target_bytes)
         self._buffer: list[np.ndarray] = []
         self._buffer_bytes = 0
-        self._shard_id = 0
-        self._sample_shape: tuple[int, ...] | None = None
+        self._shard_id = int(start_shard_id)
+        self._sample_shape: tuple[int, ...] | None = (
+            tuple(sample_shape) if sample_shape is not None else None
+        )
         self._samples: list[dict[str, Any]] = []
         self._total_samples = 0
         self._dropped_samples = 0

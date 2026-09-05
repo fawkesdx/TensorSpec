@@ -23,7 +23,7 @@ from tensorspec.core.ml.ssl.normalize import (
     normalize_sample,
 )
 from tensorspec.core.ml.ssl.resolve import enumerate_modes, role_for_label
-from tensorspec.core.ml.ssl.shards import ShardWriter, write_manifest
+from tensorspec.core.ml.ssl.shards import ShardWriter, load_manifest, write_manifest
 from tensorspec.core.ml.ssl.spec import PreprocessConfig, to_jsonable
 from tensorspec.core.ml.ssl.trim import apply_trim
 
@@ -353,13 +353,41 @@ def preprocess_file(
     source_id: str | None = None,
     progress: Callable[[int, int], None] | None = None,
     overwrite: bool = False,
+    append: bool = False,
 ) -> dict:
     """Stream one Maestro file through trim, normalize, resample, and shards."""
+    if overwrite and append:
+        raise ValueError("overwrite and append are mutually exclusive")
+
     source_path = Path(path)
     source_name = source_id or source_path.name
     if Path(source_name).is_absolute():
         raise ValueError("source_id must not be an absolute path")
-    _assert_out_dir_available(out_dir, overwrite=overwrite)
+
+    out_path = Path(out_dir)
+    existing_manifest: dict | None = None
+    start_shard_id = 0
+    sample_shape: tuple[int, ...] | None = None
+    if append and (out_path / "manifest.json").exists():
+        existing_manifest = load_manifest(out_path / "manifest.json")
+        existing_ids = {source["id"] for source in existing_manifest["sources"]}
+        if source_name in existing_ids:
+            raise ValueError(
+                f"source_id {source_name!r} already present in {out_path}/manifest.json"
+            )
+        if existing_manifest["samples"]:
+            start_shard_id = (
+                max(int(sample["shard"]) for sample in existing_manifest["samples"])
+                + 1
+            )
+            first_shard = out_path / (
+                f"shard_{int(existing_manifest['samples'][0]['shard']):05d}.npy"
+            )
+            if first_shard.exists():
+                sample_shape = tuple(np.load(first_shard, mmap_mode="r").shape[1:])
+    elif not append:
+        _assert_out_dir_available(out_dir, overwrite=overwrite)
+
     with open_maestro(str(source_path)) as descriptor:
         modes = {
             mode.name: mode
@@ -400,7 +428,11 @@ def preprocess_file(
             effective_config,
         )
 
-        writer = ShardWriter(out_dir)
+        writer = ShardWriter(
+            out_dir,
+            start_shard_id=start_shard_id,
+            sample_shape=sample_shape,
+        )
         if mode.name == "disp2d":
             _add_disp2d_samples(
                 descriptor,
@@ -441,15 +473,32 @@ def preprocess_file(
             calibration,
         )
 
-    manifest = {
-        **partial,
-        "preprocess": {
-            **to_jsonable(effective_config),
-            "trim_warnings": trim.warnings,
-        },
-        "sources": [source],
-    }
-    write_manifest(str(Path(out_dir) / "manifest.json"), manifest)
+    if existing_manifest is None:
+        manifest = {
+            **partial,
+            "preprocess": {
+                **to_jsonable(effective_config),
+                "trim_warnings": trim.warnings,
+            },
+            "sources": [source],
+        }
+    else:
+        manifest = {
+            "preprocess": existing_manifest["preprocess"],
+            "sources": list(existing_manifest["sources"]) + [source],
+            "samples": list(existing_manifest["samples"]) + list(partial["samples"]),
+            "created_utc": partial["created_utc"],
+            "versions": partial["versions"],
+            "total_samples": int(existing_manifest.get("total_samples", 0))
+            + int(partial["total_samples"]),
+            "dropped_samples": int(existing_manifest.get("dropped_samples", 0))
+            + int(partial["dropped_samples"]),
+            "trim_warnings_by_source": {
+                **dict(existing_manifest.get("trim_warnings_by_source") or {}),
+                source_name: trim.warnings,
+            },
+        }
+    write_manifest(str(out_path / "manifest.json"), manifest)
     return manifest
 
 

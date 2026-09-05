@@ -6,6 +6,8 @@ import argparse
 from dataclasses import replace
 import json
 from pathlib import Path
+import sys
+import time
 
 from tensorspec.core.ml.ssl.preprocess import preprocess_file
 from tensorspec.core.ml.ssl.spec import (
@@ -37,6 +39,15 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="replace an existing shard dataset in --out",
     )
+    preprocess.add_argument(
+        "--append",
+        action="store_true",
+        help="append samples into an existing dataset in --out",
+    )
+    preprocess.add_argument(
+        "--source-id",
+        help="manifest source id (default: input basename)",
+    )
     return parser
 
 
@@ -54,14 +65,49 @@ def _config(path: str | None, mode: str) -> PreprocessConfig:
     return replace(config, sample=replace(config.sample, mode=mode))
 
 
+def _progress_printer(label: str):
+    started = time.monotonic()
+    last_print = 0.0
+
+    def progress(current: int, total: int) -> None:
+        nonlocal last_print
+        now = time.monotonic()
+        done = current >= total
+        if not done and now - last_print < 5.0 and current % 500 != 0:
+            return
+        last_print = now
+        elapsed = now - started
+        rate = current / elapsed if elapsed > 0 else 0.0
+        print(
+            f"{label}: {current}/{total} ({100.0 * current / max(total, 1):.1f}%) "
+            f"{rate:.1f} samp/s",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return progress
+
+
 def main(argv=None) -> int:
     args = _parser().parse_args(argv)
     if args.cmd == "preprocess":
-        preprocess_file(
+        if args.overwrite and args.append:
+            raise SystemExit("error: --overwrite and --append are mutually exclusive")
+        label = Path(args.input).name
+        manifest = preprocess_file(
             args.input,
             args.out,
             _config(args.config, args.mode),
+            source_id=args.source_id,
             overwrite=args.overwrite,
+            append=args.append,
+            progress=_progress_printer(label),
+        )
+        print(
+            f"done {label}: total_samples={manifest['total_samples']} "
+            f"sources={len(manifest['sources'])}",
+            file=sys.stderr,
+            flush=True,
         )
         return 0
     raise AssertionError(f"unhandled command {args.cmd!r}")
