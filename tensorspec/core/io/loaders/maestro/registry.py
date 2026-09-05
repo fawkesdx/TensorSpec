@@ -8,6 +8,7 @@ from tensorspec.core.io.loaders.maestro.detect import (
     select_spectra_dataset,
 )
 from tensorspec.core.io.loaders.maestro.kinds import (
+    defl_x_line_4d,
     fermi_defl_3d,
     focus_xy_fine_5d,
     xy_fine_4d,
@@ -17,6 +18,7 @@ from tensorspec.core.io.loaders.maestro.types import ScanPlan
 
 KIND_MODULES = [
     focus_xy_fine_5d,
+    defl_x_line_4d,
     fermi_defl_3d,
     xy_fine_4d,
 ]
