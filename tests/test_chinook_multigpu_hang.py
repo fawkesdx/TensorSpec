@@ -15,24 +15,28 @@ def test_missing_block_indices():
     assert missing_block_indices(3, {0, 1, 2}) == []
 
 
-def test_apply_ok_and_error_messages():
+def test_apply_ok_and_error_messages(capsys):
     cube = np.zeros((4, 2, 2), dtype=np.float32)
     completed = set()
     errors = []
     ok = ("ok", 1, 2, 4, np.ones((2, 2, 2), dtype=np.float32), 1.5)
     apply_multigpu_result_message(
-        ok, cube, completed, errors, nphi=2, ne=2, is_oom=None
+        ok, cube, completed, errors, nphi=2, ne=2, n_blocks=2, is_oom=None
     )
     assert completed == {1}
     assert cube[2:4].sum() > 0
     assert errors == []
+    out = capsys.readouterr().out
+    assert "block 2/2" in out
 
     err = ("error", 0, 0, "RuntimeError: boom")
     apply_multigpu_result_message(
-        err, cube, completed, errors, nphi=2, ne=2, is_oom=None
+        err, cube, completed, errors, nphi=2, ne=2, n_blocks=2, is_oom=None
     )
     assert completed == {0, 1}
     assert errors[0][0] == 0
+    out = capsys.readouterr().out
+    assert "GPU block 1/2" in out
 
 
 def test_collect_marks_missing_when_workers_die():

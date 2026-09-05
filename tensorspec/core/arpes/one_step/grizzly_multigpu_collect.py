@@ -36,14 +36,18 @@ def apply_multigpu_result_message(
     *,
     nphi: int,
     ne: int,
+    n_blocks: Optional[int] = None,
     is_oom: Optional[Callable[[BaseException], bool]] = None,
 ) -> None:
     """Mutate cube/completed/errors from one worker message. May raise on OOM."""
+    total = int(n_blocks) if n_blocks is not None else None
     if msg[0] == "error":
         _, bi, i0, err = msg
-        completed.add(int(bi))
-        errors.append((int(bi), int(i0), str(err)))
-        print(f"  GPU block {bi} idx[{i0}:?] ERROR: {str(err)[:200]}", flush=True)
+        bi = int(bi)
+        completed.add(bi)
+        errors.append((bi, int(i0), str(err)))
+        label = f"{bi + 1}/{total}" if total else f"{bi + 1}"
+        print(f"  GPU block {label} idx[{i0}:?] ERROR: {str(err)[:200]}", flush=True)
         if is_oom is not None and is_oom(RuntimeError(err)):
             raise RuntimeError(err)
         return
@@ -52,7 +56,8 @@ def apply_multigpu_result_message(
     bi, i0, i1 = int(bi), int(i0), int(i1)
     cube[i0:i1, :, :] = normalize_full_cube(Ig, i1 - i0, nphi, ne)
     completed.add(bi)
-    print(f"  block {bi + 1} idx[{i0}:{i1}] wall={float(wall):.2f}s", flush=True)
+    label = f"{bi + 1}/{total}" if total else f"{bi + 1}"
+    print(f"  block {label} idx[{i0}:{i1}] wall={float(wall):.2f}s", flush=True)
 
 
 def collect_multigpu_block_results(
@@ -85,7 +90,14 @@ def collect_multigpu_block_results(
             except Empty:
                 return n
             apply_multigpu_result_message(
-                msg, cube, completed, errors, nphi=nphi, ne=ne, is_oom=is_oom
+                msg,
+                cube,
+                completed,
+                errors,
+                nphi=nphi,
+                ne=ne,
+                n_blocks=n_blocks,
+                is_oom=is_oom,
             )
             n += 1
 
@@ -109,16 +121,23 @@ def collect_multigpu_block_results(
                 for bi in missing:
                     i0 = int(blocks[bi][1])
                     err = (
-                        f"GPU worker died without result for θ-block {bi} "
+                        f"GPU worker died without result for θ-block {bi + 1}/{n_blocks} "
                         f"idx[{i0}:?] (avoid infinite Queue.get hang)"
                     )
                     errors.append((bi, i0, err))
                     completed.add(bi)
-                    print(f"  GPU block {bi} ERROR: {err}", flush=True)
+                    print(f"  GPU block {bi + 1}/{n_blocks} ERROR: {err}", flush=True)
                 break
 
             apply_multigpu_result_message(
-                msg, cube, completed, errors, nphi=nphi, ne=ne, is_oom=is_oom
+                msg,
+                cube,
+                completed,
+                errors,
+                nphi=nphi,
+                ne=ne,
+                n_blocks=n_blocks,
+                is_oom=is_oom,
             )
     finally:
         if terminate_procs:
