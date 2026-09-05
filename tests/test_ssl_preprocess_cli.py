@@ -6,11 +6,7 @@ import numpy as np
 import pytest
 
 from tensorspec.core.io.loaders.maestro.lazy import open_maestro
-from tensorspec.core.ml.ssl.calibrate import (
-    DEG_PER_RAW_PX,
-    resample_disp2d,
-    slit_axis_degrees,
-)
+from tensorspec.core.ml.ssl.calibrate import resample_disp2d
 from tensorspec.core.ml.ssl.cli import main
 from tensorspec.core.ml.ssl.preprocess import _estimate_stats, preprocess_file
 from tensorspec.core.ml.ssl.shards import ShardDataset
@@ -69,6 +65,7 @@ def test_preprocess_disp2d_end_to_end(tmp_path):
     assert len(source["sha256_head"]) == 64
     assert len(source["sha256_tail"]) == 64
     assert source["calibration"]["deg_per_raw_px"] > 0
+    assert source["calibration"]["axis_source"] == "descriptor"
     assert all("id" not in entry for entry in manifest["samples"])
 
 
@@ -119,12 +116,8 @@ def test_slit_trim_uses_same_calibrated_degree_axis_as_resampling(tmp_path):
 
     with open_maestro(str(src)) as descriptor:
         frame = descriptor.read_block(0)
-        full_slit = slit_axis_degrees(
-            9,
-            scale_offset=0.0,
-            scale_delta=1.0,
-            deg_per_raw_px=DEG_PER_RAW_PX[("R4000", "Angular30")],
-        )
+        # Prefer the loader's degree axis (same source preprocess uses).
+        full_slit = np.asarray(descriptor.axes[-1], dtype=np.float64)
         keep = np.flatnonzero((full_slit >= -0.06) & (full_slit <= 0.06))
         slit_slice = slice(int(keep[0]), int(keep[-1]) + 1)
         trimmed = frame[:, slit_slice].astype(np.float64)
@@ -140,6 +133,17 @@ def test_slit_trim_uses_same_calibrated_degree_axis_as_resampling(tmp_path):
 
     actual, _ = ShardDataset(str(out))[0]
     np.testing.assert_allclose(actual, expected, rtol=2e-3, atol=2e-3)
+
+
+def test_preprocess_refuses_existing_out_dir_without_overwrite(tmp_path):
+    src = tmp_path / "f5.h5"
+    _write_focus_xy_fine_h5(src, nx=1, ny=1, n_defl=1, n_e=4, n_a=4)
+    out = tmp_path / "ds"
+    preprocess_file(str(src), str(out), _config("disp2d"))
+    with pytest.raises(FileExistsError, match="overwrite"):
+        preprocess_file(str(src), str(out), _config("disp2d"))
+    preprocess_file(str(src), str(out), _config("disp2d"), overwrite=True)
+    assert len(ShardDataset(str(out))) == 1
 
 
 def test_norm_subsample_is_seeded_and_respects_scan_axis_trims():

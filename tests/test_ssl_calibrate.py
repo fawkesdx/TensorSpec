@@ -2,6 +2,7 @@
 
 import numpy as np
 
+from tensorspec.core.io.loaders.maestro.detector import PIXEL_ANGLE_STEP
 from tensorspec.core.ml.ssl.calibrate import (
     DEG_PER_RAW_PX,
     resample_disp2d,
@@ -9,6 +10,10 @@ from tensorspec.core.ml.ssl.calibrate import (
     slit_axis_degrees,
 )
 from tensorspec.core.ml.ssl.spec import ResampleSpec
+
+
+def test_deg_per_raw_px_matches_maestro_loader_constant():
+    assert DEG_PER_RAW_PX[("R4000", "Angular30")] == PIXEL_ANGLE_STEP
 
 
 def test_slit_axis_degrees_is_monotonic_and_centred():

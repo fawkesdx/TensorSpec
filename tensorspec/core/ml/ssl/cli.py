@@ -32,6 +32,11 @@ def _parser() -> argparse.ArgumentParser:
     preprocess.add_argument(
         "--config", help="JSON PreprocessConfig; defaults used if omitted"
     )
+    preprocess.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace an existing shard dataset in --out",
+    )
     return parser
 
 
@@ -52,7 +57,12 @@ def _config(path: str | None, mode: str) -> PreprocessConfig:
 def main(argv=None) -> int:
     args = _parser().parse_args(argv)
     if args.cmd == "preprocess":
-        preprocess_file(args.input, args.out, _config(args.config, args.mode))
+        preprocess_file(
+            args.input,
+            args.out,
+            _config(args.config, args.mode),
+            overwrite=args.overwrite,
+        )
         return 0
     raise AssertionError(f"unhandled command {args.cmd!r}")
 

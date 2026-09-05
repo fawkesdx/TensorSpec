@@ -88,14 +88,29 @@ def _detector_calibration(descriptor, config: PreprocessConfig) -> dict:
 
 
 def _slit_axis(descriptor, calibration: dict) -> np.ndarray:
+    """Return slit axis in degrees, preferring the loader's calibrated axis.
+
+    Lazy/eager Maestro loaders already convert pixel slit axes to degrees with
+    ``PIXEL_ANGLE_STEP``. Re-deriving from raw HDF5 ``unitNames``/scale attrs
+    with a different constant silently disagrees with ``descriptor.axes``.
+    """
     slit_dimension = next(
         index
         for index, label in enumerate(descriptor.labels)
         if role_for_label(label) == "slit"
     )
-    source_axis = np.asarray(descriptor.axes[slit_dimension])
-    if "pixel" not in calibration["angle_unit"].casefold():
+    source_axis = np.asarray(descriptor.axes[slit_dimension], dtype=np.float64)
+    unit = ""
+    if slit_dimension < len(descriptor.units):
+        unit = str(descriptor.units[slit_dimension])
+    if "pixel" not in unit.casefold():
+        calibration["axis_source"] = "descriptor"
+        if source_axis.size > 1:
+            calibration["deg_per_raw_px"] = float(
+                np.median(np.abs(np.diff(source_axis)))
+            )
         return source_axis
+    calibration["axis_source"] = "raw_attrs"
     return slit_axis_degrees(
         source_axis.size,
         calibration["scale_offset"],
@@ -310,6 +325,26 @@ def _add_fermi3d_samples(
             progress(sample_index + 1, mode.n_samples)
 
 
+def _assert_out_dir_available(out_dir: str, *, overwrite: bool) -> None:
+    """Refuse to clobber an existing shard dataset unless overwrite=True."""
+    path = Path(out_dir)
+    if not path.exists():
+        return
+    existing = sorted(path.glob("shard_*.npy"))
+    if (path / "manifest.json").exists():
+        existing.append(path / "manifest.json")
+    if not existing:
+        return
+    if overwrite:
+        return
+    raise FileExistsError(
+        f"output directory {path} already contains a shard dataset "
+        f"({existing[0].name}"
+        + (f" and {len(existing) - 1} more" if len(existing) > 1 else "")
+        + "); pass overwrite=True / --overwrite to replace"
+    )
+
+
 def preprocess_file(
     path: str,
     out_dir: str,
@@ -317,13 +352,14 @@ def preprocess_file(
     *,
     source_id: str | None = None,
     progress: Callable[[int, int], None] | None = None,
+    overwrite: bool = False,
 ) -> dict:
     """Stream one Maestro file through trim, normalize, resample, and shards."""
     source_path = Path(path)
     source_name = source_id or source_path.name
     if Path(source_name).is_absolute():
         raise ValueError("source_id must not be an absolute path")
-
+    _assert_out_dir_available(out_dir, overwrite=overwrite)
     with open_maestro(str(source_path)) as descriptor:
         modes = {
             mode.name: mode

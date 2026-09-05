@@ -5,10 +5,13 @@ from __future__ import annotations
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 
+from tensorspec.core.io.loaders.maestro.detector import PIXEL_ANGLE_STEP
 from tensorspec.core.ml.ssl.spec import ResampleSpec
 
+# Must match Maestro loader pixel→degree conversion (detector.PIXEL_ANGLE_STEP).
+# The earlier 30/1260 placeholder disagreed with the loader by ~2× and is retired.
 DEG_PER_RAW_PX = {
-    ("R4000", "Angular30"): 30.0 / 1260.0,
+    ("R4000", "Angular30"): PIXEL_ANGLE_STEP,
 }
 
 

@@ -3,7 +3,10 @@ from __future__ import annotations
 import h5py
 import numpy as np
 
-_PIXEL_ANGLE_STEP = 0.048
+# Scienta R4000 Angular30: degrees per detector pixel (binning=1).
+# Used whenever Fixed Spectra unitNames report the slit axis in pixels.
+PIXEL_ANGLE_STEP = 0.048
+_PIXEL_ANGLE_STEP = PIXEL_ANGLE_STEP  # backward-compatible alias
 
 
 def fixed_detector_axes_for_plane(
