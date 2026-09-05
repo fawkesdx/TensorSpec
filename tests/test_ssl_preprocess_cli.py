@@ -4,8 +4,14 @@ import json
 
 import numpy as np
 
+from tensorspec.core.io.loaders.maestro.lazy import open_maestro
+from tensorspec.core.ml.ssl.calibrate import (
+    DEG_PER_RAW_PX,
+    resample_disp2d,
+    slit_axis_degrees,
+)
 from tensorspec.core.ml.ssl.cli import main
-from tensorspec.core.ml.ssl.preprocess import preprocess_file
+from tensorspec.core.ml.ssl.preprocess import _estimate_stats, preprocess_file
 from tensorspec.core.ml.ssl.shards import ShardDataset
 from tensorspec.core.ml.ssl.spec import (
     NormSpec,
@@ -81,6 +87,83 @@ def test_preprocess_fermi3d_stacks_each_spatial_point(tmp_path):
     assert sample.dtype == np.float16
     assert metadata["index"] == {"y": 0, "x": 0}
     assert dataset[-1][1]["index"] == {"y": 1, "x": 1}
+
+
+def test_slit_trim_uses_same_calibrated_degree_axis_as_resampling(tmp_path):
+    src = tmp_path / "f5.h5"
+    _write_focus_xy_fine_h5(
+        src, nx=1, ny=1, n_defl=2, n_e=8, n_a=9
+    )
+    out = tmp_path / "ds"
+    config = _config("disp2d")
+    config.trim.ranges["slit"] = (-0.06, 0.06)
+    config.norm.clip_percentiles = (0.0, 100.0)
+    config.resample.energy_size = 8
+    config.resample.slit_size = 7
+
+    preprocess_file(str(src), str(out), config)
+
+    with open_maestro(str(src)) as descriptor:
+        frame = descriptor.read_block(0)
+        full_slit = slit_axis_degrees(
+            9,
+            scale_offset=0.0,
+            scale_delta=1.0,
+            deg_per_raw_px=DEG_PER_RAW_PX[("R4000", "Angular30")],
+        )
+        keep = np.flatnonzero((full_slit >= -0.06) & (full_slit <= 0.06))
+        slit_slice = slice(int(keep[0]), int(keep[-1]) + 1)
+        trimmed = frame[:, slit_slice].astype(np.float64)
+        normalized = (trimmed - trimmed.min()) / (
+            trimmed.max() - trimmed.min()
+        )
+        expected = resample_disp2d(
+            normalized,
+            descriptor.axes[-2],
+            full_slit[slit_slice],
+            config.resample,
+        ).astype(np.float16)
+
+    actual, _ = ShardDataset(str(out))[0]
+    np.testing.assert_allclose(actual, expected, rtol=2e-3, atol=2e-3)
+
+
+def test_norm_subsample_is_seeded_and_respects_scan_axis_trims():
+    class RecordingDescriptor:
+        labels = ["Y", "X", "Slit Defl.", "Energy", "Angle"]
+        shape = (2, 2, 3, 2, 2)
+
+        def __init__(self):
+            self.indices = []
+
+        def read_block(self, index):
+            self.indices.append(index)
+            return np.full((2, 2), index + 1, dtype=np.float32)
+
+    descriptor = RecordingDescriptor()
+    config = _config("fermi3d")
+    config.seed = 17
+    config.norm.subsample_points = 3
+    scan_slices = {
+        "y": slice(None),
+        "x": slice(1, 2),
+        "defl": slice(1, 3),
+        "energy": slice(None),
+        "slit": slice(None),
+    }
+    eligible = np.array([4, 5, 10, 11])
+    expected = np.random.default_rng(17).choice(
+        eligible, size=3, replace=False
+    )
+
+    _estimate_stats(descriptor, scan_slices, config)
+
+    assert descriptor.indices == expected.tolist()
+    for index in descriptor.indices:
+        y, x, defl = np.unravel_index(index, descriptor.shape[:-2])
+        assert y in (0, 1)
+        assert x == 1
+        assert defl in (1, 2)
 
 
 def test_cli_preprocess_loads_json_config_and_overrides_mode(tmp_path):

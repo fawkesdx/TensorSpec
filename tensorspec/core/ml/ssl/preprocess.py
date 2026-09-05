@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+from itertools import product
 from pathlib import Path
 from typing import Callable
 
@@ -103,29 +104,63 @@ def _slit_axis(descriptor, calibration: dict) -> np.ndarray:
     )
 
 
-def _trimmed_axes(descriptor, config: PreprocessConfig):
+def _trimmed_axes(
+    descriptor,
+    config: PreprocessConfig,
+    calibration: dict,
+):
+    calibrated_axes = list(descriptor.axes)
+    slit_dimension = next(
+        index
+        for index, label in enumerate(descriptor.labels)
+        if role_for_label(label) == "slit"
+    )
+    calibrated_axes[slit_dimension] = _slit_axis(descriptor, calibration)
     trim = apply_trim(
         descriptor.labels,
-        descriptor.axes,
+        calibrated_axes,
         descriptor.shape,
         config.trim,
     )
     axes_by_role = {
         role_for_label(label): np.asarray(axis)
-        for label, axis in zip(descriptor.labels, descriptor.axes)
+        for label, axis in zip(descriptor.labels, calibrated_axes)
     }
     return trim, axes_by_role
 
 
+def _eligible_scan_indices(descriptor, slices: dict) -> np.ndarray:
+    scan_shape = descriptor.shape[:-2]
+    scan_roles = tuple(
+        role_for_label(label) for label in descriptor.labels[:-2]
+    )
+    coordinate_ranges = [
+        range(*slices.get(role, slice(None)).indices(size))
+        for role, size in zip(scan_roles, scan_shape)
+    ]
+    return np.asarray(
+        [
+            np.ravel_multi_index(coordinates, scan_shape)
+            for coordinates in product(*coordinate_ranges)
+        ],
+        dtype=np.int64,
+    )
+
+
 def _estimate_stats(
     descriptor,
-    energy_slice: slice,
-    slit_slice: slice,
+    slices: dict,
     config: PreprocessConfig,
 ) -> FileNormStats:
-    n_frames = int(np.prod(descriptor.shape[:-2]))
-    count = min(n_frames, max(1, config.norm.subsample_points))
-    indices = np.unique(np.linspace(0, n_frames - 1, count, dtype=int))
+    eligible = _eligible_scan_indices(descriptor, slices)
+    count = min(eligible.size, max(1, config.norm.subsample_points))
+    indices = np.random.default_rng(config.seed).choice(
+        eligible,
+        size=count,
+        replace=False,
+    )
+    energy_slice = slices["energy"]
+    slit_slice = slices["slit"]
     frames = np.stack(
         [
             descriptor.read_block(int(index))[energy_slice, slit_slice]
@@ -303,17 +338,20 @@ def preprocess_file(
             config,
             sample=replace(config.sample, index_roles=mode.index_roles),
         )
-        trim, axes_by_role = _trimmed_axes(descriptor, effective_config)
+        calibration = _detector_calibration(descriptor, effective_config)
+        trim, axes_by_role = _trimmed_axes(
+            descriptor,
+            effective_config,
+            calibration,
+        )
         energy_slice = trim.slices["energy"]
         slit_slice = trim.slices["slit"]
         defl_slice = trim.slices.get("defl", slice(None))
-        calibration = _detector_calibration(descriptor, effective_config)
         energy_axis = axes_by_role["energy"][energy_slice]
-        slit_axis = _slit_axis(descriptor, calibration)[slit_slice]
+        slit_axis = axes_by_role["slit"][slit_slice]
         stats = _estimate_stats(
             descriptor,
-            energy_slice,
-            slit_slice,
+            trim.slices,
             effective_config,
         )
 
