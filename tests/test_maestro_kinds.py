@@ -163,7 +163,7 @@ def test_xy_fine_4d_load_points_first(tmp_path):
     assert result["labels"] == ["Y", "X", "Energy", "Angle"]
 
 
-def test_xy_fine_4d_aborted_scan_flattens_completed_points(tmp_path):
+def test_xy_fine_4d_aborted_scan_recovers_completed_rows(tmp_path):
     path = tmp_path / "xy_fine_aborted.h5"
     nx, ny, actual, n_e, n_a = 3, 2, 5, 4, 3
     _write_xy_fine_h5(path, points_last=False, nx=nx, ny=ny, n_e=n_e, n_a=n_a)
@@ -178,11 +178,16 @@ def test_xy_fine_4d_aborted_scan_flattens_completed_points(tmp_path):
     with h5py.File(path, "r") as f:
         result = load_with_kind(f, str(path))
 
-    assert result["data"].shape == (actual, n_e, n_a)
-    assert result["labels"] == ["Point", "Energy", "Angle"]
+    assert result["data"].shape == (1, nx, n_e, n_a)
+    assert result["labels"] == ["Y", "X", "Energy", "Angle"]
     assert result["metadata"]["scan_plan"]["expected_cycles"] == nx * ny
     assert result["metadata"]["scan_plan"]["actual_cycles"] == actual
-    assert "truncated from 6 to 5" in result["metadata"]["truncate_warning"]
+    assert result["metadata"]["partial_scan"] == {
+        "expected": nx * ny,
+        "actual": actual,
+        "kept_rows": 1,
+    }
+    assert "truncate_warning" not in result["metadata"]
 
 
 def test_points_axis_rejects_two_truncated_candidates():
@@ -206,11 +211,17 @@ def test_header_num_cycles_identifies_aborted_scan_axis(tmp_path):
     with h5py.File(path, "r") as f:
         result = load_with_kind(f, str(path))
 
-    assert result["data"].shape == (5, 4, 3)
+    assert result["data"].shape == (1, 3, 4, 3)
+    assert result["labels"] == ["Y", "X", "Energy", "Angle"]
     assert result["metadata"]["scan_plan"]["expected_cycles"] == 6
     assert result["metadata"]["scan_plan"]["actual_cycles"] == 5
     assert result["metadata"]["scan_plan"]["num_cycles"] == 5
-    assert "truncated from 6 to 5" in result["metadata"]["truncate_warning"]
+    assert result["metadata"]["partial_scan"] == {
+        "expected": 6,
+        "actual": 5,
+        "kept_rows": 1,
+    }
+    assert "truncate_warning" not in result["metadata"]
 
 
 def test_header_num_cycles_mismatch_rejects_unknown_dataset_length(tmp_path):
