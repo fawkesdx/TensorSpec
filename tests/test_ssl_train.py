@@ -16,6 +16,7 @@ from tensorspec.core.ml.ssl.spec import (
 )
 from tensorspec.core.ml.ssl.train import (
     _average_loss_centers,
+    _data_loader_workers,
     _remaining_batches,
     _resume_position,
     _schedule_values,
@@ -128,6 +129,12 @@ def test_resume_position_skips_completed_batches() -> None:
         "batch-1",
         "batch-2",
     ]
+
+
+def test_single_process_resume_disables_data_loader_workers() -> None:
+    assert _data_loader_workers(2, resume=True, distributed=False) == 0
+    assert _data_loader_workers(2, resume=False, distributed=False) == 2
+    assert _data_loader_workers(2, resume=True, distributed=True) == 2
 
 
 def test_warmup_and_cosine_schedules_hit_endpoints() -> None:

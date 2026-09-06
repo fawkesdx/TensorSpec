@@ -60,6 +60,13 @@ def _resume_position(step: int, steps_per_epoch: int) -> tuple[int, int]:
     return divmod(step, steps_per_epoch)
 
 
+def _data_loader_workers(
+    configured_workers: int, *, resume: bool, distributed: bool
+) -> int:
+    # Keep single-process resume independent of prefetched worker queues.
+    return 0 if resume and not distributed else configured_workers
+
+
 def _remaining_batches(
     batches: Iterable[_Batch], completed_batches: int
 ) -> Iterator[_Batch]:
@@ -241,7 +248,11 @@ def train(
             batch_size=config.optim.batch_size,
             shuffle=sampler is None,
             sampler=sampler,
-            num_workers=config.num_workers,
+            num_workers=_data_loader_workers(
+                config.num_workers,
+                resume=resume is not None,
+                distributed=distributed,
+            ),
             drop_last=False,
             collate_fn=_collate_views,
             generator=loader_generator,
