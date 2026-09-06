@@ -5,6 +5,7 @@ from tensorspec.core.ml.ssl.dino import (
     DinoLoss,
     DinoModel,
     KoLeoLoss,
+    _patch_mask,
     dino_total_loss,
     gram_loss,
     update_teacher,
@@ -76,3 +77,21 @@ def test_koleo_is_finite_and_gram_defaults_off():
     assert loss.ndim == 0
     assert torch.isfinite(loss)
     assert gram_loss(features, gram_enabled=False).item() == 0.0
+
+
+def test_ibot_mask_token_receives_backbone_gradient():
+    torch.manual_seed(7)
+    model, spec = _tiny_dino()
+    views = [torch.randn(3, 1, 32, 32) for _ in range(2)]
+    loss, _ = dino_total_loss(model, views, spec, mask_ratio=0.5)
+    loss.backward()
+    gradient = model.student.mask_token.grad
+    assert gradient is not None
+    assert torch.count_nonzero(gradient).item() > 0
+
+
+def test_ibot_masks_random_positions_per_sample():
+    torch.manual_seed(11)
+    mask = _patch_mask(4, 16, 0.5, torch.device("cpu"))
+    assert mask.sum(dim=1).tolist() == [8, 8, 8, 8]
+    assert len({tuple(row.tolist()) for row in mask}) > 1

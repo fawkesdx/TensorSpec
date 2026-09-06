@@ -187,11 +187,15 @@ class DinoModel(nn.Module):
         return head(cls)
 
     def forward_ibot(
-        self, x: torch.Tensor, *, teacher: bool = False
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor | None = None,
+        *,
+        teacher: bool = False,
     ) -> torch.Tensor:
         backbone = self.teacher if teacher else self.student
         head = self.teacher_ibot_head if teacher else self.student_ibot_head
-        _, patches = backbone.forward_features(x)
+        _, patches = backbone.forward_features(x, mask=mask)
         return head(patches)
 
     def student_parameters(self) -> Iterable[nn.Parameter]:
@@ -269,7 +273,8 @@ def _patch_mask(
     selected = min(patch_count, max(0, round(patch_count * ratio)))
     mask = torch.zeros(batch_size, patch_count, dtype=torch.bool, device=device)
     if selected:
-        mask[:, :selected] = True
+        random_order = torch.rand(batch_size, patch_count, device=device).argsort(dim=1)
+        mask.scatter_(1, random_order[:, :selected], True)
     return mask
 
 
@@ -287,13 +292,14 @@ def dino_total_loss(
 
     student_global: list[torch.Tensor] = []
     student_cls: list[torch.Tensor] = []
-    student_patches: list[torch.Tensor] = []
+    student_global_views: list[torch.Tensor] = []
     for view in views:
         resized = _resize_for_backbone(view, model.student)
-        cls, patches = model.student.forward_features(resized)
+        cls, _ = model.student.forward_features(resized)
         student_global.append(model.student_head(cls))
         student_cls.append(cls)
-        student_patches.append(patches)
+        if len(student_global_views) < 2:
+            student_global_views.append(resized)
 
     teacher_global: list[torch.Tensor] = []
     teacher_patches: list[torch.Tensor] = []
@@ -318,11 +324,14 @@ def dino_total_loss(
 
     ibot_students: list[torch.Tensor] = []
     ibot_teachers: list[torch.Tensor] = []
-    for patches, teacher_logits in zip(student_patches[:2], teacher_patches):
+    for view, teacher_logits in zip(student_global_views, teacher_patches):
         mask = _patch_mask(
-            patches.shape[0], patches.shape[1], mask_ratio, patches.device
+            teacher_logits.shape[0],
+            teacher_logits.shape[1],
+            mask_ratio,
+            teacher_logits.device,
         )
-        masked_patches = patches.masked_fill(mask.unsqueeze(-1), 0.0)
+        _, masked_patches = model.student.forward_features(view, mask=mask)
         student_logits = model.student_ibot_head(masked_patches)
         ibot_students.append(student_logits[mask])
         ibot_teachers.append(teacher_logits[mask])

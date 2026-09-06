@@ -91,6 +91,7 @@ class ViT2D(nn.Module):
             in_chans, embed_dim, kernel_size=patch_size, stride=patch_size
         )
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, 1 + self.num_patches, embed_dim))
         self.blocks = nn.ModuleList(
             Block(embed_dim, num_heads, mlp_ratio) for _ in range(depth)
@@ -101,6 +102,7 @@ class ViT2D(nn.Module):
     def _init_weights(self) -> None:
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
         nn.init.trunc_normal_(self.cls_token, std=0.02)
+        nn.init.trunc_normal_(self.mask_token, std=0.02)
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.trunc_normal_(module.weight, std=0.02)
@@ -116,10 +118,17 @@ class ViT2D(nn.Module):
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
 
-    def forward_features(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward_features(
+        self, x: torch.Tensor, mask: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return (cls_token[B,D], patch_tokens[B,N,D]) before any DINO head."""
         b = x.shape[0]
         x = self.patch_embed(x).flatten(2).transpose(1, 2)
+        if mask is not None:
+            if mask.shape != x.shape[:2] or mask.dtype != torch.bool:
+                raise ValueError("mask must be bool tensor shaped [B, N]")
+            mask_tokens = self.mask_token.expand(b, x.shape[1], -1)
+            x = torch.where(mask.unsqueeze(-1), mask_tokens, x)
         cls = self.cls_token.expand(b, -1, -1)
         x = torch.cat([cls, x], dim=1)
         x = x + self.pos_embed
