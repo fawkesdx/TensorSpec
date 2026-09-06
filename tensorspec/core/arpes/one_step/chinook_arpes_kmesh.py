@@ -313,19 +313,19 @@ def physics_from_experiment_kwargs(experiment_kwargs: Mapping[str, Any]) -> Dict
 
 
 def _bare_intensity(ctx) -> np.ndarray:
+    """Lorentzian spectral weight only — no Fermi–Dirac cutoff.
+
+    Occupied-state cutoff belongs on real ME / Chinook–Grizzly ``spectral()``
+    paths, not bare-band visualization.
+    """
     exp = ctx["exp"]
     energy_axis = ctx["energy_axis"]
     num_x, num_y, num_e = ctx["num_x"], ctx["num_y"], ctx["num_e"]
     se_width = ctx["se_width"]
-    T = ctx["T"]
     gamma = se_width / 2.0
     diff = exp.val[:, :, np.newaxis] - energy_axis[np.newaxis, np.newaxis, :]
     spectral_weight = (gamma / np.pi) / (diff**2 + gamma**2)
     intensity_flat = np.sum(spectral_weight, axis=1)
-    kb_ev = 8.617333262e-5
-    exponent = np.clip(energy_axis / (kb_ev * T), -100.0, 100.0)
-    fermi_dirac = 1.0 / (np.exp(exponent) + 1.0)
-    intensity_flat = intensity_flat * fermi_dirac
     return intensity_flat.reshape((num_x, num_y, num_e), order="C")
 
 
