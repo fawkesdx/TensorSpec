@@ -14,10 +14,13 @@ from tensorspec.core.ml.ssl.spec import (
     NormSpec,
     PreprocessConfig,
     ResampleSpec,
+    RunConfig,
     SampleSpec,
     TrimSpec,
     preprocess_config_from_dict,
+    run_config_from_dict,
 )
+from tensorspec.core.ml.ssl.train import train
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -48,7 +51,28 @@ def _parser() -> argparse.ArgumentParser:
         "--source-id",
         help="manifest source id (default: input basename)",
     )
+    train_parser = subparsers.add_parser(
+        "train", help="run stage-1 DINO training from shard dataset"
+    )
+    train_parser.add_argument(
+        "--config", required=True, help="JSON RunConfig path"
+    )
+    train_parser.add_argument(
+        "--data", required=True, help="shard dataset directory"
+    )
+    train_parser.add_argument(
+        "--out", required=True, help="training output directory"
+    )
+    train_parser.add_argument(
+        "--resume",
+        help="checkpoint path to resume from",
+    )
     return parser
+
+
+def _run_config(path: str) -> RunConfig:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return run_config_from_dict(payload)
 
 
 def _config(path: str | None, mode: str) -> PreprocessConfig:
@@ -106,6 +130,20 @@ def main(argv=None) -> int:
         print(
             f"done {label}: total_samples={manifest['total_samples']} "
             f"sources={len(manifest['sources'])}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 0
+    if args.cmd == "train":
+        summary = train(
+            _run_config(args.config),
+            args.data,
+            args.out,
+            resume=args.resume,
+        )
+        print(
+            f"done train: steps={summary['steps']} epoch={summary['epoch']} "
+            f"last_loss={summary['last_loss']}",
             file=sys.stderr,
             flush=True,
         )
