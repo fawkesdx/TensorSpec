@@ -1,0 +1,78 @@
+import torch
+
+from tensorspec.core.ml.ssl.dino import (
+    DINOHead,
+    DinoLoss,
+    DinoModel,
+    KoLeoLoss,
+    dino_total_loss,
+    gram_loss,
+    update_teacher,
+)
+from tensorspec.core.ml.ssl.models.vit2d import build_vit2d
+from tensorspec.core.ml.ssl.spec import DinoSpec, ModelSpec
+
+
+def _tiny_dino():
+    spec = DinoSpec(
+        out_dim=64,
+        hidden_dim=64,
+        bottleneck_dim=32,
+        ibot_weight=1.0,
+        koleo_weight=0.1,
+    )
+    student = build_vit2d(ModelSpec(name="vit_ti", img_size=32, patch_size=8))
+    teacher = build_vit2d(ModelSpec(name="vit_ti", img_size=32, patch_size=8))
+    teacher.load_state_dict(student.state_dict())
+    return DinoModel(student, teacher, spec), spec
+
+
+def test_one_step_decreases_loss():
+    torch.manual_seed(0)
+    model, spec = _tiny_dino()
+    opt = torch.optim.AdamW(model.student_parameters(), lr=1e-3)
+    views = [torch.randn(4, 1, 32, 32) for _ in range(2)]
+    model.train()
+    loss0, _ = dino_total_loss(
+        model, views, spec, teacher_temp=0.04, mask_ratio=0.3
+    )
+    loss0_value = loss0.item()
+    loss0.backward()
+    opt.step()
+    opt.zero_grad(set_to_none=True)
+    update_teacher(model, momentum=0.9)
+    loss1, _ = dino_total_loss(
+        model, views, spec, teacher_temp=0.04, mask_ratio=0.3
+    )
+    assert loss1.item() < loss0_value
+
+
+def test_ema_teacher_moves():
+    model, _ = _tiny_dino()
+    before = next(model.teacher.parameters()).detach().clone()
+    with torch.no_grad():
+        for parameter in model.student.parameters():
+            parameter.add_(0.1)
+    update_teacher(model, momentum=0.5)
+    after = next(model.teacher.parameters()).detach()
+    assert not torch.allclose(before, after)
+
+
+def test_heads_losses_and_center_use_float32():
+    spec = DinoSpec(out_dim=8, hidden_dim=16, bottleneck_dim=4)
+    head = DINOHead(6, spec)
+    logits = head(torch.randn(3, 6))
+    assert logits.shape == (3, 8)
+
+    loss_fn = DinoLoss(spec)
+    loss = loss_fn(logits.to(torch.bfloat16), logits.detach().to(torch.bfloat16))
+    assert loss.dtype == torch.float32
+    assert loss_fn.center.dtype == torch.float32
+
+
+def test_koleo_is_finite_and_gram_defaults_off():
+    features = torch.randn(4, 12)
+    loss = KoLeoLoss()(features)
+    assert loss.ndim == 0
+    assert torch.isfinite(loss)
+    assert gram_loss(features, gram_enabled=False).item() == 0.0
