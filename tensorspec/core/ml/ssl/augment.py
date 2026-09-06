@@ -225,18 +225,47 @@ def build_multi_crop(
     return views
 
 
+class MultiCropViews(list[torch.Tensor]):
+    """List-compatible crop result carrying source-sample validity."""
+
+    def __init__(self, views: list[torch.Tensor], *, valid: bool) -> None:
+        super().__init__(views)
+        self.valid = valid
+
+
 class MultiCropDataset(torch.utils.data.Dataset):
     def __init__(self, base, spec: AugmentSpec, seed: int = 0):
         self.base = base
         self.spec = spec
         self.seed = int(seed)
+        self.epoch = 0
 
     def __len__(self):
         return len(self.base)
 
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
     def __getitem__(self, index: int):
         sample, _meta = self.base[index]
         img = np.asarray(sample, dtype=np.float32)
-        rng = np.random.default_rng(self.seed + index * 1_000_003)
+        valid = bool(np.isfinite(img).all() and np.any(img))
+        if not valid:
+            sizes = [self.spec.global_size] * self.spec.n_global + [
+                self.spec.local_size
+            ] * self.spec.n_local
+            return MultiCropViews(
+                [
+                    torch.zeros((1, size, size), dtype=torch.float32)
+                    for size in sizes
+                ],
+                valid=False,
+            )
+        rng = np.random.default_rng(
+            np.random.SeedSequence([self.seed, int(index), self.epoch])
+        )
         views = build_multi_crop(img, self.spec, rng)
-        return [torch.from_numpy(v)[None, ...] for v in views]
+        return MultiCropViews(
+            [torch.from_numpy(v)[None, ...] for v in views],
+            valid=True,
+        )

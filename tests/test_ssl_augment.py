@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 import torch
 
-from tensorspec.core.ml.ssl.augment import build_multi_crop, apply_view
+from tensorspec.core.ml.ssl.augment import MultiCropDataset, apply_view, build_multi_crop
 from tensorspec.core.ml.ssl.spec import AugmentSpec
 
 
@@ -47,3 +47,45 @@ def test_a1_has_no_mirror_effect_on_marker():
     for v in views:
         # full-frame crop: left still brighter
         assert v[:, : v.shape[1] // 2].mean() > v[:, v.shape[1] // 2 :].mean()
+
+
+def test_multi_crop_dataset_changes_rng_each_epoch_but_remains_reproducible():
+    image = np.linspace(0, 1, 32 * 32, dtype=np.float32).reshape(32, 32)
+    base = [(image, {})]
+    spec = AugmentSpec(
+        arm="A1",
+        n_global=2,
+        n_local=0,
+        global_size=24,
+        global_crop_frac=0.75,
+    )
+    dataset = MultiCropDataset(base, spec, seed=17)
+
+    dataset.set_epoch(0)
+    epoch_zero = dataset[0]
+    dataset.set_epoch(1)
+    epoch_one = dataset[0]
+    dataset.set_epoch(0)
+    epoch_zero_again = dataset[0]
+
+    assert epoch_zero.valid and epoch_one.valid
+    assert not torch.equal(epoch_zero[0], epoch_one[0])
+    assert torch.equal(epoch_zero[0], epoch_zero_again[0])
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        np.zeros((16, 16), dtype=np.float32),
+        np.full((16, 16), np.nan, dtype=np.float32),
+    ],
+)
+def test_multi_crop_dataset_flags_invalid_source_samples(image):
+    dataset = MultiCropDataset(
+        [(image, {})],
+        AugmentSpec(arm="A1", n_global=2, n_local=0, global_size=16),
+    )
+
+    views = dataset[0]
+
+    assert not views.valid

@@ -95,3 +95,23 @@ def test_ibot_masks_random_positions_per_sample():
     mask = _patch_mask(4, 16, 0.5, torch.device("cpu"))
     assert mask.sum(dim=1).tolist() == [8, 8, 8, 8]
     assert len({tuple(row.tolist()) for row in mask}) > 1
+
+
+def test_configured_global_crop_count_controls_teacher_views():
+    torch.manual_seed(13)
+    model, spec = _tiny_dino()
+    teacher_calls = 0
+    original_forward = model.teacher.forward_features
+
+    def count_teacher_views(*args, **kwargs):
+        nonlocal teacher_calls
+        teacher_calls += 1
+        return original_forward(*args, **kwargs)
+
+    model.teacher.forward_features = count_teacher_views
+    views = [torch.randn(2, 1, 32, 32) for _ in range(4)]
+
+    loss, _ = dino_total_loss(model, views, spec, n_global=3, mask_ratio=0.5)
+
+    assert torch.isfinite(loss)
+    assert teacher_calls == 3

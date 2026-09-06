@@ -283,11 +283,12 @@ def dino_total_loss(
     views: list[torch.Tensor],
     spec: DinoSpec,
     *,
+    n_global: int = 2,
     teacher_temp: float = 0.04,
     mask_ratio: float = 0.3,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute global DINO, patch iBOT, KoLeo, and optional Gram losses."""
-    if len(views) < 2:
+    if n_global < 2 or len(views) < n_global:
         raise ValueError("DINO requires at least two global views")
 
     student_global: list[torch.Tensor] = []
@@ -298,13 +299,13 @@ def dino_total_loss(
         cls, _ = model.student.forward_features(resized)
         student_global.append(model.student_head(cls))
         student_cls.append(cls)
-        if len(student_global_views) < 2:
+        if len(student_global_views) < n_global:
             student_global_views.append(resized)
 
     teacher_global: list[torch.Tensor] = []
     teacher_patches: list[torch.Tensor] = []
     with torch.no_grad():
-        for view in views[:2]:
+        for view in views[:n_global]:
             resized = _resize_for_backbone(view, model.teacher)
             cls, patches = model.teacher.forward_features(resized)
             teacher_global.append(model.teacher_head(cls))

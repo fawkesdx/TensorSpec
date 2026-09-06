@@ -9,7 +9,9 @@ import os
 from pathlib import Path
 import random
 import subprocess
+import time
 from typing import Any, Callable, Iterable, Iterator, TypeVar
+import warnings
 
 import numpy as np
 import torch
@@ -20,7 +22,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 
-from tensorspec.core.ml.ssl.augment import MultiCropDataset
+from tensorspec.core.ml.ssl.augment import MultiCropDataset, MultiCropViews
 from tensorspec.core.ml.ssl.dino import DinoModel, dino_total_loss, update_teacher
 from tensorspec.core.ml.ssl.models.vit2d import build_vit2d
 from tensorspec.core.ml.ssl.shards import ShardDataset
@@ -44,16 +46,22 @@ class _LossModule(nn.Module):
             self.model,
             views,
             self.config.dino,
+            n_global=self.config.augment.n_global,
             teacher_temp=teacher_temp,
             mask_ratio=self.config.dino.ibot_mask_ratio,
         )
 
 
-def _collate_views(samples: list[list[torch.Tensor]]) -> list[torch.Tensor]:
-    return [
-        torch.stack([sample[view_index] for sample in samples])
-        for view_index in range(len(samples[0]))
-    ]
+def _collate_views(
+    samples: list[MultiCropViews],
+) -> tuple[list[torch.Tensor], int]:
+    return (
+        [
+            torch.stack([sample[view_index] for sample in samples])
+            for view_index in range(len(samples[0]))
+        ],
+        sum(not sample.valid for sample in samples),
+    )
 
 
 def _resume_position(step: int, steps_per_epoch: int) -> tuple[int, int]:
@@ -87,6 +95,20 @@ def _average_loss_centers(
     for loss_module in (model.dino_loss, model.ibot_loss):
         reduce(loss_module.center)
         loss_module.center.div_(world_size)
+
+
+def _synchronize_bad_count(
+    local_count: int,
+    device: torch.device,
+    *,
+    world_size: int,
+    all_reduce: Callable[[torch.Tensor], Any] | None = None,
+) -> int:
+    count = torch.tensor(local_count, dtype=torch.long, device=device)
+    if world_size > 1:
+        reduce = dist.all_reduce if all_reduce is None else all_reduce
+        reduce(count)
+    return int(count.item())
 
 
 def _cosine(start: float, end: float, progress: float) -> float:
@@ -168,6 +190,91 @@ def _save_checkpoint(
     torch.save(checkpoint, temporary)
     temporary.replace(path)
     return checkpoint
+
+
+def _checkpoint_candidates(path: Path) -> list[Path]:
+    candidates = [path]
+    requested_step: int | None = None
+    if path.stem.startswith("step_"):
+        try:
+            requested_step = int(path.stem.removeprefix("step_"))
+        except ValueError:
+            requested_step = None
+    step_paths: list[tuple[int, Path]] = []
+    for candidate in path.parent.glob("step_*.pt"):
+        try:
+            candidate_step = int(candidate.stem.removeprefix("step_"))
+        except ValueError:
+            continue
+        if requested_step is None or candidate_step < requested_step:
+            step_paths.append((candidate_step, candidate))
+    for _step, candidate in sorted(step_paths, reverse=True):
+        if candidate != path:
+            candidates.append(candidate)
+    return candidates
+
+
+def _validate_checkpoint(checkpoint: Any, model: nn.Module) -> None:
+    required = {
+        "step",
+        "epoch",
+        "model",
+        "optimizer",
+        "scaler",
+        "config",
+        "seed",
+        "git_commit",
+    }
+    if not isinstance(checkpoint, dict) or not required.issubset(checkpoint):
+        raise ValueError("checkpoint is missing required fields")
+    if not isinstance(checkpoint["step"], int) or checkpoint["step"] < 0:
+        raise ValueError("checkpoint step is invalid")
+    saved_state = checkpoint["model"]
+    current_state = model.state_dict()
+    if not isinstance(saved_state, dict) or saved_state.keys() != current_state.keys():
+        raise ValueError("checkpoint model keys do not match")
+    if any(
+        not isinstance(saved_state[name], torch.Tensor)
+        or saved_state[name].shape != tensor.shape
+        for name, tensor in current_state.items()
+    ):
+        raise ValueError("checkpoint model tensor shapes do not match")
+    if not isinstance(checkpoint["optimizer"], dict) or not isinstance(
+        checkpoint["scaler"], dict
+    ):
+        raise ValueError("checkpoint optimizer or scaler state is invalid")
+
+
+def _load_resume_checkpoint(
+    resume: str | Path,
+    *,
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    scaler: torch.amp.GradScaler,
+    device: torch.device,
+) -> tuple[dict[str, Any], Path]:
+    requested = Path(resume)
+    failures: list[str] = []
+    for candidate in _checkpoint_candidates(requested):
+        try:
+            checkpoint = torch.load(
+                candidate, map_location=device, weights_only=False
+            )
+            _validate_checkpoint(checkpoint, model)
+            model.load_state_dict(checkpoint["model"])
+            optimizer.load_state_dict(checkpoint["optimizer"])
+            scaler.load_state_dict(checkpoint["scaler"])
+            if candidate != requested:
+                warnings.warn(
+                    f"resume checkpoint {requested} is invalid; using {candidate}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+            return checkpoint, candidate
+        except Exception as error:
+            failures.append(f"{candidate}: {error}")
+    detail = "; ".join(failures)
+    raise RuntimeError(f"no valid resume checkpoint found ({detail})")
 
 
 def _device_and_ddp() -> tuple[torch.device, bool, int, int, bool]:
@@ -280,10 +387,13 @@ def train(
 
         step = 0
         if resume is not None:
-            checkpoint = torch.load(resume, map_location=device, weights_only=False)
-            model.load_state_dict(checkpoint["model"])
-            optimizer.load_state_dict(checkpoint["optimizer"])
-            scaler.load_state_dict(checkpoint["scaler"])
+            checkpoint, _loaded_checkpoint = _load_resume_checkpoint(
+                resume,
+                model=model,
+                optimizer=optimizer,
+                scaler=scaler,
+                device=device,
+            )
             step = int(checkpoint["step"])
         epoch, completed_batches = _resume_position(step, steps_per_epoch)
 
@@ -295,28 +405,25 @@ def train(
             loss_module = DistributedDataParallel(loss_module, **ddp_kwargs)
 
         last_loss: float | None = None
+        skipped_batches = 0
+        bad_samples = 0
+        nonfinite_losses = 0
+        samples_since_log = 0
+        log_started = time.perf_counter()
+        if device.type == "cuda":
+            torch.cuda.reset_peak_memory_stats(device)
         while step < total_steps:
+            dataset.set_epoch(epoch)
             if sampler is not None:
                 sampler.set_epoch(epoch)
             else:
                 loader_generator.manual_seed(config.seed + epoch)
-            for views in _remaining_batches(loader, completed_batches):
+            for views, local_bad_samples in _remaining_batches(
+                loader, completed_batches
+            ):
                 if step >= total_steps:
                     break
-                views = [
-                    F.interpolate(
-                        view.to(device),
-                        size=(config.model.img_size, config.model.img_size),
-                        mode="bilinear",
-                        align_corners=False,
-                    )
-                    if view.shape[-2:] != (
-                        config.model.img_size,
-                        config.model.img_size,
-                    )
-                    else view.to(device)
-                    for view in views
-                ]
+                samples_since_log += views[0].shape[0] * world_size
                 lr, weight_decay, momentum, teacher_temp = _schedule_values(
                     config, step, steps_per_epoch, total_steps
                 )
@@ -324,28 +431,80 @@ def train(
                     group["lr"] = lr
                     group["weight_decay"] = weight_decay
 
-                optimizer.zero_grad(set_to_none=True)
-                autocast = (
-                    torch.autocast(device_type="cuda", dtype=torch.float16)
-                    if amp_enabled
-                    else nullcontext()
+                global_bad_samples = _synchronize_bad_count(
+                    local_bad_samples,
+                    device,
+                    world_size=world_size,
                 )
-                with autocast:
-                    loss, components = loss_module(views, teacher_temp)
-                _average_loss_centers(model, world_size)
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                if config.optim.grad_clip > 0:
-                    torch.nn.utils.clip_grad_norm_(
-                        list(model.student_parameters()), config.optim.grad_clip
+                components: dict[str, torch.Tensor] = {}
+                skipped = global_bad_samples > 0
+                if skipped:
+                    skipped_batches += 1
+                    bad_samples += global_bad_samples
+                else:
+                    views = [
+                        F.interpolate(
+                            view.to(device),
+                            size=(config.model.img_size, config.model.img_size),
+                            mode="bilinear",
+                            align_corners=False,
+                        )
+                        if view.shape[-2:] != (
+                            config.model.img_size,
+                            config.model.img_size,
+                        )
+                        else view.to(device)
+                        for view in views
+                    ]
+
+                    optimizer.zero_grad(set_to_none=True)
+                    autocast = (
+                        torch.autocast(device_type="cuda", dtype=torch.float16)
+                        if amp_enabled
+                        else nullcontext()
                     )
-                scaler.step(optimizer)
-                scaler.update()
-                update_teacher(model, momentum=momentum)
+                    centers_before = [
+                        model.dino_loss.center.clone(),
+                        model.ibot_loss.center.clone(),
+                    ]
+                    with autocast:
+                        loss, components = loss_module(views, teacher_temp)
+                    global_bad_losses = _synchronize_bad_count(
+                        int(not torch.isfinite(loss.detach()).item()),
+                        device,
+                        world_size=world_size,
+                    )
+                    if global_bad_losses:
+                        model.dino_loss.center.copy_(centers_before[0])
+                        model.ibot_loss.center.copy_(centers_before[1])
+                        skipped = True
+                        skipped_batches += 1
+                        nonfinite_losses += global_bad_losses
+                        if distributed:
+                            # Complete DDP reducer bookkeeping without updating.
+                            zero_loss = sum(
+                                parameter.sum() * 0.0
+                                for parameter in model.student_parameters()
+                            )
+                            zero_loss.backward()
+                        optimizer.zero_grad(set_to_none=True)
+                    else:
+                        _average_loss_centers(model, world_size)
+                        scaler.scale(loss).backward()
+                        scaler.unscale_(optimizer)
+                        if config.optim.grad_clip > 0:
+                            torch.nn.utils.clip_grad_norm_(
+                                list(model.student_parameters()),
+                                config.optim.grad_clip,
+                            )
+                        scaler.step(optimizer)
+                        scaler.update()
+                        update_teacher(model, momentum=momentum)
+                        last_loss = float(loss.detach())
 
                 step += 1
-                last_loss = float(loss.detach())
                 if is_main and (step % config.log_every == 0 or step == total_steps):
+                    elapsed = max(time.perf_counter() - log_started, 1e-12)
                     record = {
                         "step": step,
                         "epoch": epoch,
@@ -353,14 +512,25 @@ def train(
                         **{
                             name: float(value)
                             for name, value in components.items()
+                            if torch.isfinite(value).all()
                         },
                         "lr": lr,
                         "weight_decay": weight_decay,
                         "teacher_momentum": momentum,
                         "teacher_temp": teacher_temp,
+                        "skipped": skipped,
+                        "skipped_batches": skipped_batches,
+                        "bad_samples": bad_samples,
+                        "nonfinite_losses": nonfinite_losses,
+                        "throughput": samples_since_log / elapsed,
                     }
+                    if device.type == "cuda":
+                        record["gpu_memory"] = torch.cuda.max_memory_allocated(device)
+                        torch.cuda.reset_peak_memory_stats(device)
                     with metrics_path.open("a", encoding="utf-8") as stream:
                         stream.write(json.dumps(record, sort_keys=True) + "\n")
+                    samples_since_log = 0
+                    log_started = time.perf_counter()
                 if is_main and step % config.ckpt_every == 0:
                     checkpoint_epoch, _ = _resume_position(step, steps_per_epoch)
                     checkpoint = _save_checkpoint(
