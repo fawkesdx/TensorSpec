@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 import random
 import subprocess
-from typing import Any
+from typing import Any, Callable, Iterable, Iterator, TypeVar
 
 import numpy as np
 import torch
@@ -25,6 +25,8 @@ from tensorspec.core.ml.ssl.dino import DinoModel, dino_total_loss, update_teach
 from tensorspec.core.ml.ssl.models.vit2d import build_vit2d
 from tensorspec.core.ml.ssl.shards import ShardDataset
 from tensorspec.core.ml.ssl.spec import RunConfig, to_jsonable
+
+_Batch = TypeVar("_Batch")
 
 
 class _LossModule(nn.Module):
@@ -52,6 +54,32 @@ def _collate_views(samples: list[list[torch.Tensor]]) -> list[torch.Tensor]:
         torch.stack([sample[view_index] for sample in samples])
         for view_index in range(len(samples[0]))
     ]
+
+
+def _resume_position(step: int, steps_per_epoch: int) -> tuple[int, int]:
+    return divmod(step, steps_per_epoch)
+
+
+def _remaining_batches(
+    batches: Iterable[_Batch], completed_batches: int
+) -> Iterator[_Batch]:
+    for batch_index, batch in enumerate(batches):
+        if batch_index >= completed_batches:
+            yield batch
+
+
+@torch.no_grad()
+def _average_loss_centers(
+    model: DinoModel,
+    world_size: int,
+    all_reduce: Callable[[torch.Tensor], Any] | None = None,
+) -> None:
+    if world_size <= 1:
+        return
+    reduce = dist.all_reduce if all_reduce is None else all_reduce
+    for loss_module in (model.dino_loss, model.ibot_loss):
+        reduce(loss_module.center)
+        loss_module.center.div_(world_size)
 
 
 def _cosine(start: float, end: float, progress: float) -> float:
@@ -84,8 +112,8 @@ def _schedule_values(
     temperature_warmup = int(
         config.dino.teacher_temp_warmup_epochs * steps_per_epoch
     )
-    if temperature_warmup:
-        temp_progress = min(1.0, step_index / temperature_warmup)
+    if temperature_warmup and step_index < temperature_warmup:
+        temp_progress = step_index / max(1, temperature_warmup - 1)
         teacher_temp = (
             config.dino.teacher_temp_start
             + (config.dino.teacher_temp_end - config.dino.teacher_temp_start)
@@ -172,6 +200,7 @@ def train(
     is_main = rank == 0
     output = Path(out_dir)
     checkpoints = output / "checkpoints"
+    metrics_path = output / "metrics.jsonl"
 
     try:
         if is_main:
@@ -180,6 +209,8 @@ def train(
                 json.dumps(to_jsonable(config), indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            if resume is None:
+                metrics_path.write_text("", encoding="utf-8")
         if distributed:
             dist.barrier()
 
@@ -204,6 +235,7 @@ def train(
             if distributed
             else None
         )
+        loader_generator = torch.Generator()
         loader = DataLoader(
             dataset,
             batch_size=config.optim.batch_size,
@@ -212,6 +244,7 @@ def train(
             num_workers=config.num_workers,
             drop_last=False,
             collate_fn=_collate_views,
+            generator=loader_generator,
         )
         if not len(loader):
             raise ValueError("training dataset is empty")
@@ -235,14 +268,13 @@ def train(
         scaler = torch.amp.GradScaler("cuda", enabled=amp_enabled)
 
         step = 0
-        epoch = 0
         if resume is not None:
             checkpoint = torch.load(resume, map_location=device, weights_only=False)
             model.load_state_dict(checkpoint["model"])
             optimizer.load_state_dict(checkpoint["optimizer"])
             scaler.load_state_dict(checkpoint["scaler"])
             step = int(checkpoint["step"])
-            epoch = int(checkpoint["epoch"])
+        epoch, completed_batches = _resume_position(step, steps_per_epoch)
 
         loss_module: nn.Module = _LossModule(model, config)
         if distributed:
@@ -251,12 +283,13 @@ def train(
                 ddp_kwargs = {"device_ids": [device.index], "output_device": device.index}
             loss_module = DistributedDataParallel(loss_module, **ddp_kwargs)
 
-        metrics_path = output / "metrics.jsonl"
         last_loss: float | None = None
         while step < total_steps:
             if sampler is not None:
                 sampler.set_epoch(epoch)
-            for views in loader:
+            else:
+                loader_generator.manual_seed(config.seed + epoch)
+            for views in _remaining_batches(loader, completed_batches):
                 if step >= total_steps:
                     break
                 views = [
@@ -288,6 +321,7 @@ def train(
                 )
                 with autocast:
                     loss, components = loss_module(views, teacher_temp)
+                _average_loss_centers(model, world_size)
                 scaler.scale(loss).backward()
                 scaler.unscale_(optimizer)
                 if config.optim.grad_clip > 0:
@@ -317,10 +351,11 @@ def train(
                     with metrics_path.open("a", encoding="utf-8") as stream:
                         stream.write(json.dumps(record, sort_keys=True) + "\n")
                 if is_main and step % config.ckpt_every == 0:
+                    checkpoint_epoch, _ = _resume_position(step, steps_per_epoch)
                     checkpoint = _save_checkpoint(
                         checkpoints / f"step_{step:06d}.pt",
                         step=step,
-                        epoch=epoch,
+                        epoch=checkpoint_epoch,
                         model=model,
                         optimizer=optimizer,
                         scaler=scaler,
@@ -331,12 +366,14 @@ def train(
                     torch.save(checkpoint, temporary)
                     temporary.replace(last_path)
             epoch += 1
+            completed_batches = 0
 
         if is_main:
+            checkpoint_epoch, _ = _resume_position(step, steps_per_epoch)
             checkpoint = _save_checkpoint(
                 checkpoints / f"step_{step:06d}.pt",
                 step=step,
-                epoch=epoch,
+                epoch=checkpoint_epoch,
                 model=model,
                 optimizer=optimizer,
                 scaler=scaler,
@@ -349,7 +386,7 @@ def train(
             dist.barrier()
         return {
             "steps": step,
-            "epoch": epoch,
+            "epoch": _resume_position(step, steps_per_epoch)[0],
             "last_loss": last_loss,
             "rank": rank,
             "world_size": world_size,

@@ -1,7 +1,9 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
 from tensorspec.core.ml.ssl.shards import ShardWriter, write_manifest
@@ -12,7 +14,13 @@ from tensorspec.core.ml.ssl.spec import (
     OptimSpec,
     RunConfig,
 )
-from tensorspec.core.ml.ssl.train import train
+from tensorspec.core.ml.ssl.train import (
+    _average_loss_centers,
+    _remaining_batches,
+    _resume_position,
+    _schedule_values,
+    train,
+)
 
 
 def _mini_shards(tmp_path: Path, n: int = 16) -> None:
@@ -107,3 +115,53 @@ def test_train_smoke_writes_checkpoint_metrics_and_resumes(tmp_path: Path) -> No
     assert records[-1]["lr"] == 0.0
     assert records[-1]["weight_decay"] == cfg.optim.weight_decay_end
     assert records[-1]["teacher_momentum"] == 1.0
+
+    cfg.max_steps = 1
+    train(cfg, str(data), str(out))
+    fresh_records = (out / "metrics.jsonl").read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["step"] for line in fresh_records] == [1]
+
+
+def test_resume_position_skips_completed_batches() -> None:
+    assert _resume_position(step=5, steps_per_epoch=4) == (1, 1)
+    assert list(_remaining_batches(["batch-0", "batch-1", "batch-2"], 1)) == [
+        "batch-1",
+        "batch-2",
+    ]
+
+
+def test_warmup_and_cosine_schedules_hit_endpoints() -> None:
+    cfg = RunConfig(
+        optim=OptimSpec(lr=0.004, warmup_epochs=1),
+        dino=DinoSpec(
+            teacher_temp_start=0.04,
+            teacher_temp_end=0.07,
+            teacher_temp_warmup_epochs=1,
+        ),
+    )
+
+    first = _schedule_values(cfg, 0, steps_per_epoch=4, total_steps=8)
+    warmup_last = _schedule_values(cfg, 3, steps_per_epoch=4, total_steps=8)
+    final = _schedule_values(cfg, 7, steps_per_epoch=4, total_steps=8)
+
+    assert first[0] == pytest.approx(0.001)
+    assert warmup_last[0] == pytest.approx(0.004)
+    assert final[0] == 0.0
+    assert first[3] == pytest.approx(0.04)
+    assert warmup_last[3] == pytest.approx(0.07)
+    assert final[3] == pytest.approx(0.07)
+
+
+def test_average_loss_centers_uses_all_rank_statistics() -> None:
+    model = SimpleNamespace(
+        dino_loss=SimpleNamespace(center=torch.tensor([[1.0]])),
+        ibot_loss=SimpleNamespace(center=torch.tensor([[1.0]])),
+    )
+
+    def add_remote_center(center: torch.Tensor) -> None:
+        center.add_(3.0)
+
+    _average_loss_centers(model, world_size=2, all_reduce=add_remote_center)
+
+    assert model.dino_loss.center.item() == 2.0
+    assert model.ibot_loss.center.item() == 2.0
