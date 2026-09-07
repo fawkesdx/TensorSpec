@@ -91,3 +91,60 @@ def save_parsed_tb(
 
 def remote_cache_payload_path() -> str:
     return REMOTE_CACHE_NAME
+
+
+def write_job_dir_cache(
+    path: Path | str,
+    *,
+    key: str,
+    tb_dict: dict,
+    basis_args: dict,
+    A_qe: Any = None,
+    source: str = "",
+    hop_tol: float = 1e-6,
+) -> Path:
+    """Write W90 TB pickle into a job directory for Hybrid upload/download.
+
+    ``key`` must be the *client* cache key (from the Mac path), not the
+    cluster path hash — otherwise ``load_parsed_tb`` rejects the payload.
+    """
+    out = Path(path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "key": str(key),
+        "tb_dict": tb_dict,
+        "basis_args": basis_args,
+        "A_qe": A_qe,
+        "hop_tol": float(hop_tol),
+        "saved_at": time.time(),
+        "source": source or str(out),
+    }
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    with tmp.open("wb") as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp.replace(out)
+    return out
+
+
+def ensure_cache_key(path: Path | str, expected_key: str) -> bool:
+    """Rewrite payload['key'] to ``expected_key`` if mismatched. Return True if usable."""
+    p = Path(path)
+    if not p.is_file() or not expected_key:
+        return False
+    try:
+        with p.open("rb") as f:
+            payload = pickle.load(f)
+        tb = payload.get("tb_dict") or {}
+        n_hop = len(tb.get("list") or tb.get("H") or [])
+        if n_hop == 0:
+            return False
+        if payload.get("key") == expected_key:
+            return True
+        payload["key"] = expected_key
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        with tmp.open("wb") as f:
+            pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp.replace(p)
+        return True
+    except Exception:
+        return False

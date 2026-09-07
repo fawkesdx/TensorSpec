@@ -296,12 +296,30 @@ def run_remote_tb_bands(
             try:
                 remote_cache = f"{remote_dir}/{REMOTE_CACHE_NAME}"
                 if _remote_file_size(sftp, remote_cache) is not None:
+                    from tensorspec.core.dft.w90_tb_cache import ensure_cache_key
+
                     local_cache = local_cache_path(w90_cache_key)
                     local_cache.parent.mkdir(parents=True, exist_ok=True)
+                    log(
+                        f"Downloading W90 TB cache for ARPES "
+                        f"({_remote_file_size(sftp, remote_cache)} bytes)..."
+                    )
                     sftp.get(remote_cache, str(local_cache))
-                    log("Synced remote W90 TB cache locally")
-            except OSError:
-                pass
+                    if ensure_cache_key(local_cache, w90_cache_key):
+                        log("Synced remote W90 TB cache locally (H_dict ready for ARPES)")
+                    else:
+                        log(
+                            "WARN: downloaded W90 cache empty or unreadable — "
+                            "run Prepare TB for ARPES before Push"
+                        )
+                else:
+                    log(
+                        "WARN: remote job has no w90_tb_cache.pkl — "
+                        "ARPES Push needs Prepare TB for ARPES (or re-run Hybrid "
+                        "with updated tb_remote_runner)"
+                    )
+            except OSError as exc:
+                log(f"WARN: W90 cache download failed: {exc}")
         sftp.close()
         log(f"Download: {time.perf_counter() - t_dl:.1f}s")
 

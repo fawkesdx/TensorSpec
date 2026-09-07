@@ -904,7 +904,13 @@ class DFTSuite(QWidget):
     def _attach_w90_h_dict_from_cache(self, ctx):
         """Hybrid path: H_dict for ARPES push without rebuilding gen_TB locally."""
         w90_file = ctx.get("w90_file")
-        if not w90_file or getattr(self.engine.chinook, "H_dict", None) is not None:
+        if not w90_file:
+            return
+        existing = getattr(self.engine.chinook, "H_dict", None)
+        n_existing = 0
+        if isinstance(existing, dict):
+            n_existing = len(existing.get("list") or existing.get("H") or [])
+        if n_existing > 0:
             return
         from tensorspec.core.dft.w90_tb_cache import load_parsed_tb
 
@@ -915,11 +921,22 @@ class DFTSuite(QWidget):
             qe_fermi=float(ctx.get("fermi_energy", 0.0) or 0.0),
         )
         if not disk:
+            print(
+                "[DFT] WARN: no local W90 TB cache after Hybrid — "
+                "ARPES Push will fail until Prepare TB for ARPES or a new Hybrid "
+                "run with cache sync.",
+                flush=True,
+            )
             return
         tb_dict, _basis_args, a_qe = disk
+        n_hop = len(tb_dict.get("list") or tb_dict.get("H") or [])
+        if n_hop == 0:
+            print("[DFT] WARN: cached H_dict has zero hoppings", flush=True)
+            return
         self.engine.chinook.H_dict = tb_dict
         if a_qe is not None:
             self.engine.chinook.A_qe = a_qe
+        print(f"[DFT] Attached H_dict from W90 cache ({n_hop} hoppings)", flush=True)
 
     def _on_tb_bands_done(self, success, message, result):
         self._tb_run_cluster = None
