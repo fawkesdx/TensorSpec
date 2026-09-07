@@ -288,8 +288,58 @@ def build_k_bulk_mesh(
     return K_BULK, A_bulk, kb, num_x, num_y, num_e, energy_axis
 
 
+def shift_k_bulk_along_surface_normal(
+    K_BULK: np.ndarray,
+    kz_shift: float,
+    hkl: Tuple[int, int, int],
+    B_matrix: np.ndarray,
+) -> np.ndarray:
+    """Shift bulk-frame k-mesh by Δk_z along surface normal ``Z_surf``.
+
+    Uses the same ``get_hkl_surface_frame`` call as ``build_k_bulk_mesh`` so the
+    escape-depth axis matches the cleavage normal for tilted hkl (e.g. (-2,0,1)).
+    """
+    if abs(float(kz_shift)) <= 0.0:
+        return K_BULK
+    Z_surf, _ = get_hkl_surface_frame(
+        tuple(hkl),
+        np.asarray(B_matrix, dtype=float),
+        azimuthal_ref=np.array([0.0, 1.0, 0.0]),
+    )
+    K = np.asarray(K_BULK, dtype=float).copy()
+    K += float(kz_shift) * Z_surf[:, None]
+    return K
+
+
+def lorentzian_kz_weights(halfwidth: float, npoints: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Discrete Lorentzian weights for incoherent k_z broadening.
+
+    Critic wants Δk_z ≈ 1/λ_mfp ≈ 0.2 Å⁻¹ HWHM. Default off (``halfwidth<=0``)
+    preserves legacy single-cut behavior. When ``halfwidth>0`` and ``npoints<=1``,
+    uses an odd grid of 7 points so broadening is not a silent no-op.
+
+    Escape-depth sampling shifts ``K_BULK`` along the surface normal; each pass
+    also recomputes emission angles from the shifted mesh (detector-angle smear
+    included). **Not** coherent LEED final-state interference.
+    """
+    hw = float(halfwidth)
+    n = int(npoints)
+    if hw <= 0.0:
+        return np.array([0.0]), np.array([1.0])
+    if n <= 1:
+        n = 7  # halfwidth>0 with omitted/legacy npoints=1 → odd grid ≥3
+    n = n if n % 2 == 1 else n + 1  # odd grid, include 0
+    span = 3.0 * hw  # ±3 HWHM
+    dk = np.linspace(-span, span, n)
+    w = (hw / np.pi) / (dk**2 + hw**2)
+    w = w / w.sum()
+    return dk, w
+
+
 def physics_from_experiment_kwargs(experiment_kwargs: Mapping[str, Any]) -> Dict[str, Any]:
     """Map GUI experiment_kwargs → physics dict for run_chinook_arpes."""
+    kz_hw = float(experiment_kwargs.get("kz_halfwidth", 0.0))
+    kz_np_default = 7 if kz_hw > 0.0 else 1
     return {
         "hv": float(experiment_kwargs.get("photon_energy", 21.2)),
         "work_function": float(experiment_kwargs.get("work_function", 4.5)),
@@ -309,6 +359,37 @@ def physics_from_experiment_kwargs(experiment_kwargs: Mapping[str, Any]) -> Dict
         "se_width": float(experiment_kwargs.get("se_width", 0.01)),
         "res_E": float(experiment_kwargs.get("res_E", 0.02)),
         "res_k": float(experiment_kwargs.get("res_k", 0.02)),
+        "rad_type": str(experiment_kwargs.get("rad_type", "slater")),
+        "mfp": float(experiment_kwargs.get("mfp", 10.0)),
+        "kz_halfwidth": kz_hw,
+        "kz_npoints": int(experiment_kwargs.get("kz_npoints", kz_np_default)),
+    }
+
+
+def build_arpes_dict_from_physics(physics, *, cube, energy_axis, A_bulk, is_full: bool):
+    """Single place for chinook ARPES_dict keys (local + Grizzly shell).
+
+    ``pol`` keeps the dtype of ``A_bulk`` (complex for CR/CL). For bulk (non-slab)
+    bases, ``mfp`` only reweights intra-cell orbital depths; escape-depth physics
+    comes from ``kz_halfwidth``.
+    """
+    return {
+        "cube": cube,
+        "ang": 0.0,
+        "E": energy_axis,
+        "hv": float(physics["hv"]),
+        "W": float(physics["work_function"]),
+        "Vo": float(physics["inner_potential"]),  # chinook key is Vo, not V0
+        "T": float(physics.get("temperature", 10.0)),
+        "pol": np.asarray(A_bulk),  # preserve complex128 for CR/CL
+        "ME": bool(is_full),
+        "SE": ["constant", float(physics.get("se_width", 0.01))],
+        "resolution": {
+            "E": float(physics.get("res_E", 0.02)),
+            "k": float(physics.get("res_k", 0.02)),
+        },
+        "rad_type": str(physics.get("rad_type", "slater")),
+        "mfp": float(physics.get("mfp", 10.0)),
     }
 
 
@@ -441,6 +522,7 @@ def _setup_kmesh_experiment(
     fermi_shift: float = 0.0,
     experiment_fn=None,
     diag_device: Optional[str] = None,
+    kz_shift: float = 0.0,
 ):
     apply_chinook_runtime_patches()
     if experiment_fn is None:
@@ -461,28 +543,26 @@ def _setup_kmesh_experiment(
         B_matrix=B_matrix,
         lin_pol_angle=float(physics.get("lin_pol_angle", 45.0)),
     )
+    if abs(float(kz_shift)) > 0.0:
+        # Escape-depth Δk_z along surface normal (same Z_surf as build_k_bulk_mesh),
+        # not bulk cartesian index 2 — required for tilted hkl e.g. (-2,0,1).
+        K_BULK = shift_k_bulk_along_surface_normal(
+            K_BULK, float(kz_shift), tuple(physics["hkl"]), B_matrix
+        )
 
     me_mode = str(physics.get("matrix_element_mode", "Full Matrix Elements"))
     is_bare = "Off" in me_mode
     is_full = "Full" in me_mode
     T = float(physics.get("temperature", 10.0))
     se_width = float(physics.get("se_width", 0.01))
-    res_e = float(physics.get("res_E", 0.02))
-    res_k = float(physics.get("res_k", 0.02))
 
-    arpes_dict = {
-        "cube": kb,
-        "ang": 0.0,
-        "E": energy_axis,
-        "hv": float(physics["hv"]),
-        "W": float(physics["work_function"]),
-        "V0": float(physics["inner_potential"]),
-        "T": T,
-        "pol": A_bulk,
-        "ME": is_full,
-        "SE": ["constant", se_width],
-        "resolution": {"E": res_e, "k": res_k},
-    }
+    arpes_dict = build_arpes_dict_from_physics(
+        physics,
+        cube=kb,
+        energy_axis=energy_axis,
+        A_bulk=A_bulk,
+        is_full=is_full,
+    )
 
     exp = experiment_fn(tb_model, arpes_dict)
     exp.ME = is_full
@@ -688,27 +768,18 @@ def build_grizzly_me_shell(
 
     me_mode = str(physics.get("matrix_element_mode", "Full Matrix Elements"))
     is_full = "Full" in me_mode
-    se_width = float(physics.get("se_width", 0.01))
-    res_e = float(physics.get("res_E", 0.02))
-    res_k = float(physics.get("res_k", 0.02))
     stub_cube = {
         "X": [0.0, 0.0, 1],
         "Y": [0.0, 0.0, 1],
         "E": [float(e_axis[0]), float(e_axis[-1]), ne],
     }
-    arpes_dict = {
-        "cube": stub_cube,
-        "ang": 0.0,
-        "E": e_axis,
-        "hv": float(physics["hv"]),
-        "W": float(physics["work_function"]),
-        "V0": float(physics["inner_potential"]),
-        "T": float(physics.get("temperature", 10.0)),
-        "pol": np.asarray(A_bulk, dtype=float),
-        "ME": is_full,
-        "SE": ["constant", se_width],
-        "resolution": {"E": res_e, "k": res_k},
-    }
+    arpes_dict = build_arpes_dict_from_physics(
+        physics,
+        cube=stub_cube,
+        energy_axis=e_axis,
+        A_bulk=A_bulk,
+        is_full=is_full,
+    )
 
     exp = experiment_fn(tb_model, arpes_dict)
     exp.ME = is_full
@@ -843,6 +914,25 @@ def _chinook_serial_mk(exp) -> None:
     exp.serial_Mk(valid)
 
 
+def _intensity_with_kz_broaden(physics: Mapping[str, Any], run_once):
+    """Weight-sum intensities over Lorentzian Δk_z along the surface normal.
+
+    Each pass shifts ``K_BULK`` by ``Δk_z * Z_surf`` and recomputes emission
+    angles from the shifted mesh (so the sum also smears final-state direction).
+    Default ``kz_halfwidth=0`` → single unshifted run (legacy). If ``halfwidth>0``
+    and ``kz_npoints<=1``, ``lorentzian_kz_weights`` upgrades to an odd 7-point
+    grid. **Not** coherent LEED final-state interference.
+    """
+    hw = float(physics.get("kz_halfwidth", 0.0))
+    npoints = int(physics.get("kz_npoints", 7))
+    dk, w = lorentzian_kz_weights(hw, npoints)
+    acc = None
+    for dki, wi in zip(dk, w):
+        intensity = run_once(kz_shift=float(dki))
+        acc = intensity * wi if acc is None else acc + intensity * wi
+    return acc
+
+
 def run_chinook_arpes(
     tb_model,
     k_bounds: Mapping[str, list],
@@ -855,30 +945,45 @@ def run_chinook_arpes(
     """
     Run Chinook ARPES for one detector cube (num_x × num_y × num_e).
 
+    When ``physics["kz_halfwidth"] > 0``, returns a Lorentzian-weighted sum of
+    intensities with ``K_BULK`` shifted by each Δk_z along the surface normal
+    ``Z_surf``. Emission angles are recomputed from each shifted mesh (detector
+    smear included) — **not** coherent LEED final-state interference.
+    Default ``kz_halfwidth=0`` preserves legacy single-cut behavior.
+
     Returns intensity array shaped (num_x, num_y, num_e).
     """
-    ctx = _setup_kmesh_experiment(
-        tb_model, k_bounds, physics, B_matrix,
-        fermi_shift=fermi_shift, experiment_fn=experiment_fn,
-    )
-    if ctx["is_bare"]:
-        return _bare_intensity(ctx)
 
-    _finalize_me_geometry(ctx)
-    # Must not let datacube compute Mk with th overwritten from X=Y=0.
-    _datacube_without_mk(ctx)
-    _chinook_serial_mk(ctx["exp"])
-    _spectral = ctx["exp"].spectral()
-    # Chinook returns (I_raw, Ig); use broadened Ig (matches legacy chinook_wrapper).
-    output_maps = np.real(_spectral[1] if isinstance(_spectral, tuple) else _spectral)
-    intensity_3d = _reshape_me_intensity(
-        output_maps, ctx["num_x"], ctx["num_y"], ctx["num_e"]
-    )
-    if not ctx["is_full"]:
-        intensity_3d = _apply_dipole(
-            intensity_3d, ctx["K_BULK"], ctx["A_bulk"], ctx["num_x"], ctx["num_y"]
+    def _once(*, kz_shift: float = 0.0) -> np.ndarray:
+        ctx = _setup_kmesh_experiment(
+            tb_model,
+            k_bounds,
+            physics,
+            B_matrix,
+            fermi_shift=fermi_shift,
+            experiment_fn=experiment_fn,
+            kz_shift=kz_shift,
         )
-    return intensity_3d
+        if ctx["is_bare"]:
+            return _bare_intensity(ctx)
+
+        _finalize_me_geometry(ctx)
+        # Must not let datacube compute Mk with th overwritten from X=Y=0.
+        _datacube_without_mk(ctx)
+        _chinook_serial_mk(ctx["exp"])
+        _spectral = ctx["exp"].spectral()
+        # Chinook returns (I_raw, Ig); use broadened Ig (matches legacy chinook_wrapper).
+        output_maps = np.real(_spectral[1] if isinstance(_spectral, tuple) else _spectral)
+        intensity_3d = _reshape_me_intensity(
+            output_maps, ctx["num_x"], ctx["num_y"], ctx["num_e"]
+        )
+        if not ctx["is_full"]:
+            intensity_3d = _apply_dipole(
+                intensity_3d, ctx["K_BULK"], ctx["A_bulk"], ctx["num_x"], ctx["num_y"]
+            )
+        return intensity_3d
+
+    return _intensity_with_kz_broaden(physics, _once)
 
 
 def run_grizzly_arpes(
@@ -900,6 +1005,11 @@ def run_grizzly_arpes(
     When ``device`` is cuda, defaults to Grizzly GPU diagonalization + spectral
     (hybrid fast path). Set ``use_grizzly_spectral=False`` to keep Chinook CPU
     ``exp.spectral()`` for A/B timing.
+
+    When ``physics["kz_halfwidth"] > 0``, returns a Lorentzian-weighted sum of
+    intensities with ``K_BULK`` shifted by each Δk_z along the surface normal
+    ``Z_surf``. Emission angles are recomputed per pass — **not** coherent LEED
+    final-state interference. Default off preserves legacy.
     """
     dev = str(device).lower()
     if use_grizzly_spectral is None:
@@ -908,84 +1018,88 @@ def run_grizzly_arpes(
     if dev == "cuda":
         diag_dev = "cuda"
 
-    t0 = time.perf_counter()
-    ctx = _setup_kmesh_experiment(
-        tb_model,
-        k_bounds,
-        physics,
-        B_matrix,
-        fermi_shift=fermi_shift,
-        experiment_fn=experiment_fn,
-        diag_device=diag_dev if dev in ("cuda", "mps") else None,
-    )
-    t_setup = time.perf_counter()
-    if ctx["is_bare"]:
-        return _bare_intensity(ctx)
+    def _once(*, kz_shift: float = 0.0) -> np.ndarray:
+        t0 = time.perf_counter()
+        ctx = _setup_kmesh_experiment(
+            tb_model,
+            k_bounds,
+            physics,
+            B_matrix,
+            fermi_shift=fermi_shift,
+            experiment_fn=experiment_fn,
+            diag_device=diag_dev if dev in ("cuda", "mps") else None,
+            kz_shift=kz_shift,
+        )
+        t_setup = time.perf_counter()
+        if ctx["is_bare"]:
+            return _bare_intensity(ctx)
 
-    from grizzly.engine import compute_all_Mk
-    from grizzly.future import require_spinless
+        from grizzly.engine import compute_all_Mk
+        from grizzly.future import require_spinless
 
-    exp = ctx["exp"]
-    require_spinless(exp, feature="run_grizzly_arpes")
-    _finalize_me_geometry(ctx)
-    if me_shell is not None:
-        t_dc0 = time.perf_counter()
-        _apply_me_shell_peaks(ctx, me_shell)
-        t_datacube = time.perf_counter()
-        if profile_stages and t_datacube - t_dc0 > 0.05:
-            print(
-                f"  ME shell peaks wall={t_datacube - t_dc0:.2f}s (hoisted radint/Ylm)",
-                flush=True,
+        exp = ctx["exp"]
+        require_spinless(exp, feature="run_grizzly_arpes")
+        _finalize_me_geometry(ctx)
+        if me_shell is not None:
+            t_dc0 = time.perf_counter()
+            _apply_me_shell_peaks(ctx, me_shell)
+            t_datacube = time.perf_counter()
+            if profile_stages and t_datacube - t_dc0 > 0.05:
+                print(
+                    f"  ME shell peaks wall={t_datacube - t_dc0:.2f}s (hoisted radint/Ylm)",
+                    flush=True,
+                )
+        else:
+            _datacube_without_mk(ctx)
+            t_datacube = time.perf_counter()
+
+        # θ-block with no bands in the ARPES energy window → silent zeros
+        if getattr(exp, "pks", None) is None or len(exp.pks) == 0:
+            if profile_stages:
+                print(
+                    f"  grizzly stages: setup={t_setup - t0:.2f}s "
+                    f"datacube={t_datacube - t_setup:.2f}s "
+                    f"mk=0.00s spectral=0.00s (empty window) "
+                    f"total={time.perf_counter() - t0:.2f}s",
+                    flush=True,
+                )
+            return np.zeros(
+                (ctx["num_x"], ctx["num_y"], ctx["num_e"]), dtype=float
             )
-    else:
-        _datacube_without_mk(ctx)
-        t_datacube = time.perf_counter()
 
-    # θ-block with no bands in the ARPES energy window → silent zeros
-    if getattr(exp, "pks", None) is None or len(exp.pks) == 0:
+        exp.Mk = compute_all_Mk(exp, device=str(device))
+        t_mk = time.perf_counter()
+
+        if use_grizzly_spectral:
+            from grizzly.spectral import spectral_maps_from_experiment
+
+            _, output_maps = spectral_maps_from_experiment(exp, device=str(device))
+            output_maps = np.real(output_maps)
+        else:
+            _spectral = exp.spectral()
+            output_maps = np.real(
+                _spectral[1] if isinstance(_spectral, tuple) else _spectral
+            )
+        t_spec = time.perf_counter()
+
         if profile_stages:
             print(
                 f"  grizzly stages: setup={t_setup - t0:.2f}s "
                 f"datacube={t_datacube - t_setup:.2f}s "
-                f"mk=0.00s spectral=0.00s (empty window) "
-                f"total={time.perf_counter() - t0:.2f}s",
+                f"mk={t_mk - t_datacube:.2f}s "
+                f"spectral={t_spec - t_mk:.2f}s "
+                f"total={t_spec - t0:.2f}s",
                 flush=True,
             )
-        return np.zeros(
-            (ctx["num_x"], ctx["num_y"], ctx["num_e"]), dtype=float
+
+        intensity_3d = _reshape_me_intensity(
+            output_maps, ctx["num_x"], ctx["num_y"], ctx["num_e"]
         )
+        if not ctx["is_full"]:
+            intensity_3d = _apply_dipole(
+                intensity_3d, ctx["K_BULK"], ctx["A_bulk"], ctx["num_x"], ctx["num_y"]
+            )
+        return intensity_3d
 
-    exp.Mk = compute_all_Mk(exp, device=str(device))
-    t_mk = time.perf_counter()
-
-    if use_grizzly_spectral:
-        from grizzly.spectral import spectral_maps_from_experiment
-
-        _, output_maps = spectral_maps_from_experiment(exp, device=str(device))
-        output_maps = np.real(output_maps)
-    else:
-        _spectral = exp.spectral()
-        output_maps = np.real(
-            _spectral[1] if isinstance(_spectral, tuple) else _spectral
-        )
-    t_spec = time.perf_counter()
-
-    if profile_stages:
-        print(
-            f"  grizzly stages: setup={t_setup - t0:.2f}s "
-            f"datacube={t_datacube - t_setup:.2f}s "
-            f"mk={t_mk - t_datacube:.2f}s "
-            f"spectral={t_spec - t_mk:.2f}s "
-            f"total={t_spec - t0:.2f}s",
-            flush=True,
-        )
-
-    intensity_3d = _reshape_me_intensity(
-        output_maps, ctx["num_x"], ctx["num_y"], ctx["num_e"]
-    )
-    if not ctx["is_full"]:
-        intensity_3d = _apply_dipole(
-            intensity_3d, ctx["K_BULK"], ctx["A_bulk"], ctx["num_x"], ctx["num_y"]
-        )
-    return intensity_3d
+    return _intensity_with_kz_broaden(physics, _once)
 

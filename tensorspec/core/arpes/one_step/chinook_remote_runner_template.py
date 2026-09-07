@@ -473,6 +473,18 @@ def run_single_theta_slice(theta_idx, theta_val, phis, e_axis, sarpes_str, spin_
     use_spin = sarpes_str.lower() == "true"
     if use_spin:
         # SARPES: legacy chinook cube path (kmesh spin handling not yet unified).
+        # Ignores critic-gap knobs: rad_type / mfp / kz_* / Vo / incidence geometry.
+        gp = global_physics
+        if (
+            float(gp.get("kz_halfwidth", 0.0)) > 0.0
+            or str(gp.get("rad_type", "slater")) != "slater"
+            or float(gp.get("mfp", 10.0)) != 10.0
+        ):
+            print(
+                "WARNING: SARPES legacy path ignores rad_type/mfp/kz_*/incidence; "
+                "spinless maps use the kmesh path instead.",
+                flush=True,
+            )
         arpes_args = _base_arpes_args(
             (theta_val, theta_val, 1),
             (phis[0], phis[-1], nphi),
@@ -708,7 +720,12 @@ def main():
     print(
         f"Loaded physics: V0={physics.get('inner_potential')} eV, "
         f"hkl={physics.get('hkl')}, pol={physics.get('polarization')}, "
-        f"ME={physics.get('matrix_element_mode')}",
+        f"ME={physics.get('matrix_element_mode')}, "
+        f"incidence={physics.get('incidence_angle')}°, "
+        f"rad_type={physics.get('rad_type', 'slater')}, "
+        f"mfp={physics.get('mfp', 10.0)}, "
+        f"kz_halfwidth={physics.get('kz_halfwidth', 0.0)}, "
+        f"kz_npoints={physics.get('kz_npoints', 1)}",
         flush=True,
     )
 

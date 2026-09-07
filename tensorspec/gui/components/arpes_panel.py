@@ -182,10 +182,33 @@ class ARPESPanel(QWidget):
         self.work_function_spin = QDoubleSpinBox(); self.work_function_spin.setRange(0.0, 10.0); self.work_function_spin.setValue(4.5); self.work_function_spin.setSuffix(" eV")
         self.inner_potential_spin = QDoubleSpinBox(); self.inner_potential_spin.setRange(0.0, 30.0); self.inner_potential_spin.setValue(15.0); self.inner_potential_spin.setSuffix(" eV")
         self.temperature_spin = QDoubleSpinBox(); self.temperature_spin.setRange(0.1, 1000.0); self.temperature_spin.setValue(10.0); self.temperature_spin.setSuffix(" K")
+
+        self.rad_type_combo = QComboBox()
+        self.rad_type_combo.addItems(["slater", "hydrogenic", "grid"])
+        # grid needs rad_args — disable until supported
+        _rad_model = self.rad_type_combo.model()
+        _grid_item = _rad_model.item(2)
+        if _grid_item is not None:
+            _grid_item.setEnabled(False)
+        self.rad_type_combo.setItemData(
+            2, "needs rad_args (unsupported)", Qt.ToolTipRole
+        )
+        self.rad_type_combo.setToolTip(
+            "Final-state radial type. 'grid' needs rad_args (unsupported)."
+        )
+
+        self.mfp_spin = QDoubleSpinBox()
+        self.mfp_spin.setRange(0.5, 50.0)
+        self.mfp_spin.setValue(10.0)
+        self.mfp_spin.setSingleStep(0.5)
+        self.mfp_spin.setDecimals(2)
+        self.mfp_spin.setSuffix(" Å")
         
         param_layout.addRow("Photon (hv):", self.photon_energy_spin)
         param_layout.addRow("Work Func (Φ):", self.work_function_spin)
         param_layout.addRow("Inner Pot (V0):", self.inner_potential_spin)
+        param_layout.addRow("Radial Type:", self.rad_type_combo)
+        param_layout.addRow("MFP (λ):", self.mfp_spin)
         param_layout.addRow("Temperature:", self.temperature_spin)
         control_layout.addWidget(param_group)
 
@@ -197,6 +220,27 @@ class ARPESPanel(QWidget):
         self.manip_azi_spin = QDoubleSpinBox(); self.manip_azi_spin.setRange(-180.0, 180.0); self.manip_azi_spin.setSuffix(" °")
         self.manip_tilt_spin = QDoubleSpinBox(); self.manip_tilt_spin.setRange(-90.0, 90.0); self.manip_tilt_spin.setSuffix(" °")
         self.incidence_angle_spin = QDoubleSpinBox(); self.incidence_angle_spin.setRange(0.0, 90.0); self.incidence_angle_spin.setValue(55.0); self.incidence_angle_spin.setSuffix(" °")
+
+        self.kz_halfwidth_spin = QDoubleSpinBox()
+        self.kz_halfwidth_spin.setRange(0.0, 2.0)
+        self.kz_halfwidth_spin.setValue(0.0)
+        self.kz_halfwidth_spin.setSingleStep(0.05)
+        self.kz_halfwidth_spin.setDecimals(3)
+        self.kz_halfwidth_spin.setSuffix(" Å⁻¹")
+        self.kz_halfwidth_spin.setToolTip(
+            "Lorentzian k_z HWHM. 0 = off (legacy single cut)."
+        )
+
+        self.kz_npoints_spin = QSpinBox()
+        self.kz_npoints_spin.setRange(3, 51)
+        self.kz_npoints_spin.setSingleStep(2)
+        self.kz_npoints_spin.setValue(7)
+        self.kz_npoints_spin.setEnabled(False)
+        self.kz_npoints_spin.setToolTip(
+            "Odd sample count for k_z Lorentzian sum. Enabled when halfwidth > 0."
+        )
+        self.kz_halfwidth_spin.valueChanged.connect(self._on_kz_halfwidth_changed)
+        self.kz_npoints_spin.valueChanged.connect(self._ensure_kz_npoints_odd)
         
         self.polarization_combo = QComboBox()
         self.polarization_combo.addItems([
@@ -238,6 +282,8 @@ class ARPESPanel(QWidget):
         beam_layout.addRow("Cleavage Plane [h k l]:", hkl_layout)
         # ---------------------------------------------------------------------------------------------
         beam_layout.addRow("Beam Incidence (Lab):", self.incidence_angle_spin)
+        beam_layout.addRow("k_z Halfwidth:", self.kz_halfwidth_spin)
+        beam_layout.addRow("k_z N Points:", self.kz_npoints_spin)
         beam_layout.addRow("Polarization:", self.polarization_combo)
         beam_layout.addRow("Pol. Angle (Arbitrary):", self.lin_pol_angle_spin)
         beam_layout.addRow("Intensity Mode:", self.matrix_element_combo)
@@ -459,6 +505,37 @@ class ARPESPanel(QWidget):
         
         control_layout.addWidget(self.btn_push_workspace)
         control_layout.addWidget(self.btn_save_disk)
+
+    def _on_kz_halfwidth_changed(self, value):
+        """Enable kz_npoints only when broadening is on (halfwidth > 0)."""
+        self.kz_npoints_spin.setEnabled(float(value) > 0.0)
+
+    def _ensure_kz_npoints_odd(self, value):
+        """Force odd sample count for Lorentzian k_z quadrature."""
+        v = int(value)
+        if v % 2 == 0:
+            self.kz_npoints_spin.blockSignals(True)
+            self.kz_npoints_spin.setValue(max(3, v + 1))
+            self.kz_npoints_spin.blockSignals(False)
+
+    def _kz_npoints_for_physics(self):
+        """
+        When kz_halfwidth > 0, must send npoints >= 3 (spin default 7).
+        physics_from_experiment_kwargs defaults npoints=1; lorentzian treats
+        npoints<=1 as OFF even if halfwidth>0.
+        """
+        if self.kz_halfwidth_spin.value() > 0.0:
+            return max(3, int(self.kz_npoints_spin.value()))
+        return 1
+
+    def _critic_gap_physics_kwargs(self):
+        """rad_type / mfp / kz knobs shared by local + remote paths."""
+        return {
+            "rad_type": self.rad_type_combo.currentText(),
+            "mfp": self.mfp_spin.value(),
+            "kz_halfwidth": self.kz_halfwidth_spin.value(),
+            "kz_npoints": self._kz_npoints_for_physics(),
+        }
 
     def update_schematic(self, *args):
         self.draw_hemisphere_schematic(
@@ -894,6 +971,7 @@ cd {remote_dir}
                         "se_width": self.ui_se_spinbox.value(),
                         "res_E": self.ui_res_e_spinbox.value(),
                         "res_k": self.ui_res_k_spinbox.value(),
+                        **self._critic_gap_physics_kwargs(),
                     }
                 )
                 with open(physics_path_local, "w") as pf:
@@ -1010,7 +1088,8 @@ cd {remote_dir}
             'se_width': self.ui_se_spinbox.value(),
             'res_E': self.ui_res_e_spinbox.value(),
             'res_k': self.ui_res_k_spinbox.value(),
-            'slit_angle': self.slit_angle_spin.value()
+            'slit_angle': self.slit_angle_spin.value(),
+            **self._critic_gap_physics_kwargs(),
         }
         
         # --- THREADED LAUNCH ---
@@ -1267,6 +1346,7 @@ cd {remote_dir}
 
     def get_simulation_metadata(self):
         """Helper to grab all current UI parameters for saving."""
+        azi = self.manip_azi_spin.value()
         return {
             'crystal': self.ws_combo.currentText(),
             'engine': self.engine_dropdown.currentText(),
@@ -1275,7 +1355,19 @@ cd {remote_dir}
             'inner_potential': self.inner_potential_spin.value(),
             'temperature': self.temperature_spin.value(),
             'polarization': self.polarization_combo.currentText(),
-            'hkl': [self.spin_h.value(), self.spin_k.value(), self.spin_l.value()]
+            'lin_pol_angle': self.lin_pol_angle_spin.value(),
+            'incidence_angle': self.incidence_angle_spin.value(),
+            'matrix_element_mode': self.matrix_element_combo.currentText(),
+            'manip_theta': self.manip_theta_spin.value(),
+            'manip_azimuth': azi,
+            'manip_azi': azi,  # dual key during transition
+            'manip_tilt': self.manip_tilt_spin.value(),
+            'slit_angle': self.slit_angle_spin.value(),
+            'hkl': [self.spin_h.value(), self.spin_k.value(), self.spin_l.value()],
+            'rad_type': self.rad_type_combo.currentText(),
+            'mfp': self.mfp_spin.value(),
+            'kz_halfwidth': self.kz_halfwidth_spin.value(),
+            'kz_npoints': self._kz_npoints_for_physics(),
         }
 
 
