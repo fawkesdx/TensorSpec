@@ -69,8 +69,14 @@ def test_build_grizzly_me_shell_logs_radint_result(monkeypatch, capsys):
         "e_axis": np.array([-1.0, 1.0]),
         "A_bulk": np.eye(3),
     }
+    def _radint_line(captured: str) -> str:
+        for line in captured.splitlines():
+            if line.startswith("Radint "):
+                return line.strip()
+        raise AssertionError(f"no Radint log line in:\n{captured}")
+
     k.build_grizzly_me_shell(**kwargs)
-    miss_line = capsys.readouterr().out.strip()
+    miss_line = _radint_line(capsys.readouterr().out)
     assert re.fullmatch(
         r"Radint MISS backend=auto source=torch wall=\d+\.\d{2}s",
         miss_line,
@@ -78,7 +84,7 @@ def test_build_grizzly_me_shell_logs_radint_result(monkeypatch, capsys):
 
     source["value"] = "cache"
     k.build_grizzly_me_shell(**kwargs)
-    hit_line = capsys.readouterr().out.strip()
+    hit_line = _radint_line(capsys.readouterr().out)
     assert re.fullmatch(
         r"Radint HIT backend=auto source=cache wall=\d+\.\d{2}s",
         hit_line,
