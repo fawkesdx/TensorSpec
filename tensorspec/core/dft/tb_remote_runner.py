@@ -148,9 +148,56 @@ def main() -> int:
     return 0
 
 
+def _write_job_dir_cache_compat(
+    out: Path,
+    *,
+    key: str,
+    tb_dict: dict,
+    basis_args: dict,
+    A_qe,
+    source: str,
+    hop_tol: float,
+) -> None:
+    """Write client-keyed cache; inline fallback if cluster tensorspec is stale."""
+    try:
+        from tensorspec.core.dft.w90_tb_cache import write_job_dir_cache
+
+        write_job_dir_cache(
+            out,
+            key=key,
+            tb_dict=tb_dict,
+            basis_args=basis_args,
+            A_qe=A_qe,
+            source=source,
+            hop_tol=hop_tol,
+        )
+        return
+    except ImportError:
+        pass
+    # Uploaded runner can be newer than Einstein's installed tensorspec.
+    import pickle
+
+    payload = {
+        "key": str(key),
+        "tb_dict": tb_dict,
+        "basis_args": basis_args,
+        "A_qe": A_qe,
+        "hop_tol": float(hop_tol),
+        "saved_at": time.time(),
+        "source": source or str(out),
+    }
+    tmp = out.with_suffix(out.suffix + ".tmp")
+    with tmp.open("wb") as f:
+        pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
+    tmp.replace(out)
+
+
 def _export_w90_cache_for_client(engine, job: dict, run_dir: Path, w90_path: str) -> None:
     """Write w90_tb_cache.pkl keyed by the *client* cache key from the job JSON."""
-    from tensorspec.core.dft.w90_tb_cache import REMOTE_CACHE_NAME, write_job_dir_cache
+    try:
+        from tensorspec.core.dft.w90_tb_cache import REMOTE_CACHE_NAME
+    except ImportError:
+        REMOTE_CACHE_NAME = "w90_tb_cache.pkl"
 
     h_dict = getattr(engine, "H_dict", None)
     if not isinstance(h_dict, dict):
@@ -184,7 +231,7 @@ def _export_w90_cache_for_client(engine, job: dict, run_dir: Path, w90_path: str
 
     cache_name = job.get("w90_cache_basename") or REMOTE_CACHE_NAME
     out = run_dir / cache_name
-    write_job_dir_cache(
+    _write_job_dir_cache_compat(
         out,
         key=str(client_key),
         tb_dict=h_dict,
