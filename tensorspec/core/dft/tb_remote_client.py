@@ -225,11 +225,16 @@ def run_remote_tb_bands(
             # Prefer the less-loaded GPU when multiple devices exist.
             env_exports += " && export CUDA_VISIBLE_DEVICES=1"
 
+        # IMPORTANT: do not put `rm ... && nohup ... & echo $! > pid` in one
+        # `&&` chain. Bash backgrounds the whole `rm && nohup` list, so `rm`
+        # can delete the pid file *after* `echo $!` wrote it — GUI then polls
+        # "stopped" while python is still alive (VTe2 6GB hr.dat jobs).
         start_cmd = (
             f"bash -c 'cd {remote_dir} && {env_exports} && "
-            f"rm -f {RESULT_NAME} tb_remote.log {PID_NAME} && "
+            f"rm -f {RESULT_NAME} tb_remote.log {PID_NAME}; "
             f"nohup {python_bin} tb_remote_runner.py --job {JOB_NAME} "
-            f"--out {RESULT_NAME} > tb_remote.log 2>&1 & echo $! > {PID_NAME}'"
+            f"--out {RESULT_NAME} > tb_remote.log 2>&1 & "
+            f"echo $! > {PID_NAME}'"
         )
         log("Starting remote band diagonalization (poll + cancelable)...")
         t_run = time.perf_counter()
@@ -251,8 +256,15 @@ def run_remote_tb_bands(
             finally:
                 sftp.close()
 
+            # Pid file OR live runner process (covers legacy race / wiped pid).
             _, poll_out, _ = ssh.exec_command(
-                f"bash -c 'test -f {remote_dir}/{PID_NAME} && kill -0 $(cat {remote_dir}/{PID_NAME}) 2>/dev/null && echo running || echo stopped'",
+                f"bash -c '"
+                f"if [ -f {remote_dir}/{PID_NAME} ] && "
+                f"kill -0 $(cat {remote_dir}/{PID_NAME}) 2>/dev/null; then "
+                f"echo running; "
+                f"elif pgrep -f \"{remote_dir}/tb_remote_runner.py\" >/dev/null 2>&1; then "
+                f"echo running; "
+                f"else echo stopped; fi'",
                 timeout=15,
             )
             poll_out.channel.recv_exit_status()
