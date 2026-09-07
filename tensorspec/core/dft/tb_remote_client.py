@@ -285,6 +285,30 @@ def run_remote_tb_bands(
 
         log(f"Remote compute: {time.perf_counter() - t_run:.1f}s")
 
+        # Result npz can appear before w90_tb_cache.pkl finishes (legacy runners).
+        # Wait until the remote process exits so export completes.
+        wait_exit_deadline = time.perf_counter() + min(600.0, max(60.0, timeout_s * 0.1))
+        while time.perf_counter() < wait_exit_deadline:
+            if cancel_check and cancel_check():
+                kill_remote_tb_job(cluster, log_fn=log)
+                raise TBCancelled("Hybrid TB band run cancelled.")
+            _, poll_out, _ = ssh.exec_command(
+                f"bash -c '"
+                f"if [ -f {remote_dir}/{PID_NAME} ] && "
+                f"kill -0 $(cat {remote_dir}/{PID_NAME}) 2>/dev/null; then "
+                f"echo running; "
+                f"elif pgrep -f \"{remote_dir}/tb_remote_runner.py\" >/dev/null 2>&1; then "
+                f"echo running; "
+                f"else echo stopped; fi'",
+                timeout=15,
+            )
+            poll_out.channel.recv_exit_status()
+            state = poll_out.read().decode(errors="replace").strip()
+            if state == "stopped":
+                break
+            log("Waiting for remote W90 cache export to finish...")
+            time.sleep(poll_s)
+
         t_dl = time.perf_counter()
         local_npz = os.path.join(
             os.path.expanduser("~"), ".tensorspec_cache", RESULT_NAME
@@ -295,23 +319,27 @@ def run_remote_tb_bands(
         if w90_filepath and w90_cache_key:
             try:
                 remote_cache = f"{remote_dir}/{REMOTE_CACHE_NAME}"
+                # Poll briefly if export is still atomic-renaming.
+                cache_wait = time.perf_counter() + 120.0
+                while (
+                    _remote_file_size(sftp, remote_cache) is None
+                    and time.perf_counter() < cache_wait
+                ):
+                    log("Waiting for remote w90_tb_cache.pkl...")
+                    time.sleep(poll_s)
                 if _remote_file_size(sftp, remote_cache) is not None:
                     from tensorspec.core.dft.w90_tb_cache import ensure_cache_key
 
                     local_cache = local_cache_path(w90_cache_key)
                     local_cache.parent.mkdir(parents=True, exist_ok=True)
-                    log(
-                        f"Downloading W90 TB cache for ARPES "
-                        f"({_remote_file_size(sftp, remote_cache)} bytes)..."
-                    )
+                    nbytes = _remote_file_size(sftp, remote_cache)
+                    log(f"Downloading W90 TB cache for ARPES ({nbytes} bytes)...")
                     sftp.get(remote_cache, str(local_cache))
-                    if ensure_cache_key(local_cache, w90_cache_key):
-                        log("Synced remote W90 TB cache locally (H_dict ready for ARPES)")
-                    else:
-                        log(
-                            "WARN: downloaded W90 cache empty or unreadable — "
-                            "run Prepare TB for ARPES before Push"
-                        )
+                    # Large pickles: skip rewrite-by-reload; load_parsed_tb
+                    # tolerates Mac vs cluster key mismatch by path.
+                    if nbytes and nbytes < 64 * 1024 * 1024:
+                        ensure_cache_key(local_cache, w90_cache_key)
+                    log("Synced remote W90 TB cache locally (H_dict ready for ARPES)")
                 else:
                     log(
                         "WARN: remote job has no w90_tb_cache.pkl — "

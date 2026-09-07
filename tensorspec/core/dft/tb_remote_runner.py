@@ -115,6 +115,12 @@ def main() -> int:
     else:
         eigenvalues = np.asarray(eigenvalues, dtype=float)
 
+    # Export H_dict *before* writing the result npz. Client polls for the npz and
+    # otherwise downloads while w90_tb_cache.pkl is still a half-written .tmp
+    # (~2 GiB / 20M hops) — ARPES then sees empty H_dict.
+    if w90_path:
+        _export_w90_cache_for_client(engine, job, run_dir, w90_path)
+
     out_path = Path(args.out)
     if eigenvectors is None:
         np.savez(
@@ -133,11 +139,6 @@ def main() -> int:
             fermi_energy=fermi_energy,
             backend=str(job.get("diag_engine", "chinook")),
         )
-
-    # Export H_dict into job dir so the Mac client can SFTP it into
-    # ~/.tensorspec_cache/w90_tb/<client_key>.pkl for ARPES push.
-    if w90_path:
-        _export_w90_cache_for_client(engine, job, run_dir, w90_path)
 
     elapsed = time.perf_counter() - t0
     print(
@@ -194,10 +195,63 @@ def _write_job_dir_cache_compat(
 
 def _export_w90_cache_for_client(engine, job: dict, run_dir: Path, w90_path: str) -> None:
     """Write w90_tb_cache.pkl keyed by the *client* cache key from the job JSON."""
+    import shutil
+
     try:
-        from tensorspec.core.dft.w90_tb_cache import REMOTE_CACHE_NAME
+        from tensorspec.core.dft.w90_tb_cache import (
+            REMOTE_CACHE_NAME,
+            cache_key,
+            ensure_cache_key,
+            local_cache_path,
+        )
     except ImportError:
         REMOTE_CACHE_NAME = "w90_tb_cache.pkl"
+        cache_key = None
+        ensure_cache_key = None
+        local_cache_path = None
+
+    client_key = job.get("w90_cache_key")
+    if not client_key:
+        print(
+            "WARN: job missing w90_cache_key — Mac cannot attach H_dict for ARPES",
+            flush=True,
+        )
+        return
+
+    cache_name = job.get("w90_cache_basename") or REMOTE_CACHE_NAME
+    out = run_dir / cache_name
+
+    # Fast path: copy cluster ~/.tensorspec_cache/w90_tb/<cluster_key>.pkl and
+    # rewrite payload key — avoids re-pickling ~20M hops (~5 min).
+    use_soc = bool(job.get("use_soc", False))
+    onsite_e = float(job.get("onsite_e", 0.0))
+    hop_tol = float(job.get("hop_tol", 1e-6))
+    qe_fermi = float(job.get("fermi_energy", job.get("qe_fermi", 0.0)))
+    if cache_key is not None and local_cache_path is not None and ensure_cache_key is not None:
+        try:
+            cluster_src = local_cache_path(
+                cache_key(w90_path, use_soc, onsite_e, hop_tol, qe_fermi=qe_fermi)
+            )
+            if cluster_src.is_file():
+                print(
+                    f"Copying cluster W90 cache -> {cache_name} "
+                    f"({cluster_src.stat().st_size / (1024 * 1024):.1f} MiB)...",
+                    flush=True,
+                )
+                shutil.copy2(cluster_src, out)
+                # Skip ensure_cache_key on multi-GB pickles (full reload).
+                # Mac load_parsed_tb tolerates path-key mismatch when hops present.
+                if out.is_file() and out.stat().st_size > 0:
+                    size_mb = out.stat().st_size / (1024 * 1024)
+                    print(
+                        f"Wrote {cache_name} for client sync (copied, {size_mb:.1f} MiB, "
+                        f"key={client_key[:8]}…)",
+                        flush=True,
+                    )
+                    return
+                print("WARN: cluster cache copy empty — will re-pickle", flush=True)
+        except OSError as exc:
+            print(f"WARN: cluster cache copy failed ({exc}) — will re-pickle", flush=True)
 
     h_dict = getattr(engine, "H_dict", None)
     if not isinstance(h_dict, dict):
@@ -221,16 +275,6 @@ def _export_w90_cache_for_client(engine, job: dict, run_dir: Path, w90_path: str
         print("WARN: no basis_args — skip ARPES cache export", flush=True)
         return
 
-    client_key = job.get("w90_cache_key")
-    if not client_key:
-        print(
-            "WARN: job missing w90_cache_key — Mac cannot attach H_dict for ARPES",
-            flush=True,
-        )
-        return
-
-    cache_name = job.get("w90_cache_basename") or REMOTE_CACHE_NAME
-    out = run_dir / cache_name
     _write_job_dir_cache_compat(
         out,
         key=str(client_key),
@@ -238,7 +282,7 @@ def _export_w90_cache_for_client(engine, job: dict, run_dir: Path, w90_path: str
         basis_args=basis_args,
         A_qe=getattr(engine, "A_qe", None),
         source=w90_path,
-        hop_tol=float(job.get("hop_tol", 1e-6)),
+        hop_tol=hop_tol,
     )
     size_mb = out.stat().st_size / (1024 * 1024)
     print(

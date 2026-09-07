@@ -883,6 +883,13 @@ cd {remote_dir}
                 # (int32 truncation zeroed remote ARPES intensity at finite angle.)
                 h_dict = band_data.get("H_dict") or {}
                 h_list = h_dict.get("list") or h_dict.get("H") or []
+                if len(h_list) == 0:
+                    # Hybrid can plot bands before W90 cache finishes syncing;
+                    # refill from ~/.tensorspec_cache/w90_tb if present.
+                    filled = self._try_fill_h_dict_from_w90_cache(band_data)
+                    if filled:
+                        h_dict = band_data.get("H_dict") or {}
+                        h_list = h_dict.get("list") or h_dict.get("H") or []
                 if len(h_list) > 0:
                     indices = np.array(
                         [[h[0], h[1], h[2], h[3], h[4]] for h in h_list],
@@ -1483,6 +1490,36 @@ cd {remote_dir}
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to save data:\n{e}")
     
+
+    def _try_fill_h_dict_from_w90_cache(self, band_data: dict) -> bool:
+        """Load H_dict from local W90 TB cache into band_data. Returns True on success."""
+        w90 = band_data.get("w90_filepath") or band_data.get("w90_file") or ""
+        if not w90:
+            return False
+        from tensorspec.core.dft.w90_tb_cache import load_parsed_tb
+
+        use_soc = bool(band_data.get("use_soc", False))
+        onsite_e = float(band_data.get("onsite_e", 0.0) or 0.0)
+        hop_tol = float(band_data.get("hop_tol", 1e-6) or 1e-6)
+        qe_fermi = float(band_data.get("fermi_energy", 0.0) or 0.0)
+        disk = load_parsed_tb(
+            w90, use_soc, onsite_e, hop_tol=hop_tol, qe_fermi=qe_fermi
+        )
+        if not disk:
+            print(
+                f"[ARPES] No local W90 cache for refill ({w90})",
+                flush=True,
+            )
+            return False
+        tb_dict, _basis_args, a_qe = disk
+        n_hop = len(tb_dict.get("list") or tb_dict.get("H") or [])
+        if n_hop == 0:
+            return False
+        band_data["H_dict"] = tb_dict
+        if a_qe is not None and not band_data.get("a_mat"):
+            band_data["a_mat"] = a_qe
+        print(f"[ARPES] Refilled H_dict from W90 cache ({n_hop} hoppings)", flush=True)
+        return True
 
     def _pack_basis_list_for_remote(self, band_data: dict) -> list:
         """Serialize orbital basis for tb_data.npz (handles gen_basis dict + TB_model)."""
