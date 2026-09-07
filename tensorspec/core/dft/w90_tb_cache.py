@@ -54,9 +54,15 @@ def load_parsed_tb(
     try:
         with path.open("rb") as f:
             payload = pickle.load(f)
-        if payload.get("key") != key:
+        tb = payload.get("tb_dict") or {}
+        n_hop = len(tb.get("list") or tb.get("H") or [])
+        if n_hop == 0:
             return None
-        return payload["tb_dict"], payload["basis_args"], payload.get("A_qe")
+        # File path is keyed by Mac (or cluster) cache_key(); Hybrid may copy a
+        # cluster-keyed pickle into the Mac path — accept hoppings regardless.
+        if payload.get("key") != key:
+            payload["key"] = key
+        return tb, payload["basis_args"], payload.get("A_qe")
     except Exception:
         return None
 
