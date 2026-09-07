@@ -744,8 +744,9 @@ def build_grizzly_me_shell(
     Safe to reuse across θ-chunks when φ, E, hv, and matrix-element mode are unchanged.
     """
     apply_chinook_runtime_patches()
-    from chinook.ARPES_lib import all_Y, experiment as experiment_fn, projection_map
-    from grizzly.radint_cache import DEFAULT_RADINT_CACHE, dig_range_from_cube, make_radint_cache_key
+    from chinook.ARPES_lib import all_Y, experiment as experiment_fn
+    from grizzly import prepare_me_shell
+    from grizzly.radint_cache import dig_range_from_cube
 
     e_axis = np.asarray(e_axis, dtype=float)
     ne = max(1, len(e_axis))
@@ -784,59 +785,27 @@ def build_grizzly_me_shell(
     exp = experiment_fn(tb_model, arpes_dict)
     exp.ME = is_full
     exp.diagonalize = lambda *args, **kwargs: None
-    exp.basis = exp.rot_basis()
+    prepared = prepare_me_shell(exp)
     dig_range = dig_range_from_cube(exp.cube)
 
-    cache_key = make_radint_cache_key(exp)
-    cached_radint = DEFAULT_RADINT_CACHE.get(cache_key)
-    prefactors = np.array(
-        [o.sigma * np.exp((-0.5 / abs(exp.mfp)) * abs(o.depth)) for o in exp.basis]
-    )
-    Largs, Margs, Gmats, orbital_pointers = all_Y(exp.basis)
-    Gbasis = Gmats[orbital_pointers]
-    proj_arr = projection_map(exp.basis)
-
-    if cached_radint is not None:
-        Bfuncs, radint_pointers = cached_radint
-        print(
-            f"ME shell: radint cache HIT "
-            f"(mem={DEFAULT_RADINT_CACHE.hits} disk={DEFAULT_RADINT_CACHE.disk_hits})",
-            flush=True,
-        )
-    else:
-        import chinook.radint_lib as radint_lib
-
-        rad_dict = {
-            "hv": exp.hv,
-            "W": exp.W,
-            "rad_type": exp.rad_type,
-            "rad_args": exp.rad_args,
-            "phase_shifts": exp.phase_shifts,
-        }
-        print("ME shell: building radial integrals (once per job/TB key)...", flush=True)
-        t0 = time.perf_counter()
-        Bfuncs, radint_pointers = radint_lib.make_radint_pointer(rad_dict, exp.basis, dig_range)
-        DEFAULT_RADINT_CACHE.put(cache_key, Bfuncs, radint_pointers)
-        print(f"ME shell: radint wall={time.perf_counter() - t0:.2f}s", flush=True)
-
-    nstates = len(exp.basis)
-    spin = bool(getattr(exp, "spin", False))
+    # PreparedMeShell exposes indexed Gbasis but not the corresponding pointers.
+    _, _, _, orbital_pointers = all_Y(exp.basis)
     return GrizzlyMeShell(
-        basis=exp.basis,
-        prefactors=prefactors,
-        Largs=Largs,
-        Margs=Margs,
-        Gbasis=Gbasis,
+        basis=prepared.basis,
+        prefactors=prepared.prefactors,
+        Largs=prepared.Largs,
+        Margs=prepared.Margs,
+        Gbasis=prepared.Gbasis,
         orbital_pointers=orbital_pointers,
-        proj_arr=proj_arr,
-        Bfuncs=Bfuncs,
-        radint_pointers=radint_pointers,
+        proj_arr=prepared.proj_arr,
+        Bfuncs=prepared.Bfuncs,
+        radint_pointers=prepared.radint_pointers,
         dig_range=dig_range,
-        nstates=nstates,
-        spin=spin,
+        nstates=prepared.nstates,
+        spin=prepared.spin,
         hv=float(exp.hv),
         W=float(exp.W),
-        mfp=float(exp.mfp),
+        mfp=prepared.mfp,
     )
 
 

@@ -266,6 +266,11 @@ def _run_full_cube_multigpu(
         flush=True,
     )
 
+    print("Pre-warming ME shell radint cache (once for all GPU workers)...", flush=True)
+    tb_model = load_tb_model_from_npz(os.path.abspath(tb_file), float(e_fermi))
+    build_grizzly_me_shell(tb_model, physics, B_matrix, e_axis)
+    print("ME shell radint cache warm.", flush=True)
+
     ctx = get_context("spawn")
     task_q: Queue = ctx.Queue()
     result_q: Queue = ctx.Queue()
