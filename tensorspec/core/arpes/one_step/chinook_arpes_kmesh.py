@@ -746,6 +746,7 @@ def build_grizzly_me_shell(
     apply_chinook_runtime_patches()
     from chinook.ARPES_lib import all_Y, experiment as experiment_fn
     from grizzly import prepare_me_shell
+    from grizzly.me_shell import resolve_radint_mode
     from grizzly.radint_cache import dig_range_from_cube
 
     e_axis = np.asarray(e_axis, dtype=float)
@@ -785,7 +786,15 @@ def build_grizzly_me_shell(
     exp = experiment_fn(tb_model, arpes_dict)
     exp.ME = is_full
     exp.diagonalize = lambda *args, **kwargs: None
+    radint_started = time.perf_counter()
     prepared = prepare_me_shell(exp)
+    radint_wall = time.perf_counter() - radint_started
+    radint_status = "HIT" if prepared.radint_source == "cache" else "MISS"
+    print(
+        f"Radint {radint_status} backend={resolve_radint_mode()} "
+        f"source={prepared.radint_source} wall={radint_wall:.2f}s",
+        flush=True,
+    )
     dig_range = dig_range_from_cube(exp.cube)
 
     # PreparedMeShell exposes indexed Gbasis but not the corresponding pointers.
