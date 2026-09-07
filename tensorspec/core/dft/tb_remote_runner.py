@@ -134,6 +134,11 @@ def main() -> int:
             backend=str(job.get("diag_engine", "chinook")),
         )
 
+    # Export H_dict into job dir so the Mac client can SFTP it into
+    # ~/.tensorspec_cache/w90_tb/<client_key>.pkl for ARPES push.
+    if w90_path:
+        _export_w90_cache_for_client(engine, job, run_dir, w90_path)
+
     elapsed = time.perf_counter() - t0
     print(
         f"OK: {eigenvalues.shape[0]} k-pts x {eigenvalues.shape[1]} bands "
@@ -141,6 +146,59 @@ def main() -> int:
         flush=True,
     )
     return 0
+
+
+def _export_w90_cache_for_client(engine, job: dict, run_dir: Path, w90_path: str) -> None:
+    """Write w90_tb_cache.pkl keyed by the *client* cache key from the job JSON."""
+    from tensorspec.core.dft.w90_tb_cache import REMOTE_CACHE_NAME, write_job_dir_cache
+
+    h_dict = getattr(engine, "H_dict", None)
+    if not isinstance(h_dict, dict):
+        # Fall back to in-memory parse cache after seed/parse.
+        for _tb, _basis in getattr(engine, "_w90_parse_cache", {}).values():
+            h_dict = _tb
+            break
+    if not isinstance(h_dict, dict):
+        print("WARN: no H_dict on engine — skip ARPES cache export", flush=True)
+        return
+    n_hop = len(h_dict.get("list") or h_dict.get("H") or [])
+    if n_hop == 0:
+        print("WARN: H_dict has zero hoppings — skip ARPES cache export", flush=True)
+        return
+
+    basis_args = getattr(engine, "_cached_basis_args", None)
+    if basis_args is None:
+        for _tb, basis_args in getattr(engine, "_w90_parse_cache", {}).values():
+            break
+    if not isinstance(basis_args, dict):
+        print("WARN: no basis_args — skip ARPES cache export", flush=True)
+        return
+
+    client_key = job.get("w90_cache_key")
+    if not client_key:
+        print(
+            "WARN: job missing w90_cache_key — Mac cannot attach H_dict for ARPES",
+            flush=True,
+        )
+        return
+
+    cache_name = job.get("w90_cache_basename") or REMOTE_CACHE_NAME
+    out = run_dir / cache_name
+    write_job_dir_cache(
+        out,
+        key=str(client_key),
+        tb_dict=h_dict,
+        basis_args=basis_args,
+        A_qe=getattr(engine, "A_qe", None),
+        source=w90_path,
+        hop_tol=float(job.get("hop_tol", 1e-6)),
+    )
+    size_mb = out.stat().st_size / (1024 * 1024)
+    print(
+        f"Wrote {cache_name} for client sync ({n_hop} hops, {size_mb:.1f} MiB, "
+        f"key={client_key[:8]}…)",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
