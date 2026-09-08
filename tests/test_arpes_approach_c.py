@@ -22,12 +22,33 @@ def test_fresnel_n1_matches_vacuum_LV():
     np.testing.assert_allclose(Af, A, atol=1e-12)
 
 
-def test_fresnel_n_gt1_changes_LH_Ez_ratio():
-    """With n>1, transmitted p-field mix must differ from vacuum at fixed α."""
+def test_fresnel_n_gt1_changes_LH_direction_mix():
+    """Refracted rebuild: |Ay|/|Ax| != |tan α| when n>1."""
     alpha = 55.0
     A = compute_A_lab("Linear Horizontal (p-pol)", alpha)
     Af = apply_fresnel_to_A_lab(A, alpha, n=2.0)
-    assert not np.allclose(Af, A, atol=1e-6)
+    vac_ratio = abs(A[1] / A[0])
+    new_ratio = abs(Af[1] / Af[0])
+    assert abs(new_ratio - vac_ratio) > 1e-6
+
+
+def test_fresnel_LH_Ez_mix_differs_55_vs_20():
+    """Fixed n>1: |Ay|/|A_p| differs between 55° and 20°."""
+    n = 2.0
+    ratios = []
+    for alpha in (55.0, 20.0):
+        A = compute_A_lab("Linear Horizontal (p-pol)", alpha)
+        Af = apply_fresnel_to_A_lab(A, alpha, n=n)
+        ap = float(np.sqrt(abs(Af[0]) ** 2 + abs(Af[1]) ** 2))
+        ratios.append(abs(Af[1]) / ap)
+    assert abs(ratios[0] - ratios[1]) > 1e-6
+
+
+def test_fresnel_LV_stays_along_z():
+    A = compute_A_lab("Linear Vertical (s-pol)", 55.0)
+    Af = apply_fresnel_to_A_lab(A, 55.0, n=2.0)
+    assert abs(Af[0]) < 1e-12 and abs(Af[1]) < 1e-12
+    assert abs(Af[2]) > 1e-6
 
 
 def _q_parallel_mag(q: np.ndarray) -> float:

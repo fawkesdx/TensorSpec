@@ -16,10 +16,9 @@ Amplitude transmission (field E, not intensity), ``n_i = 1``, ``n_t = n``:
 with Snell ``sin θ_t = sin θ_i / n``. Cosines use complex square-root continuation
 (finite for TIR / absorbing ``n``; no hard zero-out).
 
-Vector rebuild (v1): **vacuum-angle basis** — scale the vacuum s and p
-cartesian pieces by ``t_s`` / ``t_p`` without remapping onto the refracted
-propagation angle. Then ``n = 1`` is an exact identity. Phase of complex ``t``
-is kept.
+Vector rebuild (v2): **refracted-angle basis** — project vacuum in-plane A onto
+``Ê_p(θ_i)``, then rebuild ``t_p A_p Ê_p(θ_t)`` with Snell ``θ_t``. Then
+``n = 1`` is an exact identity. Phase of complex ``t`` is kept.
 """
 
 from __future__ import annotations
@@ -50,20 +49,29 @@ def apply_fresnel_to_A_lab(
     incidence_deg: float,
     n: complex,
 ) -> np.ndarray:
-    """Scale vacuum lab ``A`` by Fresnel ``t_s`` / ``t_p`` (vacuum-angle basis).
-
-    Decomposition for this codebase's LH/LV convention:
-    - p: in-plane components ``(A_x, A_y, 0)``
-    - s: ``(0, 0, A_z)``
-    """
+    """Scale + remap vacuum lab A onto refracted p-basis (Approach C v2)."""
     A = np.asarray(A_vac)
-    t_s, t_p = fresnel_ts_tp(incidence_deg, n)
+    n_c = complex(n)
+    t_s, t_p = fresnel_ts_tp(incidence_deg, n_c)
+
+    theta_i = np.radians(float(incidence_deg))
+    sin_i = np.sin(theta_i)
+    cos_i = np.cos(theta_i)
+    sin_t = sin_i / n_c
+    cos_t = np.sqrt(1.0 - sin_t * sin_t)
+
+    # Complex-safe projection of in-plane A onto vacuum Ê_p(θ_i).
+    e_px_i = cos_i
+    e_py_i = -sin_i
+    A_p = A[0] * e_px_i + A[1] * e_py_i
+
+    e_px_t = cos_t
+    e_py_t = -sin_t
 
     out = np.array(
-        [t_p * A[0], t_p * A[1], t_s * A[2]],
+        [t_p * A_p * e_px_t, t_p * A_p * e_py_t, t_s * A[2]],
         dtype=np.result_type(A.dtype, complex),
     )
-    # Preserve real dtype when inputs and n yield a real result.
     if np.isrealobj(A) and np.isreal(n) and np.isreal(out).all():
         return np.real(out).astype(A.dtype, copy=False)
     return out
