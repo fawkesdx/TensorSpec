@@ -56,6 +56,30 @@ def test_physics_approach_c_defaults():
     assert phys["include_photon_momentum"] is False
 
 
+def test_physics_approach_c_explicit_kwargs_roundtrip():
+    """GUI/remote dict keys survive physics_from_experiment_kwargs (no Qt)."""
+    phys = physics_from_experiment_kwargs(
+        {
+            "photon_energy": 84.0,
+            "fresnel_enabled": False,
+            "optical_n": 2.5,
+            "optical_k": 0.3,
+            "include_photon_momentum": True,
+        }
+    )
+    assert phys["fresnel_enabled"] is False
+    assert phys["optical_n"] == 2.5
+    assert phys["optical_k"] == 0.3
+    assert phys["include_photon_momentum"] is True
+    for key in (
+        "fresnel_enabled",
+        "optical_n",
+        "optical_k",
+        "include_photon_momentum",
+    ):
+        assert key in phys
+
+
 def _tiny_mesh_kwargs():
     return dict(
         k_bounds={
