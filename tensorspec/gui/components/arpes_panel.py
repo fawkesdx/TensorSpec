@@ -343,7 +343,32 @@ class ARPESPanel(QWidget):
         )
         self.kz_halfwidth_spin.valueChanged.connect(self._on_kz_halfwidth_changed)
         self.kz_npoints_spin.valueChanged.connect(self._ensure_kz_npoints_odd)
-        
+
+        self.fresnel_enabled_chk = QCheckBox("Fresnel local field")
+        self.fresnel_enabled_chk.setChecked(True)
+        self.fresnel_enabled_chk.setToolTip(
+            "Apply Fresnel transmission to lab-frame vector potential A."
+        )
+        self.optical_n_spin = QDoubleSpinBox()
+        self.optical_n_spin.setRange(0.01, 20.0)
+        self.optical_n_spin.setValue(1.0)
+        self.optical_n_spin.setSingleStep(0.05)
+        self.optical_n_spin.setDecimals(3)
+        self.optical_n_spin.setToolTip("Real refractive index n (n=1 → vacuum parity).")
+        self.optical_k_spin = QDoubleSpinBox()
+        self.optical_k_spin.setRange(0.0, 20.0)
+        self.optical_k_spin.setValue(0.0)
+        self.optical_k_spin.setSingleStep(0.05)
+        self.optical_k_spin.setDecimals(3)
+        self.optical_k_spin.setToolTip("Extinction coefficient k (Im n).")
+        self.include_photon_momentum_chk = QCheckBox("Photon momentum (soft X-ray)")
+        self.include_photon_momentum_chk.setChecked(False)
+        self.include_photon_momentum_chk.setToolTip(
+            "Subtract full photon wavevector q from bulk crystal momentum."
+        )
+        self.fresnel_enabled_chk.toggled.connect(self._on_fresnel_enabled_changed)
+        self._on_fresnel_enabled_changed(True)
+
         self.polarization_combo = QComboBox()
         self.polarization_combo.addItems([
             "Linear Horizontal (p-pol)", 
@@ -384,6 +409,10 @@ class ARPESPanel(QWidget):
         beam_layout.addRow("Cleavage Plane [h k l]:", hkl_layout)
         # ---------------------------------------------------------------------------------------------
         beam_layout.addRow("Beam Incidence (Lab):", self.incidence_angle_spin)
+        beam_layout.addRow(self.fresnel_enabled_chk)
+        beam_layout.addRow("Optical n:", self.optical_n_spin)
+        beam_layout.addRow("Optical k:", self.optical_k_spin)
+        beam_layout.addRow(self.include_photon_momentum_chk)
         beam_layout.addRow("k_z Halfwidth:", self.kz_halfwidth_spin)
         beam_layout.addRow("k_z N Points:", self.kz_npoints_spin)
         beam_layout.addRow("Polarization:", self.polarization_combo)
@@ -644,6 +673,12 @@ class ARPESPanel(QWidget):
         """Enable kz_npoints only when broadening is on (halfwidth > 0)."""
         self.kz_npoints_spin.setEnabled(float(value) > 0.0)
 
+    def _on_fresnel_enabled_changed(self, checked):
+        """Enable optical n/k spins only when Fresnel local field is on."""
+        on = bool(checked)
+        self.optical_n_spin.setEnabled(on)
+        self.optical_k_spin.setEnabled(on)
+
     def _ensure_kz_npoints_odd(self, value):
         """Force odd sample count for Lorentzian k_z quadrature."""
         v = int(value)
@@ -663,12 +698,16 @@ class ARPESPanel(QWidget):
         return 1
 
     def _critic_gap_physics_kwargs(self):
-        """rad_type / mfp / kz knobs shared by local + remote paths."""
+        """Approach B/C knobs shared by local + remote + metadata paths."""
         return {
             "rad_type": self.rad_type_combo.currentText(),
             "mfp": self.mfp_spin.value(),
             "kz_halfwidth": self.kz_halfwidth_spin.value(),
             "kz_npoints": self._kz_npoints_for_physics(),
+            "fresnel_enabled": self.fresnel_enabled_chk.isChecked(),
+            "optical_n": self.optical_n_spin.value(),
+            "optical_k": self.optical_k_spin.value(),
+            "include_photon_momentum": self.include_photon_momentum_chk.isChecked(),
         }
 
     def update_schematic(self, *args):
@@ -1559,10 +1598,7 @@ cd {remote_dir}
             'manip_tilt': self.manip_tilt_spin.value(),
             'slit_angle': self.slit_angle_spin.value(),
             'hkl': [self.spin_h.value(), self.spin_k.value(), self.spin_l.value()],
-            'rad_type': self.rad_type_combo.currentText(),
-            'mfp': self.mfp_spin.value(),
-            'kz_halfwidth': self.kz_halfwidth_spin.value(),
-            'kz_npoints': self._kz_npoints_for_physics(),
+            **self._critic_gap_physics_kwargs(),
         }
 
 
