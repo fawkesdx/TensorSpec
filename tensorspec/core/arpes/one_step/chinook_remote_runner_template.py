@@ -604,9 +604,7 @@ def _record_paper_timing(*, out_file: str, wall_s: float, **meta) -> None:
     print(f"  timing record: {sidecar} wall_s={record['wall_s']}", flush=True)
 
 
-def main():
-    global USE_GRIZZLY, GRIZZLY_DEVICE
-
+def build_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tb_file", type=str, required=True)
     parser.add_argument("--theta_min", type=float, required=True)
@@ -676,6 +674,30 @@ def main():
         default="arpes_physics.json",
         help="JSON with beamline/manipulator/hkl settings (same as local GUI).",
     )
+    return parser
+
+
+def _run_hv_loop(hv_values, compute_one):
+    cubes = []
+    for ihv, hv in enumerate(hv_values):
+        cube = compute_one(ihv, float(hv), me_shell=None)
+        cubes.append(np.asarray(cube, dtype=np.float32))
+    if len(hv_values) == 1:
+        return cubes[0], None
+    return stack_hv_cubes(cubes, np.asarray(hv_values, dtype=float))
+
+
+def _save_hv_npz(out_file, cube, hv_axis, *, save=np.savez_compressed, **meta):
+    payload = {"cube": cube, **meta}
+    if hv_axis is not None:
+        payload["hv"] = hv_axis
+    save(out_file, **payload)
+
+
+def main():
+    global USE_GRIZZLY, GRIZZLY_DEVICE
+
+    parser = build_arg_parser()
     args = parser.parse_args()
     try:
         hv_values = hv_list_from_cli_args(args)
@@ -885,13 +907,13 @@ def main():
 
     requested_chunk = int(args.theta_chunk) if args.theta_chunk else 0
     t_compute = time.perf_counter()
-    cubes = []
     used_theta_chunks = []
-    for ihv, hv in enumerate(hv_values):
-        hv = float(hv)
+
+    def _compute_one_hv(ihv, hv, *, me_shell):
+        if me_shell is not None:
+            raise ValueError("ME shell must not be reused across photon energies")
         args.hv = hv
         physics["hv"] = hv
-        global_physics = physics
         e_kin = max(hv - args.workf, 0.1)
         k_radius = 0.512316 * np.sqrt(e_kin)
         print(
@@ -970,23 +992,16 @@ def main():
                 sys.exit(1)
         else:
             cube = _run_slices_path()
-        cubes.append(np.asarray(cube, dtype=np.float32))
         used_theta_chunks.append(used_theta_chunk)
         _cuda_empty_cache()
+        return cube
 
+    cube_to_save, hv_axis = _run_hv_loop(hv_values, _compute_one_hv)
     wall_s = float(time.perf_counter() - t_compute)
     used_theta_chunk = used_theta_chunks[-1] if used_theta_chunks else 0
-    if len(hv_values) == 1:
-        cube_to_save = cubes[0]
-        hv_axis = None
-    else:
-        cube_to_save, hv_axis = stack_hv_cubes(
-            cubes, np.asarray(hv_values, dtype=float)
-        )
 
     print(f"Saving ARPES intensity cube to {args.out_file}...", flush=True)
     save_payload = {
-        "cube": cube_to_save,
         "energy": e_axis,
         "theta": thetas,
         "phi": phis,
@@ -1002,9 +1017,7 @@ def main():
         "nphi": np.array(int(args.nphi)),
         "ne": np.array(int(args.ne)),
     }
-    if hv_axis is not None:
-        save_payload["hv"] = hv_axis
-    np.savez_compressed(args.out_file, **save_payload)
+    _save_hv_npz(args.out_file, cube_to_save, hv_axis, **save_payload)
     _record_paper_timing(
         out_file=args.out_file,
         wall_s=wall_s,
