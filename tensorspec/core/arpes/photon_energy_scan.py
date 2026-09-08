@@ -15,6 +15,23 @@ def build_hv_list(start: float, finish: float, step: float) -> np.ndarray:
     return hv.astype(float)
 
 
+def resolve_photon_energies(
+    *,
+    mode: str,
+    single: float | None = None,
+    start: float | None = None,
+    finish: float | None = None,
+    step: float | None = None,
+) -> list[float]:
+    if mode == "single":
+        if single is None:
+            raise ValueError("single hv required")
+        return [float(single)]
+    if mode == "range":
+        return build_hv_list(start, finish, step).tolist()
+    raise ValueError(f"unknown hv mode: {mode}")
+
+
 def stack_hv_cubes(
     cubes: list[np.ndarray], hv_list: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
