@@ -1,6 +1,66 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from pathlib import Path
+
 import numpy as np
+import torch
+
+from tensorspec.core.ml.ssl.dino import DinoModel
+from tensorspec.core.ml.ssl.models.vit2d import build_vit2d
+from tensorspec.core.ml.ssl.spec import run_config_from_dict
+
+
+@dataclass(frozen=True)
+class ProbeConfig:
+    source_id: str
+    k: int = 2
+    pca_dim: int = 50
+    seed: int = 0
+    batch_size: int = 64
+    use_teacher: bool = True
+
+
+def load_dino_for_probe(ckpt, *, device):
+    path = Path(ckpt)
+    payload = torch.load(path, map_location=device, weights_only=False)
+    cfg = run_config_from_dict(payload["config"])
+    student = build_vit2d(cfg.model)
+    teacher = build_vit2d(cfg.model)
+    model = DinoModel(student, teacher, cfg.dino)
+    model.load_state_dict(payload["model"])
+    model.to(device)
+    model.eval()
+    return model, cfg
+
+
+@torch.no_grad()
+def extract_cls_embeddings(model, images, *, batch_size, use_teacher, device):
+    model.eval()
+    backbone = model.teacher if use_teacher else model.student
+    outs = []
+    x_all = torch.from_numpy(np.asarray(images, dtype=np.float32))
+    if x_all.ndim != 3:
+        raise ValueError("images must be (N,H,W)")
+    for i in range(0, len(x_all), batch_size):
+        batch = x_all[i : i + batch_size].unsqueeze(1).to(device)  # N,1,H,W
+        cls, _ = backbone.forward_features(batch)
+        outs.append(cls.float().cpu().numpy())
+    return np.concatenate(outs, axis=0)
+
+
+def cluster_embeddings(emb, cfg: ProbeConfig):
+    from sklearn.cluster import KMeans
+    from sklearn.decomposition import PCA
+
+    n = emb.shape[0]
+    dim = min(cfg.pca_dim, n - 1, emb.shape[1])
+    if dim < 1:
+        raise ValueError("not enough samples for PCA")
+    z = PCA(n_components=dim, random_state=cfg.seed).fit_transform(emb)
+    return KMeans(n_clusters=cfg.k, random_state=cfg.seed, n_init=10).fit_predict(z).astype(
+        np.int32
+    )
 
 
 def labels_to_grid(assignments, provenances, *, ny, nx):
