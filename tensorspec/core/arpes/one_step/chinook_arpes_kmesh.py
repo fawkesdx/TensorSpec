@@ -12,10 +12,28 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+import importlib.util
+import os
+
 import numpy as np
 
-from tensorspec.core.arpes.one_step.fresnel import apply_fresnel_to_A_lab
-from tensorspec.core.arpes.one_step.photon_momentum import photon_q_lab
+try:
+    from tensorspec.core.arpes.one_step.fresnel import apply_fresnel_to_A_lab
+    from tensorspec.core.arpes.one_step.photon_momentum import photon_q_lab
+except ImportError:
+    # Remote Einstein jobs upload flat .py files beside this module (no package).
+    def _load_co_uploaded(name: str):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{name}.py")
+        if name in sys.modules:
+            return sys.modules[name]
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    apply_fresnel_to_A_lab = _load_co_uploaded("fresnel").apply_fresnel_to_A_lab
+    photon_q_lab = _load_co_uploaded("photon_momentum").photon_q_lab
 
 _CHINOOK_PATCHED = False
 
