@@ -135,16 +135,24 @@ def _best_permutation_metrics(pred: np.ndarray, ref: np.ndarray) -> dict[str, fl
 
 
 def agreement_metrics(pred, ref) -> dict[str, float]:
+    """Partition agreement. ARI/NMI work for any label sets; IoU uses flip match only when both binary."""
+    from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
+
     pred_arr = np.asarray(pred)
     ref_arr = np.asarray(ref)
-    allowed = {0, 1}
-    for name, arr in (("pred", pred_arr), ("ref", ref_arr)):
-        labels = set(np.unique(arr).tolist())
-        if not labels.issubset(allowed):
-            raise ValueError(
-                f"{name} labels must be a subset of {{0, 1}} for k=2 agreement"
-            )
-    return _best_permutation_metrics(pred_arr, ref_arr)
+    if pred_arr.shape != ref_arr.shape:
+        raise ValueError("pred and ref shape mismatch")
+    pred_labels = set(np.unique(pred_arr).tolist())
+    ref_labels = set(np.unique(ref_arr).tolist())
+    binary = pred_labels.issubset({0, 1}) and ref_labels.issubset({0, 1})
+    if binary:
+        return _best_permutation_metrics(pred_arr, ref_arr)
+    return {
+        "ari": float(adjusted_rand_score(ref_arr.ravel(), pred_arr.ravel())),
+        "nmi": float(normalized_mutual_info_score(ref_arr.ravel(), pred_arr.ravel())),
+        "iou": float("nan"),
+        "contiguity": float(spatial_contiguity(pred_arr)),
+    }
 
 
 def spatial_contiguity(labels) -> float:
@@ -204,32 +212,39 @@ def _save_overlay_pngs(out: Path, ref_map, ssl_map, ref_lab) -> None:
     fig.savefig(out / "fig_ref.png", dpi=120)
     plt.close(fig)
 
+    n_clusters = int(np.unique(ssl_map).size)
     fig, ax = plt.subplots(figsize=(4, 4))
-    im = ax.imshow(ssl_map, origin="lower", aspect="equal", interpolation="nearest")
-    ax.set_title("SSL cluster map")
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    im = ax.imshow(
+        ssl_map,
+        origin="lower",
+        aspect="equal",
+        interpolation="nearest",
+        cmap="tab10",
+        vmin=0,
+        vmax=max(n_clusters - 1, 1),
+    )
+    ax.set_title(f"SSL cluster map (k={n_clusters})")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, ticks=range(n_clusters))
     fig.tight_layout()
     fig.savefig(out / "fig_ssl.png", dpi=120)
     plt.close(fig)
 
-    # Best label flip for overlay (same policy as agreement_metrics)
-    best_ssl = ssl_map
-    best_iou = -1.0
-    for flip in (False, True):
-        p = (1 - ssl_map) if flip else ssl_map
-        iou = _mean_iou(p, ref_lab)
-        if iou > best_iou:
-            best_iou = iou
-            best_ssl = p
-    disagree = (best_ssl != ref_lab).astype(np.float32)
-
     fig, axes = plt.subplots(1, 3, figsize=(10, 3.5))
     axes[0].imshow(ref_lab, origin="lower", aspect="equal", interpolation="nearest")
     axes[0].set_title("ref binary")
-    axes[1].imshow(best_ssl, origin="lower", aspect="equal", interpolation="nearest")
-    axes[1].set_title("SSL (matched)")
-    axes[2].imshow(disagree, origin="lower", aspect="equal", interpolation="nearest", cmap="Reds")
-    axes[2].set_title("disagreement")
+    axes[1].imshow(
+        ssl_map,
+        origin="lower",
+        aspect="equal",
+        interpolation="nearest",
+        cmap="tab10",
+        vmin=0,
+        vmax=max(n_clusters - 1, 1),
+    )
+    axes[1].set_title(f"SSL k={n_clusters}")
+    # Pixel disagrees if SSL label set vs binary ref is not informative; show SSL only side-by-side
+    axes[2].imshow(ref_map, origin="lower", aspect="equal")
+    axes[2].set_title("ref intensity")
     for ax in axes:
         ax.set_xticks([])
         ax.set_yticks([])
@@ -239,10 +254,8 @@ def _save_overlay_pngs(out: Path, ref_map, ssl_map, ref_lab) -> None:
 
 
 def probe(*, ckpt, data_dir, reference, out_dir, config: ProbeConfig) -> dict:
-    if config.k != 2:
-        raise ValueError(
-            f"B2 floor probe requires k=2 only (got k={config.k})"
-        )
+    if config.k < 2:
+        raise ValueError(f"probe requires k>=2 (got k={config.k})")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     ref = load_floor_reference(reference)
