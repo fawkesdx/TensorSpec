@@ -353,6 +353,8 @@ def probe(
         raise ValueError(f"probe requires k>=2 (got k={config.k})")
     if config.roi_mode not in ("full", "mask"):
         raise ValueError(f"unknown roi_mode={config.roi_mode!r}")
+    if config.embed not in ("cls", "patch_mean"):
+        raise ValueError(f"unknown embed={config.embed!r}")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     ref = load_floor_reference(reference)
@@ -384,13 +386,23 @@ def probe(
         )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, _run_cfg = load_dino_for_probe(ckpt, device=device)
-    emb = extract_cls_embeddings(
-        model,
-        images,
-        batch_size=config.batch_size,
-        use_teacher=config.use_teacher,
-        device=device,
-    )
+    if config.embed == "cls":
+        emb = extract_cls_embeddings(
+            model,
+            images,
+            batch_size=config.batch_size,
+            use_teacher=config.use_teacher,
+            device=device,
+        )
+    else:
+        emb = extract_patch_mean_embeddings(
+            model,
+            images,
+            batch_size=config.batch_size,
+            use_teacher=config.use_teacher,
+            device=device,
+            l2_normalize=config.l2_normalize,
+        )
     np.save(out / "embeddings.npy", emb)
     assigns = cluster_embeddings(emb, config)
     ny, nx = ref.map.shape
@@ -404,6 +416,10 @@ def probe(
             "pca_dim": config.pca_dim,
             "seed": config.seed,
             "use_teacher": config.use_teacher,
+            "embed": config.embed,
+            "l2_normalize": bool(config.l2_normalize)
+            if config.embed == "patch_mean"
+            else False,
             "n_samples": int(len(idxs)),
             "ckpt": str(ckpt),
             "reference_roi_source_id": ref.roi.get("source_id"),

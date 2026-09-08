@@ -93,6 +93,12 @@ def _parser() -> argparse.ArgumentParser:
         "--axes",
         help="npz with energy_axis/slit_axis for ROI mapping (roi-mask mode)",
     )
+    probe_parser.add_argument(
+        "--embed",
+        choices=["cls", "patch_mean"],
+        default="cls",
+        help="CLS token or mean of all patch tokens",
+    )
     return parser
 
 
@@ -182,6 +188,7 @@ def main(argv=None) -> int:
             batch_size=args.batch_size,
             use_teacher=not args.student,
             roi_mode="mask" if args.roi_mask else "full",
+            embed=args.embed,
         )
         metrics = probe(
             ckpt=args.ckpt,
@@ -195,6 +202,7 @@ def main(argv=None) -> int:
         iou_s = f"{iou:.4f}" if iou == iou else "nan"
         print(
             f"done probe: n_samples={metrics['n_samples']} "
+            f"embed={metrics.get('embed')} "
             f"roi_mode={metrics.get('roi_mode')} "
             f"ari={metrics['ari']:.4f} nmi={metrics['nmi']:.4f} "
             f"iou={iou_s} contiguity={metrics['contiguity']:.4f}",
