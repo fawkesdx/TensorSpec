@@ -84,6 +84,15 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="use student CLS instead of teacher",
     )
+    probe_parser.add_argument(
+        "--roi-mask",
+        action="store_true",
+        help="zero outside Energy/Angle ROI from reference; requires --axes",
+    )
+    probe_parser.add_argument(
+        "--axes",
+        help="npz with energy_axis/slit_axis for ROI mapping (roi-mask mode)",
+    )
     return parser
 
 
@@ -172,6 +181,7 @@ def main(argv=None) -> int:
             seed=args.seed,
             batch_size=args.batch_size,
             use_teacher=not args.student,
+            roi_mode="mask" if args.roi_mask else "full",
         )
         metrics = probe(
             ckpt=args.ckpt,
@@ -179,11 +189,15 @@ def main(argv=None) -> int:
             reference=args.reference,
             out_dir=args.out,
             config=config,
+            axes_path=args.axes,
         )
+        iou = metrics["iou"]
+        iou_s = f"{iou:.4f}" if iou == iou else "nan"
         print(
             f"done probe: n_samples={metrics['n_samples']} "
+            f"roi_mode={metrics.get('roi_mode')} "
             f"ari={metrics['ari']:.4f} nmi={metrics['nmi']:.4f} "
-            f"iou={metrics['iou']:.4f} contiguity={metrics['contiguity']:.4f}",
+            f"iou={iou_s} contiguity={metrics['contiguity']:.4f}",
             file=sys.stderr,
             flush=True,
         )
