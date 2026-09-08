@@ -2,11 +2,31 @@ import numpy as np
 import pytest
 from tensorspec.core.arpes.photon_energy_scan import (
     build_hv_list,
+    hv_list_from_cli_args,
     stack_hv_cubes,
     is_dispersion_axes,
     resolve_photon_energies,
     tensor_from_stacked_sim,
 )
+
+
+class _Args:
+    def __init__(self, hv=90.0, hv_start=None, hv_finish=None, hv_step=None):
+        self.hv = hv
+        self.hv_start = hv_start
+        self.hv_finish = hv_finish
+        self.hv_step = hv_step
+
+
+def test_cli_single_hv():
+    assert hv_list_from_cli_args(_Args(hv=84.0)) == [84.0]
+
+
+def test_cli_range_overrides_single():
+    out = hv_list_from_cli_args(
+        _Args(hv=90.0, hv_start=80.0, hv_finish=90.0, hv_step=5.0)
+    )
+    assert out == [80.0, 85.0, 90.0]
 
 
 def test_build_hv_list_inclusive_finish():

@@ -15,6 +15,18 @@ def build_hv_list(start: float, finish: float, step: float) -> np.ndarray:
     return hv.astype(float)
 
 
+def hv_list_from_cli_args(args) -> list[float]:
+    if (
+        getattr(args, "hv_start", None) is not None
+        and getattr(args, "hv_finish", None) is not None
+        and getattr(args, "hv_step", None) is not None
+    ):
+        return build_hv_list(
+            args.hv_start, args.hv_finish, args.hv_step
+        ).tolist()
+    return [float(args.hv)]
+
+
 def resolve_photon_energies(
     *,
     mode: str,
