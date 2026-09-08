@@ -11,28 +11,90 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from tensorspec.core.arpes_engine import ARPESEngineRouter
+from tensorspec.core.arpes.photon_energy_scan import (
+    resolve_photon_energies,
+    stack_hv_cubes,
+    tensor_from_stacked_sim,
+)
 from tensorspec.core.workspace import global_workspace
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.compute import cluster_paths as cp
 
+
+def _remote_hv_cli_args(hv_list, hv_start, hv_finish, hv_step):
+    """Build one remote runner's photon-energy CLI arguments."""
+    if len(hv_list) == 1:
+        return f"--hv {hv_list[0]}"
+    return (
+        f"--hv_start {hv_start} --hv_finish {hv_finish} "
+        f"--hv_step {hv_step}"
+    )
+
+
+def _remote_cube_results(data):
+    """Map a fetched Chinook npz payload to the GUI result contract."""
+    cube = data["cube"]
+    results = {
+        "intensity_broadened": cube,
+        "energy": data["energy"] if "energy" in data else None,
+        "theta": data["theta"] if "theta" in data else None,
+        "phi": data["phi"] if "phi" in data else None,
+    }
+    if "hv" in data and cube.ndim == 4:
+        results["photon_energies"] = np.asarray(data["hv"], dtype=float)
+    return results
+
+
 class ARPESRunnerThread(QThread):
     """Runs the heavy 2D matrix element loop in the background to prevent UI freezing."""
     finished_signal = Signal(bool, object, str)
+    progress = Signal(str)
 
-    def __init__(self, engine_router, model_choice, crystal_data, experiment_kwargs):
+    def __init__(
+        self,
+        engine_router,
+        model_choice,
+        crystal_data,
+        experiment_kwargs,
+        photon_energies=None,
+    ):
         super().__init__()
         self.engine_router = engine_router
         self.model_choice = model_choice
         self.crystal_data = crystal_data
         self.experiment_kwargs = experiment_kwargs
+        self.photon_energies = photon_energies
 
     def run(self):
         try:
-            results = self.engine_router.run_simulation(
-                model_choice=self.model_choice,
-                crystal_data=self.crystal_data,
-                experiment_kwargs=self.experiment_kwargs
-            )
+            if self.photon_energies and len(self.photon_energies) > 1:
+                cubes = []
+                results = None
+                for index, hv in enumerate(self.photon_energies):
+                    kwargs = dict(self.experiment_kwargs)
+                    kwargs["photon_energy"] = float(hv)
+                    kwargs["photon_energies"] = list(self.photon_energies)
+                    results = self.engine_router.run_simulation(
+                        model_choice=self.model_choice,
+                        crystal_data=self.crystal_data,
+                        experiment_kwargs=kwargs,
+                    )
+                    cubes.append(results["intensity_broadened"])
+                    self.progress.emit(
+                        f"hv {index + 1}/{len(self.photon_energies)} ({hv:g} eV)"
+                    )
+                stacked, hv = stack_hv_cubes(
+                    cubes, np.asarray(self.photon_energies, dtype=float)
+                )
+                results = dict(results)
+                results["intensity_broadened"] = stacked
+                results["photon_energies"] = hv
+            else:
+                results = self.engine_router.run_simulation(
+                    model_choice=self.model_choice,
+                    crystal_data=self.crystal_data,
+                    experiment_kwargs=self.experiment_kwargs,
+                )
             self.finished_signal.emit(True, results, "Success")
         except Exception as e:
             self.finished_signal.emit(False, None, str(e))
@@ -178,7 +240,47 @@ class ARPESPanel(QWidget):
         param_group = QGroupBox("2. Final State & Thermodynamics")
         param_layout = QFormLayout(param_group)
         
+        self.hv_mode_combo = QComboBox()
+        self.hv_mode_combo.addItem("Single", "single")
+        self.hv_mode_combo.addItem("Range", "range")
+        self.hv_mode_combo.setToolTip(
+            "hv-dependent scan = Chinook (Grizzly) only. SPR-KKR later."
+        )
+
         self.photon_energy_spin = QDoubleSpinBox(); self.photon_energy_spin.setRange(5.0, 2000.0); self.photon_energy_spin.setValue(90.0); self.photon_energy_spin.setSuffix(" eV")
+
+        self.hv_start_spin = QDoubleSpinBox()
+        self.hv_start_spin.setRange(5.0, 2000.0)
+        self.hv_start_spin.setValue(80.0)
+        self.hv_start_spin.setSuffix(" eV")
+        self.hv_finish_spin = QDoubleSpinBox()
+        self.hv_finish_spin.setRange(5.0, 2000.0)
+        self.hv_finish_spin.setValue(100.0)
+        self.hv_finish_spin.setSuffix(" eV")
+        self.hv_step_spin = QDoubleSpinBox()
+        self.hv_step_spin.setRange(0.01, 2000.0)
+        self.hv_step_spin.setValue(5.0)
+        self.hv_step_spin.setSuffix(" eV")
+
+        self.hv_range_widget = QWidget()
+        hv_range_layout = QHBoxLayout(self.hv_range_widget)
+        hv_range_layout.setContentsMargins(0, 0, 0, 0)
+        hv_range_layout.addWidget(QLabel("Start"))
+        hv_range_layout.addWidget(self.hv_start_spin)
+        hv_range_layout.addWidget(QLabel("Finish"))
+        hv_range_layout.addWidget(self.hv_finish_spin)
+        hv_range_layout.addWidget(QLabel("Step"))
+        hv_range_layout.addWidget(self.hv_step_spin)
+        self.hv_range_widget.hide()
+
+        hv_row_widget = QWidget()
+        hv_row_layout = QHBoxLayout(hv_row_widget)
+        hv_row_layout.setContentsMargins(0, 0, 0, 0)
+        hv_row_layout.addWidget(self.hv_mode_combo)
+        hv_row_layout.addWidget(self.photon_energy_spin)
+        hv_row_layout.addWidget(self.hv_range_widget)
+        self.hv_mode_combo.currentIndexChanged.connect(self.update_hv_mode_ui)
+
         self.work_function_spin = QDoubleSpinBox(); self.work_function_spin.setRange(0.0, 10.0); self.work_function_spin.setValue(4.5); self.work_function_spin.setSuffix(" eV")
         self.inner_potential_spin = QDoubleSpinBox(); self.inner_potential_spin.setRange(0.0, 30.0); self.inner_potential_spin.setValue(15.0); self.inner_potential_spin.setSuffix(" eV")
         self.temperature_spin = QDoubleSpinBox(); self.temperature_spin.setRange(0.1, 1000.0); self.temperature_spin.setValue(10.0); self.temperature_spin.setSuffix(" K")
@@ -204,7 +306,7 @@ class ARPESPanel(QWidget):
         self.mfp_spin.setDecimals(2)
         self.mfp_spin.setSuffix(" Å")
         
-        param_layout.addRow("Photon (hv):", self.photon_energy_spin)
+        param_layout.addRow("Photon (hv):", hv_row_widget)
         param_layout.addRow("Work Func (Φ):", self.work_function_spin)
         param_layout.addRow("Inner Pot (V0):", self.inner_potential_spin)
         param_layout.addRow("Radial Type:", self.rad_type_combo)
@@ -241,7 +343,32 @@ class ARPESPanel(QWidget):
         )
         self.kz_halfwidth_spin.valueChanged.connect(self._on_kz_halfwidth_changed)
         self.kz_npoints_spin.valueChanged.connect(self._ensure_kz_npoints_odd)
-        
+
+        self.fresnel_enabled_chk = QCheckBox("Fresnel local field")
+        self.fresnel_enabled_chk.setChecked(True)
+        self.fresnel_enabled_chk.setToolTip(
+            "Apply Fresnel transmission to lab-frame vector potential A."
+        )
+        self.optical_n_spin = QDoubleSpinBox()
+        self.optical_n_spin.setRange(0.01, 20.0)
+        self.optical_n_spin.setValue(1.0)
+        self.optical_n_spin.setSingleStep(0.05)
+        self.optical_n_spin.setDecimals(3)
+        self.optical_n_spin.setToolTip("Real refractive index n (n=1 → vacuum parity).")
+        self.optical_k_spin = QDoubleSpinBox()
+        self.optical_k_spin.setRange(0.0, 20.0)
+        self.optical_k_spin.setValue(0.0)
+        self.optical_k_spin.setSingleStep(0.05)
+        self.optical_k_spin.setDecimals(3)
+        self.optical_k_spin.setToolTip("Extinction coefficient k (Im n).")
+        self.include_photon_momentum_chk = QCheckBox("Photon momentum (soft X-ray)")
+        self.include_photon_momentum_chk.setChecked(False)
+        self.include_photon_momentum_chk.setToolTip(
+            "Subtract full photon wavevector q from bulk crystal momentum."
+        )
+        self.fresnel_enabled_chk.toggled.connect(self._on_fresnel_enabled_changed)
+        self._on_fresnel_enabled_changed(True)
+
         self.polarization_combo = QComboBox()
         self.polarization_combo.addItems([
             "Linear Horizontal (p-pol)", 
@@ -282,6 +409,10 @@ class ARPESPanel(QWidget):
         beam_layout.addRow("Cleavage Plane [h k l]:", hkl_layout)
         # ---------------------------------------------------------------------------------------------
         beam_layout.addRow("Beam Incidence (Lab):", self.incidence_angle_spin)
+        beam_layout.addRow(self.fresnel_enabled_chk)
+        beam_layout.addRow("Optical n:", self.optical_n_spin)
+        beam_layout.addRow("Optical k:", self.optical_k_spin)
+        beam_layout.addRow(self.include_photon_momentum_chk)
         beam_layout.addRow("k_z Halfwidth:", self.kz_halfwidth_spin)
         beam_layout.addRow("k_z N Points:", self.kz_npoints_spin)
         beam_layout.addRow("Polarization:", self.polarization_combo)
@@ -506,9 +637,47 @@ class ARPESPanel(QWidget):
         control_layout.addWidget(self.btn_push_workspace)
         control_layout.addWidget(self.btn_save_disk)
 
+    def _hv_scan_allowed(self) -> bool:
+        # B1 Chinook TB; B2 bare still uses chinook_wrapper path in panel — allow only
+        # engines that call Chinook/Grizzly ME (B1). Exclude A (three-step) and B3 (SPR-KKR).
+        return self.engine_dropdown.currentData() == "B1"
+
+    def update_hv_mode_ui(self, *_args):
+        scan_allowed = self._hv_scan_allowed()
+        range_item = self.hv_mode_combo.model().item(1)
+        if range_item is not None:
+            range_item.setEnabled(scan_allowed)
+        if not scan_allowed and self.hv_mode_combo.currentData() == "range":
+            self.hv_mode_combo.setCurrentIndex(0)
+
+        is_range = (
+            scan_allowed and self.hv_mode_combo.currentData() == "range"
+        )
+        self.photon_energy_spin.setVisible(not is_range)
+        self.hv_range_widget.setVisible(is_range)
+
+    def get_photon_energies(self) -> list[float]:
+        mode = self.hv_mode_combo.currentData()
+        if mode == "range":
+            return resolve_photon_energies(
+                mode="range",
+                start=self.hv_start_spin.value(),
+                finish=self.hv_finish_spin.value(),
+                step=self.hv_step_spin.value(),
+            )
+        return resolve_photon_energies(
+            mode="single", single=self.photon_energy_spin.value()
+        )
+
     def _on_kz_halfwidth_changed(self, value):
         """Enable kz_npoints only when broadening is on (halfwidth > 0)."""
         self.kz_npoints_spin.setEnabled(float(value) > 0.0)
+
+    def _on_fresnel_enabled_changed(self, checked):
+        """Enable optical n/k spins only when Fresnel local field is on."""
+        on = bool(checked)
+        self.optical_n_spin.setEnabled(on)
+        self.optical_k_spin.setEnabled(on)
 
     def _ensure_kz_npoints_odd(self, value):
         """Force odd sample count for Lorentzian k_z quadrature."""
@@ -529,12 +698,16 @@ class ARPESPanel(QWidget):
         return 1
 
     def _critic_gap_physics_kwargs(self):
-        """rad_type / mfp / kz knobs shared by local + remote paths."""
+        """Approach B/C knobs shared by local + remote + metadata paths."""
         return {
             "rad_type": self.rad_type_combo.currentText(),
             "mfp": self.mfp_spin.value(),
             "kz_halfwidth": self.kz_halfwidth_spin.value(),
             "kz_npoints": self._kz_npoints_for_physics(),
+            "fresnel_enabled": self.fresnel_enabled_chk.isChecked(),
+            "optical_n": self.optical_n_spin.value(),
+            "optical_k": self.optical_k_spin.value(),
+            "include_photon_momentum": self.include_photon_momentum_chk.isChecked(),
         }
 
     def update_schematic(self, *args):
@@ -671,6 +844,21 @@ class ARPESPanel(QWidget):
 
     def trigger_simulation(self):
         model_choice = self.engine_dropdown.currentData()
+        try:
+            hv_list = self.get_photon_energies()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid photon-energy range", str(exc))
+            return
+        if len(hv_list) > 64:
+            reply = QMessageBox.question(
+                self,
+                "Large photon-energy scan",
+                f"This scan contains {len(hv_list)} photon energies. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
         
         if model_choice == "B3":
             # --- SPRKKR Remote Execution ---
@@ -862,11 +1050,15 @@ cd {remote_dir}
                 local_kmesh = one_step / "chinook_arpes_kmesh.py"
                 local_schedule = one_step / "grizzly_cuda_schedule.py"
                 local_collect = one_step / "grizzly_multigpu_collect.py"
+                local_fresnel = one_step / "fresnel.py"
+                local_photon_q = one_step / "photon_momentum.py"
                 for src, dst_name in (
                     (local_template, "chinook_remote_runner.py"),
                     (local_kmesh, "chinook_arpes_kmesh.py"),
                     (local_schedule, "grizzly_cuda_schedule.py"),
                     (local_collect, "grizzly_multigpu_collect.py"),
+                    (local_fresnel, "fresnel.py"),
+                    (local_photon_q, "photon_momentum.py"),
                 ):
                     if not src.is_file():
                         raise FileNotFoundError(f"Missing ARPES runner module: {src}")
@@ -993,7 +1185,13 @@ cd {remote_dir}
                 sftp.close()
                 
                 cores = self.remote_tb_cores_spin.value()
-                hv = self.photon_energy_spin.value()
+                hv_list = self.get_photon_energies()
+                hv_args = _remote_hv_cli_args(
+                    hv_list,
+                    self.hv_start_spin.value(),
+                    self.hv_finish_spin.value(),
+                    self.hv_step_spin.value(),
+                )
                 workf = self.work_function_spin.value()
                 v0 = self.inner_potential_spin.value()
                 temp = self.temperature_spin.value()
@@ -1014,7 +1212,7 @@ cd {remote_dir}
                     f"--tb_file tb_data.npz --theta_min {kx_min} --theta_max {kx_max} --ntheta {kx_steps} "
                     f"--phi_min {ky_min} --phi_max {ky_max} --nphi {ky_steps} "
                     f"--e_min {e_min} --e_max {e_max} --ne {e_steps} "
-                    f"--hv {hv} --workf {workf} --v0 {v0} --temp {temp} --polar {polar} "
+                    f"{hv_args} --workf {workf} --v0 {v0} --temp {temp} --polar {polar} "
                     f"--cores {cores} --engine {me_engine} --device {me_device} "
                     f"--layout {me_layout} --e_fermi {e_fermi} --theta_chunk 0 --ngpus {me_ngpus}"
                 )
@@ -1077,7 +1275,8 @@ cd {remote_dir}
         
         # --- LOCAL EXECUTION ---
         experiment_kwargs = {
-            'photon_energy': self.photon_energy_spin.value(),
+            'photon_energy': float(hv_list[0]),
+            'photon_energies': hv_list,
             'work_function': self.work_function_spin.value(),
             'inner_potential': self.inner_potential_spin.value(), 
             'temperature': self.temperature_spin.value(),         
@@ -1108,7 +1307,16 @@ cd {remote_dir}
         self.run_sim_btn.setText("⏳ Calculating... Please Wait")
         self.run_sim_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #555555; color: white;")
 
-        self.arpes_thread = ARPESRunnerThread(self.engine_router, model_choice, band_data, experiment_kwargs)
+        self.arpes_thread = ARPESRunnerThread(
+            self.engine_router,
+            model_choice,
+            band_data,
+            experiment_kwargs,
+            photon_energies=hv_list,
+        )
+        self.arpes_thread.progress.connect(
+            lambda text: self.run_sim_btn.setText(f"⏳ {text}")
+        )
         self.arpes_thread.finished_signal.connect(self.on_simulation_finished)
         self.arpes_thread.start()
 
@@ -1132,9 +1340,22 @@ cd {remote_dir}
                 e_steps = 1
 
             self.sim_intensity = results['intensity_broadened']
+            if self.sim_intensity.ndim == 4:
+                photon_energies = results.get("photon_energies")
+                self.sim_hv = (
+                    np.asarray(photon_energies, dtype=float)
+                    if photon_energies is not None
+                    else None
+                )
+                preview_intensity = self.sim_intensity[
+                    self.sim_intensity.shape[0] // 2
+                ]
+            else:
+                self.sim_hv = None
+                preview_intensity = self.sim_intensity
             
             # Prefer axes from remote npz when present (truth for remote fetches).
-            nx, ny, ne = self.sim_intensity.shape
+            nx, ny, ne = preview_intensity.shape
             if results.get('energy') is not None:
                 self.sim_E_axis = np.asarray(results['energy'], dtype=float)
             else:
@@ -1206,8 +1427,11 @@ cd {remote_dir}
     def update_plot_slice(self, index=None):
         if not hasattr(self, 'sim_intensity'):
             return
-            
-        nx, ny, ne = self.sim_intensity.shape
+
+        intensity = self.sim_intensity
+        if intensity.ndim == 4:
+            intensity = intensity[intensity.shape[0] // 2]
+        nx, ny, ne = intensity.shape
         self.ax.clear()
 
         use_angles = getattr(self, 'sim_axes_are_angles', True)
@@ -1223,11 +1447,11 @@ cd {remote_dir}
             self.energy_label.setText("Band Dispersion Map")
             
             if deg_y:
-                slice_2d = self.sim_intensity[:, 0, :].T
+                slice_2d = intensity[:, 0, :].T
                 x_axis = self.sim_kx
                 x_label = x_lab
             else:
-                slice_2d = self.sim_intensity[0, :, :].T
+                slice_2d = intensity[0, :, :].T
                 x_axis = self.sim_ky
                 x_label = y_lab
                 
@@ -1250,7 +1474,7 @@ cd {remote_dir}
                 
             E_val = self.sim_E_axis[index]
             
-            slice_2d = self.sim_intensity[:, :, index].T
+            slice_2d = intensity[:, :, index].T
             
             slice_max = np.max(slice_2d) if np.max(slice_2d) > 0 else 1.0
             norm_slice = slice_2d / slice_max
@@ -1354,10 +1578,17 @@ cd {remote_dir}
     def get_simulation_metadata(self):
         """Helper to grab all current UI parameters for saving."""
         azi = self.manip_azi_spin.value()
+        sim_hv = getattr(self, "sim_hv", None)
+        photon_energies = (
+            np.asarray(sim_hv, dtype=float).tolist()
+            if sim_hv is not None
+            else [float(self.photon_energy_spin.value())]
+        )
         return {
             'crystal': self.ws_combo.currentText(),
             'engine': self.engine_dropdown.currentText(),
-            'photon_energy': self.photon_energy_spin.value(),
+            'photon_energy': float(photon_energies[0]),
+            'photon_energies': photon_energies,
             'work_function': self.work_function_spin.value(),
             'inner_potential': self.inner_potential_spin.value(),
             'temperature': self.temperature_spin.value(),
@@ -1371,10 +1602,7 @@ cd {remote_dir}
             'manip_tilt': self.manip_tilt_spin.value(),
             'slit_angle': self.slit_angle_spin.value(),
             'hkl': [self.spin_h.value(), self.spin_k.value(), self.spin_l.value()],
-            'rad_type': self.rad_type_combo.currentText(),
-            'mfp': self.mfp_spin.value(),
-            'kz_halfwidth': self.kz_halfwidth_spin.value(),
-            'kz_npoints': self._kz_npoints_for_physics(),
+            **self._critic_gap_physics_kwargs(),
         }
 
 
@@ -1422,13 +1650,7 @@ cd {remote_dir}
             # Load the file
             data = np.load(local_path, allow_pickle=True)
             if 'cube' in data:
-                intensity_3d = data['cube']
-                results = {
-                    'intensity_broadened': intensity_3d,
-                    'energy': data['energy'] if 'energy' in data else None,
-                    'theta': data['theta'] if 'theta' in data else None,
-                    'phi': data['phi'] if 'phi' in data else None,
-                }
+                results = _remote_cube_results(data)
             else:
                 intensity_3d = data['intensity']
                 results = {
@@ -1455,17 +1677,26 @@ cd {remote_dir}
         name, ok = QInputDialog.getText(self, "Push to Workspace", "Enter dataset name (e.g., WTe2_75eV_CR):")
         if ok and name:
             try:
-                # Transpose dimensions for the viewer (kx, ky, E) -> (E, kx, ky)
-                tensor_value = np.transpose(self.sim_intensity, (2, 0, 1))
-                
-                sim_tensor = TensorData(
-                    value=tensor_value,
-                    axes=[self.sim_E_axis, self.sim_kx, self.sim_ky],
-                    labels=["Energy", "Θ (Slit)", "Φ (Deflect)"],
-                    units=["eV", "deg", "deg"],
-                    data_type="Simulated ARPES Matrix Elements",
-                    metadata=self.get_simulation_metadata()
-                )
+                if self.sim_hv is not None and self.sim_intensity.ndim == 4:
+                    sim_tensor = tensor_from_stacked_sim(
+                        self.sim_intensity,
+                        self.sim_hv,
+                        self.sim_kx,
+                        self.sim_ky,
+                        self.sim_E_axis,
+                        metadata=self.get_simulation_metadata(),
+                    )
+                else:
+                    # Transpose dimensions for the viewer (kx, ky, E) -> (E, kx, ky)
+                    tensor_value = np.transpose(self.sim_intensity, (2, 0, 1))
+                    sim_tensor = TensorData(
+                        value=tensor_value,
+                        axes=[self.sim_E_axis, self.sim_kx, self.sim_ky],
+                        labels=["Energy", "Θ (Slit)", "Φ (Deflect)"],
+                        units=["eV", "deg", "deg"],
+                        data_type="Simulated ARPES Matrix Elements",
+                        metadata=self.get_simulation_metadata()
+                    )
                 
                 global_workspace.push_spectroscopy_data(name, sim_tensor)
                 QMessageBox.information(self, "Success", f"Data pushed to Workspace as '{name}'.")
@@ -1484,7 +1715,8 @@ cd {remote_dir}
                     self.sim_kx, 
                     self.sim_ky, 
                     self.sim_E_axis, 
-                    self.get_simulation_metadata()
+                    self.get_simulation_metadata(),
+                    hv=self.sim_hv,
                 )
                 QMessageBox.information(self, "Success", f"Data safely saved to disk as '{name}.npz'.")
             except Exception as e:
@@ -1589,6 +1821,7 @@ cd {remote_dir}
                 self.live_log_widget.hide()
                 self.btn_fetch_results.setEnabled(False)
                 self.btn_start_live.setEnabled(False)
+        self.update_hv_mode_ui()
         self._sync_remote_gpu_ui()
         if remote:
             self._refresh_remote_gpu_count()

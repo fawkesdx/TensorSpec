@@ -7,6 +7,45 @@ import importlib.util
 import numpy as np
 import concurrent.futures
 
+try:
+    from tensorspec.core.arpes.photon_energy_scan import (
+        build_hv_list,
+        hv_list_from_cli_args,
+        stack_hv_cubes,
+    )
+except ImportError:
+    # Remote jobs upload this standalone runner without the tensorspec package.
+    # Keep this tiny fallback synchronized with photon_energy_scan.py.
+    def build_hv_list(start: float, finish: float, step: float) -> np.ndarray:
+        if step <= 0:
+            raise ValueError(f"step must be > 0, got {step}")
+        if finish < start:
+            raise ValueError(f"finish ({finish}) < start ({start})")
+        hv = np.arange(
+            float(start), float(finish) + float(step) / 2.0, float(step)
+        )
+        if hv.size == 0:
+            raise ValueError("hv list empty")
+        return hv.astype(float)
+
+    def hv_list_from_cli_args(args) -> list[float]:
+        if (
+            getattr(args, "hv_start", None) is not None
+            and getattr(args, "hv_finish", None) is not None
+            and getattr(args, "hv_step", None) is not None
+        ):
+            return build_hv_list(
+                args.hv_start, args.hv_finish, args.hv_step
+            ).tolist()
+        return [float(args.hv)]
+
+    def stack_hv_cubes(cubes, hv_list):
+        if len(cubes) == 0:
+            raise ValueError("no cubes to stack")
+        if len(cubes) != len(hv_list):
+            raise ValueError("cubes and hv_list length mismatch")
+        return np.stack(cubes, axis=0), np.asarray(hv_list, dtype=float)
+
 
 import collections
 import collections.abc
@@ -565,9 +604,7 @@ def _record_paper_timing(*, out_file: str, wall_s: float, **meta) -> None:
     print(f"  timing record: {sidecar} wall_s={record['wall_s']}", flush=True)
 
 
-def main():
-    global USE_GRIZZLY, GRIZZLY_DEVICE
-
+def build_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tb_file", type=str, required=True)
     parser.add_argument("--theta_min", type=float, required=True)
@@ -580,6 +617,9 @@ def main():
     parser.add_argument("--e_max", type=float, default=0.5)
     parser.add_argument("--ne", type=int, default=100)
     parser.add_argument("--hv", type=float, default=90.0)
+    parser.add_argument("--hv_start", type=float, default=None)
+    parser.add_argument("--hv_finish", type=float, default=None)
+    parser.add_argument("--hv_step", type=float, default=None)
     parser.add_argument("--workf", type=float, default=4.5)
     parser.add_argument("--v0", type=float, default=15.0)
     parser.add_argument("--temp", type=float, default=10.0)
@@ -634,7 +674,35 @@ def main():
         default="arpes_physics.json",
         help="JSON with beamline/manipulator/hkl settings (same as local GUI).",
     )
+    return parser
+
+
+def _run_hv_loop(hv_values, compute_one):
+    cubes = []
+    for ihv, hv in enumerate(hv_values):
+        cube = compute_one(ihv, float(hv), me_shell=None)
+        cubes.append(np.asarray(cube, dtype=np.float32))
+    if len(hv_values) == 1:
+        return cubes[0], None
+    return stack_hv_cubes(cubes, np.asarray(hv_values, dtype=float))
+
+
+def _save_hv_npz(out_file, cube, hv_axis, *, save=np.savez_compressed, **meta):
+    payload = {"cube": cube, **meta}
+    if hv_axis is not None:
+        payload["hv"] = hv_axis
+    save(out_file, **payload)
+
+
+def main():
+    global USE_GRIZZLY, GRIZZLY_DEVICE
+
+    parser = build_arg_parser()
     args = parser.parse_args()
+    try:
+        hv_values = hv_list_from_cli_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     want_grizzly = args.engine in ("auto", "grizzly")
     have_grizzly = _grizzly_available()
@@ -715,7 +783,7 @@ def main():
     physics.setdefault("hkl", [0, 0, 1])
     physics["hkl"] = tuple(int(x) for x in physics["hkl"])
     # CLI overrides for beam energy / surface params (match GUI spinboxes on submit).
-    physics["hv"] = float(args.hv)
+    physics["hv"] = float(hv_values[0])
     physics["work_function"] = float(args.workf)
     physics["inner_potential"] = float(args.v0)
     physics["temperature"] = float(args.temp)
@@ -741,9 +809,6 @@ def main():
             "Re-submit from GUI after float64 upload fix.",
             flush=True,
         )
-
-    e_kin = max(args.hv - args.workf, 0.1)
-    k_radius = 0.512316 * np.sqrt(e_kin)
 
     thetas = np.linspace(args.theta_min, args.theta_max, args.ntheta)
     phis = np.linspace(args.phi_min, args.phi_max, args.nphi)
@@ -841,89 +906,118 @@ def main():
             print(f"Using GPU ids: {gpu_ids}", flush=True)
 
     requested_chunk = int(args.theta_chunk) if args.theta_chunk else 0
-    used_theta_chunk = 0
     t_compute = time.perf_counter()
-    if layout == "full":
-        if requested_chunk > 0:
-            first_chunk = requested_chunk
-        elif GRIZZLY_DEVICE == "cuda" and cuda_devices:
-            ref_dev = next((d for d in cuda_devices if d.index == gpu_ids[0]), cuda_devices[0])
-            first_chunk = plan_theta_chunk(
-                global_tb_model, args.ntheta, args.nphi, args.ne, ref_dev
-            )
-            print(
-                f"Auto θ-chunk={first_chunk} (VRAM plan on gpu{ref_dev.index}, "
-                f"free={ref_dev.free_bytes / 1024**3:.1f} GiB)",
-                flush=True,
-            )
-        else:
-            first_chunk = max(1, min(args.ntheta, 20))
+    used_theta_chunks = []
 
-        chunk_schedule = shrink_chunk_schedule(
-            first_chunk, args.ntheta, include_one_shot=(requested_chunk <= 0 and not cuda_devices)
+    def _compute_one_hv(ihv, hv, *, me_shell):
+        if me_shell is not None:
+            raise ValueError("ME shell must not be reused across photon energies")
+        args.hv = hv
+        physics["hv"] = hv
+        e_kin = max(hv - args.workf, 0.1)
+        k_radius = 0.512316 * np.sqrt(e_kin)
+        print(
+            f"=== Photon energy {ihv + 1}/{len(hv_values)}: {hv} eV "
+            f"(k_radius={k_radius:.4f} Å⁻¹) ===",
+            flush=True,
         )
-        used_theta_chunk = first_chunk
-        cube = None
-        last_exc = None
-        for chunk_try in chunk_schedule:
-            try:
-                cube = run_full_cube_grizzly(
-                    global_tb_model,
-                    thetas,
-                    phis,
-                    e_axis,
-                    global_physics,
-                    global_B_matrix,
-                    GRIZZLY_DEVICE,
-                    theta_chunk=chunk_try,
-                    gpu_ids=gpu_ids if chunk_try > 0 else None,
-                    tb_file=tb_path,
-                    e_fermi=e_fermi,
+
+        used_theta_chunk = 0
+        if layout == "full":
+            if requested_chunk > 0:
+                first_chunk = requested_chunk
+            elif GRIZZLY_DEVICE == "cuda" and cuda_devices:
+                ref_dev = next(
+                    (d for d in cuda_devices if d.index == gpu_ids[0]),
+                    cuda_devices[0],
                 )
-                used_theta_chunk = chunk_try
-                last_exc = None
-                break
-            except RuntimeError as exc:
-                last_exc = exc
-                if not _is_oom_error(exc):
-                    print(f"FATAL: full-cube failed: {exc}", flush=True)
-                    sys.exit(1)
+                first_chunk = plan_theta_chunk(
+                    global_tb_model, args.ntheta, args.nphi, args.ne, ref_dev
+                )
                 print(
-                    f"WARNING: CUDA OOM with theta_chunk={chunk_try}. "
-                    "Clearing GPU cache; trying smaller chunk.",
+                    f"Auto θ-chunk={first_chunk} (VRAM plan on gpu{ref_dev.index}, "
+                    f"free={ref_dev.free_bytes / 1024**3:.1f} GiB)",
                     flush=True,
                 )
-                _cuda_empty_cache()
-        if cube is None:
-            print(
-                "FATAL: CUDA OOM on all full-cube chunk sizes. "
-                "Refusing slices fallback for Grizzly CUDA (use smaller --theta_chunk).",
-                flush=True,
+            else:
+                first_chunk = max(1, min(args.ntheta, 20))
+
+            chunk_schedule = shrink_chunk_schedule(
+                first_chunk,
+                args.ntheta,
+                include_one_shot=(requested_chunk <= 0 and not cuda_devices),
             )
-            if last_exc is not None:
-                print(f"Last error: {last_exc}", flush=True)
-            sys.exit(1)
-    else:
-        cube = _run_slices_path()
+            used_theta_chunk = first_chunk
+            cube = None
+            last_exc = None
+            for chunk_try in chunk_schedule:
+                try:
+                    # run_full_cube_grizzly creates a fresh ME shell on every call.
+                    cube = run_full_cube_grizzly(
+                        global_tb_model,
+                        thetas,
+                        phis,
+                        e_axis,
+                        global_physics,
+                        global_B_matrix,
+                        GRIZZLY_DEVICE,
+                        theta_chunk=chunk_try,
+                        gpu_ids=gpu_ids if chunk_try > 0 else None,
+                        tb_file=tb_path,
+                        e_fermi=e_fermi,
+                    )
+                    used_theta_chunk = chunk_try
+                    last_exc = None
+                    break
+                except RuntimeError as exc:
+                    last_exc = exc
+                    if not _is_oom_error(exc):
+                        print(f"FATAL: full-cube failed: {exc}", flush=True)
+                        sys.exit(1)
+                    print(
+                        f"WARNING: CUDA OOM with theta_chunk={chunk_try}. "
+                        "Clearing GPU cache; trying smaller chunk.",
+                        flush=True,
+                    )
+                    _cuda_empty_cache()
+            if cube is None:
+                print(
+                    "FATAL: CUDA OOM on all full-cube chunk sizes. "
+                    "Refusing slices fallback for Grizzly CUDA "
+                    "(use smaller --theta_chunk).",
+                    flush=True,
+                )
+                if last_exc is not None:
+                    print(f"Last error: {last_exc}", flush=True)
+                sys.exit(1)
+        else:
+            cube = _run_slices_path()
+        used_theta_chunks.append(used_theta_chunk)
+        _cuda_empty_cache()
+        return cube
+
+    cube_to_save, hv_axis = _run_hv_loop(hv_values, _compute_one_hv)
     wall_s = float(time.perf_counter() - t_compute)
+    used_theta_chunk = used_theta_chunks[-1] if used_theta_chunks else 0
 
     print(f"Saving ARPES intensity cube to {args.out_file}...", flush=True)
-    np.savez_compressed(
-        args.out_file,
-        cube=cube,
-        energy=e_axis,
-        theta=thetas,
-        phi=phis,
-        engine=np.array(engine_name),
-        layout=np.array(used_layout),
-        device=np.array(GRIZZLY_DEVICE if USE_GRIZZLY else "n/a"),
-        theta_chunk=np.array(used_theta_chunk if used_layout == "full" else 0),
-        wall_s=np.array(wall_s),
-        ngpus=np.array(len(gpu_ids) if gpu_ids else 0),
-        ntheta=np.array(int(args.ntheta)),
-        nphi=np.array(int(args.nphi)),
-        ne=np.array(int(args.ne)),
-    )
+    save_payload = {
+        "energy": e_axis,
+        "theta": thetas,
+        "phi": phis,
+        "engine": np.array(engine_name),
+        "layout": np.array(used_layout),
+        "device": np.array(GRIZZLY_DEVICE if USE_GRIZZLY else "n/a"),
+        "theta_chunk": np.array(
+            used_theta_chunk if used_layout == "full" else 0
+        ),
+        "wall_s": np.array(wall_s),
+        "ngpus": np.array(len(gpu_ids) if gpu_ids else 0),
+        "ntheta": np.array(int(args.ntheta)),
+        "nphi": np.array(int(args.nphi)),
+        "ne": np.array(int(args.ne)),
+    }
+    _save_hv_npz(args.out_file, cube_to_save, hv_axis, **save_payload)
     _record_paper_timing(
         out_file=args.out_file,
         wall_s=wall_s,

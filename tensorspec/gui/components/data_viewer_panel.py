@@ -2,10 +2,14 @@ import weakref
 
 # Global registry to track all active Data Viewer windows for crosshair syncing
 GLOBAL_SYNC_REGISTRY = weakref.WeakSet()
+import os
+from datetime import datetime, timezone
+
 import numpy as np
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, 
                                QComboBox, QPushButton, QCheckBox, QFrame, QMenu, QSpinBox, 
-                               QFileDialog, QMessageBox, QDoubleSpinBox, QGridLayout, QMainWindow, QSplitter)
+                               QFileDialog, QMessageBox, QDoubleSpinBox, QGridLayout, QMainWindow, QSplitter,
+                               QInputDialog)
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -13,6 +17,12 @@ from matplotlib.figure import Figure
 import matplotlib.patches as patches
 
 from tensorspec.core.data_models import TensorData
+from tensorspec.core.ml.ssl.reference import (
+    FloorReference,
+    build_roi_dict,
+    integrate_xy_map,
+    save_floor_reference,
+)
 
 
 def is_ml_label_layer(layer_name: str) -> bool:
@@ -809,7 +819,82 @@ class SliceWidget(QFrame):
                     action_none = menu.addAction("No connected neighbors to de-snap.")
                     action_none.setEnabled(False)
 
+        menu.addSeparator()
+        act_floor = menu.addAction("Save floor reference…")
+        act_floor.setEnabled(self._is_yx_view())
+        act_floor.triggered.connect(self._save_floor_reference)
+
         menu.exec(event.globalPos())
+
+    def _axis_label_pair(self):
+        td = self.parent_panel.tensor_data
+        if td is None:
+            return None, None
+        try:
+            return td.labels[self.y_idx], td.labels[self.x_idx]
+        except (IndexError, TypeError):
+            return None, None
+
+    def _is_yx_view(self) -> bool:
+        y_lab, x_lab = self._axis_label_pair()
+        return y_lab == "Y" and x_lab == "X"
+
+    def _reduce_mode_from_combo(self) -> str:
+        text = self.combo_profile_mode.currentText().casefold()
+        if "mean" in text:
+            return "mean"
+        return "sum"
+
+    def _save_floor_reference(self):
+        if not self._is_yx_view():
+            QMessageBox.warning(
+                self, "Save floor reference", "switch panel to Y×X"
+            )
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save floor reference",
+            "00737_floor.npz",
+            "NumPy ZIP (*.npz)",
+        )
+        if not path:
+            return
+
+        default_sid = self.parent_panel.default_source_id()
+        source_id, ok = QInputDialog.getText(
+            self,
+            "Source ID",
+            "source_id (e.g. basename of h5):",
+            text=default_sid,
+        )
+        if not ok:
+            return
+        source_id = (source_id or "").strip()
+        if not source_id:
+            QMessageBox.warning(
+                self, "Save floor reference", "source_id required"
+            )
+            return
+
+        reduce_mode = self._reduce_mode_from_combo()
+        try:
+            ref = self.parent_panel.build_floor_reference(
+                y_label="Y",
+                x_label="X",
+                source_id=source_id,
+                reduce_mode=reduce_mode,
+            )
+            save_floor_reference(path, ref)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save floor reference", str(exc))
+            return
+
+        QMessageBox.information(
+            self,
+            "Save floor reference",
+            f"Saved {path}\nmap shape {tuple(ref.map.shape)}",
+        )
 
     def close_widget(self):
         self.parent_panel.remove_view(self)
@@ -860,6 +945,85 @@ class DataViewerPanel(QWidget):
         default_x = 1 if self.tensor_data.ndim > 1 else 0
         default_y = 0
         self.spawn_view(default_x, default_y)
+
+    @staticmethod
+    def _canonicalize_ssl_labels(labels: list[str]) -> list[str]:
+        """Map loader aliases (e.g. Slit Angle) to Energy/Angle expected by reference APIs."""
+        out: list[str] = []
+        for lab in labels:
+            key = lab.strip().casefold()
+            if key == "energy" or key.startswith("energy "):
+                out.append("Energy")
+            elif key == "angle" or "slit" in key:
+                out.append("Angle")
+            else:
+                out.append(lab)
+        return out
+
+    def default_source_id(self) -> str:
+        td = self.tensor_data
+        if td is None:
+            return ""
+        md = td.metadata or {}
+        for key in ("source_id", "filename", "filepath", "path"):
+            val = md.get(key)
+            if val:
+                return os.path.basename(str(val))
+        return ""
+
+    def build_floor_reference(
+        self,
+        *,
+        y_label: str = "Y",
+        x_label: str = "X",
+        source_id: str,
+        reduce_mode: str,
+    ) -> FloorReference:
+        if self.tensor_data is None:
+            raise ValueError("no data loaded")
+        labels = list(self.tensor_data.labels)
+        if y_label not in labels:
+            raise ValueError(f"missing display axis label: {y_label}")
+        if x_label not in labels:
+            raise ValueError(f"missing display axis label: {x_label}")
+
+        canon = self._canonicalize_ssl_labels(labels)
+        if "Energy" not in canon:
+            raise ValueError("missing required axis label: Energy")
+        if "Angle" not in canon:
+            raise ValueError("missing required axis label: Angle")
+
+        value = np.asarray(self.tensor_data.value)
+        axes = list(self.tensor_data.axes)
+        mode = reduce_mode.lower()
+        m = integrate_xy_map(
+            value,
+            labels=canon,
+            coords=dict(self.global_coords),
+            halfwidths=dict(self.global_halfwidths),
+            y_label=y_label,
+            x_label=x_label,
+            reduce_mode=mode,
+        )
+        roi = build_roi_dict(
+            labels=canon,
+            axes=axes,
+            coords=dict(self.global_coords),
+            halfwidths=dict(self.global_halfwidths),
+            reduce_mode=mode,
+            source_id=source_id,
+            display_y_label=y_label,
+            display_x_label=x_label,
+            saved_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        y_ax = axes[labels.index(y_label)]
+        x_ax = axes[labels.index(x_label)]
+        return FloorReference(
+            map=m.astype(np.float32),
+            y_axis=y_ax,
+            x_axis=x_ax,
+            roi=roi,
+        )
 
     def _clear_tree(self):
         """Safely detach all SliceWidgets and destroy intermediate splitters/spacers."""

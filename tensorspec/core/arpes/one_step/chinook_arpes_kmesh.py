@@ -12,7 +12,28 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+import importlib.util
+import os
+
 import numpy as np
+
+try:
+    from tensorspec.core.arpes.one_step.fresnel import apply_fresnel_to_A_lab
+    from tensorspec.core.arpes.one_step.photon_momentum import photon_q_lab
+except ImportError:
+    # Remote Einstein jobs upload flat .py files beside this module (no package).
+    def _load_co_uploaded(name: str):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{name}.py")
+        if name in sys.modules:
+            return sys.modules[name]
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod
+
+    apply_fresnel_to_A_lab = _load_co_uploaded("fresnel").apply_fresnel_to_A_lab
+    photon_q_lab = _load_co_uploaded("photon_momentum").photon_q_lab
 
 _CHINOOK_PATCHED = False
 
@@ -214,13 +235,33 @@ def build_k_bulk_mesh(
     hkl: Tuple[int, int, int],
     B_matrix: np.ndarray,
     lin_pol_angle: float = 45.0,
+    fresnel_enabled: bool = True,
+    optical_n: float = 1.0,
+    optical_k: float = 0.0,
+    include_photon_momentum: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray, Dict[str, list], int, int, int, np.ndarray]:
-    """Return K_BULK (3,Nk), A_bulk (3,), normalized kb, grid sizes, energy_axis."""
+    """Return K_BULK (3,Nk), A_bulk (3,), normalized kb, grid sizes, energy_axis.
+
+    ``A`` path: vacuum ``compute_A_lab`` → optional Fresnel local field
+    (``n = optical_n + 1j*optical_k``; ``n=1`` is vacuum parity) → manip + hkl.
+
+    ``K`` order:
+    1. vacuum photoelectron k from angles
+    2. inner-potential refraction
+    3. manip + hkl → ``K_BULK``
+    4. if ``include_photon_momentum``: ``K_BULK -= q_bulk`` (full 3-vector;
+       ``q_lab`` rotated with the same manip + hkl maps as ``K`` / ``A``)
+    """
     kb = normalize_k_bounds(k_bounds)
     num_x, num_y, num_e = int(kb["X"][2]), int(kb["Y"][2]), int(kb["E"][2])
     energy_axis = np.linspace(kb["E"][0], kb["E"][1], num_e)
 
-    A_lab = compute_A_lab(polarization, incidence_angle, lin_pol_angle)
+    A_vac = compute_A_lab(polarization, incidence_angle, lin_pol_angle)
+    if fresnel_enabled:
+        n_opt = complex(float(optical_n), float(optical_k))
+        A_lab = apply_fresnel_to_A_lab(A_vac, incidence_angle, n=n_opt)
+    else:
+        A_lab = A_vac
     A_sample = sample_to_bulk_frame(A_lab, manip_theta, manip_azimuth, manip_tilt)
 
     E_kin = max(hv - work_function, 0.1)
@@ -284,6 +325,12 @@ def build_k_bulk_mesh(
     R_hkl_to_bulk = np.column_stack((X_surf, Y_surf, Z_surf))
     K_BULK = R_hkl_to_bulk @ K_SAMPLE
     A_bulk = R_hkl_to_bulk @ A_sample
+
+    if include_photon_momentum:
+        q_lab = photon_q_lab(hv, incidence_angle)
+        q_sample = sample_to_bulk_frame(q_lab, manip_theta, manip_azimuth, manip_tilt)
+        q_bulk = R_hkl_to_bulk @ q_sample
+        K_BULK = K_BULK - np.asarray(q_bulk, dtype=float).reshape(3, 1)
 
     return K_BULK, A_bulk, kb, num_x, num_y, num_e, energy_axis
 
@@ -363,6 +410,12 @@ def physics_from_experiment_kwargs(experiment_kwargs: Mapping[str, Any]) -> Dict
         "mfp": float(experiment_kwargs.get("mfp", 10.0)),
         "kz_halfwidth": kz_hw,
         "kz_npoints": int(experiment_kwargs.get("kz_npoints", kz_np_default)),
+        "fresnel_enabled": bool(experiment_kwargs.get("fresnel_enabled", True)),
+        "optical_n": float(experiment_kwargs.get("optical_n", 1.0)),
+        "optical_k": float(experiment_kwargs.get("optical_k", 0.0)),
+        "include_photon_momentum": bool(
+            experiment_kwargs.get("include_photon_momentum", False)
+        ),
     }
 
 
@@ -542,6 +595,12 @@ def _setup_kmesh_experiment(
         hkl=tuple(physics["hkl"]),
         B_matrix=B_matrix,
         lin_pol_angle=float(physics.get("lin_pol_angle", 45.0)),
+        fresnel_enabled=bool(physics.get("fresnel_enabled", True)),
+        optical_n=float(physics.get("optical_n", 1.0)),
+        optical_k=float(physics.get("optical_k", 0.0)),
+        include_photon_momentum=bool(
+            physics.get("include_photon_momentum", False)
+        ),
     )
     if abs(float(kz_shift)) > 0.0:
         # Escape-depth Δk_z along surface normal (same Z_surf as build_k_bulk_mesh),
@@ -766,6 +825,12 @@ def build_grizzly_me_shell(
             hkl=tuple(physics.get("hkl", (0, 0, 1))),
             B_matrix=B_matrix,
             lin_pol_angle=float(physics.get("lin_pol_angle", 45.0)),
+            fresnel_enabled=bool(physics.get("fresnel_enabled", True)),
+            optical_n=float(physics.get("optical_n", 1.0)),
+            optical_k=float(physics.get("optical_k", 0.0)),
+            include_photon_momentum=bool(
+                physics.get("include_photon_momentum", False)
+            ),
         )
 
     me_mode = str(physics.get("matrix_element_mode", "Full Matrix Elements"))
