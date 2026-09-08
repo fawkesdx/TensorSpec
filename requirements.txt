@@ -57,6 +57,7 @@ setuptools<70.0.0
 h5py>=3.10.0
 xarray
 umap-learn>=0.5.12
+hdbscan>=0.8.44
 
 # --- ARPES SIMULATION ENGINES ---
 chinook==1.1.3
