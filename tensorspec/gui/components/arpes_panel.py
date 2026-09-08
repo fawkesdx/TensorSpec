@@ -11,7 +11,11 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from tensorspec.core.arpes_engine import ARPESEngineRouter
-from tensorspec.core.arpes.photon_energy_scan import resolve_photon_energies
+from tensorspec.core.arpes.photon_energy_scan import (
+    resolve_photon_energies,
+    stack_hv_cubes,
+    tensor_from_stacked_sim,
+)
 from tensorspec.core.workspace import global_workspace
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.compute import cluster_paths as cp
@@ -19,21 +23,53 @@ from tensorspec.core.compute import cluster_paths as cp
 class ARPESRunnerThread(QThread):
     """Runs the heavy 2D matrix element loop in the background to prevent UI freezing."""
     finished_signal = Signal(bool, object, str)
+    progress = Signal(str)
 
-    def __init__(self, engine_router, model_choice, crystal_data, experiment_kwargs):
+    def __init__(
+        self,
+        engine_router,
+        model_choice,
+        crystal_data,
+        experiment_kwargs,
+        photon_energies=None,
+    ):
         super().__init__()
         self.engine_router = engine_router
         self.model_choice = model_choice
         self.crystal_data = crystal_data
         self.experiment_kwargs = experiment_kwargs
+        self.photon_energies = photon_energies
 
     def run(self):
         try:
-            results = self.engine_router.run_simulation(
-                model_choice=self.model_choice,
-                crystal_data=self.crystal_data,
-                experiment_kwargs=self.experiment_kwargs
-            )
+            if self.photon_energies and len(self.photon_energies) > 1:
+                cubes = []
+                results = None
+                for index, hv in enumerate(self.photon_energies):
+                    kwargs = dict(self.experiment_kwargs)
+                    kwargs["photon_energy"] = float(hv)
+                    kwargs["photon_energies"] = list(self.photon_energies)
+                    results = self.engine_router.run_simulation(
+                        model_choice=self.model_choice,
+                        crystal_data=self.crystal_data,
+                        experiment_kwargs=kwargs,
+                    )
+                    cubes.append(results["intensity_broadened"])
+                    self.progress.emit(
+                        f"hv {index + 1}/{len(self.photon_energies)} ({hv:g} eV)"
+                    )
+                stacked, hv = stack_hv_cubes(
+                    cubes, np.asarray(self.photon_energies, dtype=float)
+                )
+                results = dict(results)
+                results["intensity_broadened"] = stacked
+                results["photon_energies"] = hv
+            else:
+                results = self.engine_router.run_simulation(
+                    model_choice=self.model_choice,
+                    crystal_data=self.crystal_data,
+                    experiment_kwargs=self.experiment_kwargs,
+                )
             self.finished_signal.emit(True, results, "Success")
         except Exception as e:
             self.finished_signal.emit(False, None, str(e))
@@ -1165,7 +1201,8 @@ cd {remote_dir}
         
         # --- LOCAL EXECUTION ---
         experiment_kwargs = {
-            'photon_energy': self.photon_energy_spin.value(),
+            'photon_energy': float(hv_list[0]),
+            'photon_energies': hv_list,
             'work_function': self.work_function_spin.value(),
             'inner_potential': self.inner_potential_spin.value(), 
             'temperature': self.temperature_spin.value(),         
@@ -1196,7 +1233,16 @@ cd {remote_dir}
         self.run_sim_btn.setText("⏳ Calculating... Please Wait")
         self.run_sim_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #555555; color: white;")
 
-        self.arpes_thread = ARPESRunnerThread(self.engine_router, model_choice, band_data, experiment_kwargs)
+        self.arpes_thread = ARPESRunnerThread(
+            self.engine_router,
+            model_choice,
+            band_data,
+            experiment_kwargs,
+            photon_energies=hv_list,
+        )
+        self.arpes_thread.progress.connect(
+            lambda text: self.run_sim_btn.setText(f"⏳ {text}")
+        )
         self.arpes_thread.finished_signal.connect(self.on_simulation_finished)
         self.arpes_thread.start()
 
@@ -1220,9 +1266,17 @@ cd {remote_dir}
                 e_steps = 1
 
             self.sim_intensity = results['intensity_broadened']
+            if self.sim_intensity.ndim == 4:
+                self.sim_hv = np.asarray(
+                    results["photon_energies"], dtype=float
+                )
+                preview_intensity = self.sim_intensity[len(self.sim_hv) // 2]
+            else:
+                self.sim_hv = None
+                preview_intensity = self.sim_intensity
             
             # Prefer axes from remote npz when present (truth for remote fetches).
-            nx, ny, ne = self.sim_intensity.shape
+            nx, ny, ne = preview_intensity.shape
             if results.get('energy') is not None:
                 self.sim_E_axis = np.asarray(results['energy'], dtype=float)
             else:
@@ -1294,8 +1348,11 @@ cd {remote_dir}
     def update_plot_slice(self, index=None):
         if not hasattr(self, 'sim_intensity'):
             return
-            
-        nx, ny, ne = self.sim_intensity.shape
+
+        intensity = self.sim_intensity
+        if intensity.ndim == 4:
+            intensity = intensity[intensity.shape[0] // 2]
+        nx, ny, ne = intensity.shape
         self.ax.clear()
 
         use_angles = getattr(self, 'sim_axes_are_angles', True)
@@ -1311,11 +1368,11 @@ cd {remote_dir}
             self.energy_label.setText("Band Dispersion Map")
             
             if deg_y:
-                slice_2d = self.sim_intensity[:, 0, :].T
+                slice_2d = intensity[:, 0, :].T
                 x_axis = self.sim_kx
                 x_label = x_lab
             else:
-                slice_2d = self.sim_intensity[0, :, :].T
+                slice_2d = intensity[0, :, :].T
                 x_axis = self.sim_ky
                 x_label = y_lab
                 
@@ -1338,7 +1395,7 @@ cd {remote_dir}
                 
             E_val = self.sim_E_axis[index]
             
-            slice_2d = self.sim_intensity[:, :, index].T
+            slice_2d = intensity[:, :, index].T
             
             slice_max = np.max(slice_2d) if np.max(slice_2d) > 0 else 1.0
             norm_slice = slice_2d / slice_max
@@ -1442,10 +1499,17 @@ cd {remote_dir}
     def get_simulation_metadata(self):
         """Helper to grab all current UI parameters for saving."""
         azi = self.manip_azi_spin.value()
+        sim_hv = getattr(self, "sim_hv", None)
+        photon_energies = (
+            np.asarray(sim_hv, dtype=float).tolist()
+            if sim_hv is not None
+            else [float(self.photon_energy_spin.value())]
+        )
         return {
             'crystal': self.ws_combo.currentText(),
             'engine': self.engine_dropdown.currentText(),
-            'photon_energy': self.photon_energy_spin.value(),
+            'photon_energy': float(photon_energies[0]),
+            'photon_energies': photon_energies,
             'work_function': self.work_function_spin.value(),
             'inner_potential': self.inner_potential_spin.value(),
             'temperature': self.temperature_spin.value(),
@@ -1543,17 +1607,26 @@ cd {remote_dir}
         name, ok = QInputDialog.getText(self, "Push to Workspace", "Enter dataset name (e.g., WTe2_75eV_CR):")
         if ok and name:
             try:
-                # Transpose dimensions for the viewer (kx, ky, E) -> (E, kx, ky)
-                tensor_value = np.transpose(self.sim_intensity, (2, 0, 1))
-                
-                sim_tensor = TensorData(
-                    value=tensor_value,
-                    axes=[self.sim_E_axis, self.sim_kx, self.sim_ky],
-                    labels=["Energy", "Θ (Slit)", "Φ (Deflect)"],
-                    units=["eV", "deg", "deg"],
-                    data_type="Simulated ARPES Matrix Elements",
-                    metadata=self.get_simulation_metadata()
-                )
+                if self.sim_hv is not None and self.sim_intensity.ndim == 4:
+                    sim_tensor = tensor_from_stacked_sim(
+                        self.sim_intensity,
+                        self.sim_hv,
+                        self.sim_kx,
+                        self.sim_ky,
+                        self.sim_E_axis,
+                        metadata=self.get_simulation_metadata(),
+                    )
+                else:
+                    # Transpose dimensions for the viewer (kx, ky, E) -> (E, kx, ky)
+                    tensor_value = np.transpose(self.sim_intensity, (2, 0, 1))
+                    sim_tensor = TensorData(
+                        value=tensor_value,
+                        axes=[self.sim_E_axis, self.sim_kx, self.sim_ky],
+                        labels=["Energy", "Θ (Slit)", "Φ (Deflect)"],
+                        units=["eV", "deg", "deg"],
+                        data_type="Simulated ARPES Matrix Elements",
+                        metadata=self.get_simulation_metadata()
+                    )
                 
                 global_workspace.push_spectroscopy_data(name, sim_tensor)
                 QMessageBox.information(self, "Success", f"Data pushed to Workspace as '{name}'.")
@@ -1572,7 +1645,8 @@ cd {remote_dir}
                     self.sim_kx, 
                     self.sim_ky, 
                     self.sim_E_axis, 
-                    self.get_simulation_metadata()
+                    self.get_simulation_metadata(),
+                    hv=self.sim_hv,
                 )
                 QMessageBox.information(self, "Success", f"Data safely saved to disk as '{name}.npz'.")
             except Exception as e:

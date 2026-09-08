@@ -6,6 +6,7 @@ import numpy as np
 from pathlib import Path
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.data_tree import DataTreeBuilder
+from tensorspec.core.arpes.photon_energy_scan import tensor_from_stacked_sim
 
 class WorkspaceManager:
     def __init__(self):
@@ -103,7 +104,9 @@ class WorkspaceManager:
         """Returns a list of all currently loaded band structure names."""
         return [k for k, v in self._data.items() if v.get('type') == 'band_structure']
 
-    def save_simulated_arpes(self, name, intensity, kx, ky, E, metadata=None):
+    def save_simulated_arpes(
+        self, name, intensity, kx, ky, E, metadata=None, hv=None
+    ):
         """Saves a simulated ARPES dataset to a compressed numpy archive."""
         # Create the data directory if it doesn't exist
         arpes_dir = self.project_dir / "arpes_data" / "simulated"
@@ -111,15 +114,16 @@ class WorkspaceManager:
         
         file_path = arpes_dir / f"{name}.npz"
         
-        # Package everything into a compressed archive
-        np.savez_compressed(
-            file_path, 
-            intensity=intensity, 
-            kx=kx, 
-            ky=ky, 
-            E=E, 
-            metadata=metadata if metadata else {}
-        )
+        payload = {
+            "intensity": intensity,
+            "kx": kx,
+            "ky": ky,
+            "E": E,
+            "metadata": metadata if metadata else {},
+        }
+        if hv is not None:
+            payload["hv"] = hv
+        np.savez_compressed(file_path, **payload)
         print(f"Saved simulated ARPES data to: {file_path}")
         return file_path
     
@@ -131,6 +135,17 @@ class WorkspaceManager:
         
         with np.load(file_path, allow_pickle=True) as data:
             intensity = data['intensity']  # Original shape from Chinook: (kx, ky, E)
+            metadata = data['metadata'].item() if 'metadata' in data else {}
+
+            if "hv" in data:
+                return tensor_from_stacked_sim(
+                    intensity,
+                    data["hv"],
+                    data["kx"],
+                    data["ky"],
+                    data["E"],
+                    metadata=metadata,
+                )
             
             # For the N-Dimensional viewer, we usually want Energy on the 0th axis
             # Transpose (kx, ky, E) -> (E, kx, ky)
@@ -143,7 +158,7 @@ class WorkspaceManager:
                 labels=["Energy", "Slit Angle", "Deflection Angle"],
                 units=["eV", "deg", "deg"],
                 data_type="Simulated ARPES",
-                metadata=data['metadata'].item() if 'metadata' in data else {}
+                metadata=metadata
             )
     def push_spectroscopy_data(self, name: str, tensor_data: TensorData):
         """
