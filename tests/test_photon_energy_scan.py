@@ -1,5 +1,6 @@
 import argparse
 import ast
+import importlib
 from pathlib import Path
 from unittest.mock import Mock, call
 
@@ -186,3 +187,40 @@ def test_resolve_range():
         mode="range", start=80.0, finish=90.0, step=5.0
     )
     assert out == [80.0, 85.0, 90.0]
+
+
+def test_remote_gui_builds_single_or_range_hv_cli():
+    panel_module = importlib.import_module(
+        "tensorspec.gui.components.arpes_panel"
+    )
+    build_args = getattr(panel_module, "_remote_hv_cli_args", None)
+
+    assert build_args is not None
+    assert build_args([84.0], 80.0, 90.0, 5.0) == "--hv 84.0"
+    assert build_args([84.0, 90.0], 84.0, 90.0, 6.0) == (
+        "--hv_start 84.0 --hv_finish 90.0 --hv_step 6.0"
+    )
+
+
+def test_remote_gui_maps_stacked_cube_hv_into_simulation_results():
+    panel_module = importlib.import_module(
+        "tensorspec.gui.components.arpes_panel"
+    )
+    map_results = getattr(panel_module, "_remote_cube_results", None)
+    cube = np.zeros((2, 3, 4, 5))
+
+    assert map_results is not None
+    results = map_results(
+        {
+            "cube": cube,
+            "hv": np.array([84, 90]),
+            "energy": np.arange(5),
+            "theta": np.arange(3),
+            "phi": np.arange(4),
+        }
+    )
+    assert results["intensity_broadened"] is cube
+    assert np.allclose(results["photon_energies"], [84.0, 90.0])
+
+    results_without_hv = map_results({"cube": cube})
+    assert "photon_energies" not in results_without_hv
