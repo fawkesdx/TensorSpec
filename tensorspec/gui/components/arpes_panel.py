@@ -1050,11 +1050,15 @@ cd {remote_dir}
                 local_kmesh = one_step / "chinook_arpes_kmesh.py"
                 local_schedule = one_step / "grizzly_cuda_schedule.py"
                 local_collect = one_step / "grizzly_multigpu_collect.py"
+                local_fresnel = one_step / "fresnel.py"
+                local_photon_q = one_step / "photon_momentum.py"
                 for src, dst_name in (
                     (local_template, "chinook_remote_runner.py"),
                     (local_kmesh, "chinook_arpes_kmesh.py"),
                     (local_schedule, "grizzly_cuda_schedule.py"),
                     (local_collect, "grizzly_multigpu_collect.py"),
+                    (local_fresnel, "fresnel.py"),
+                    (local_photon_q, "photon_momentum.py"),
                 ):
                     if not src.is_file():
                         raise FileNotFoundError(f"Missing ARPES runner module: {src}")

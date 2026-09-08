@@ -21,7 +21,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from tensorspec.core.kinematics import ARPESKinematics
+try:
+    from tensorspec.core.kinematics import ARPESKinematics
+
+    _HBAR_C = float(ARPESKinematics.HBAR_C)
+except ImportError:
+    # Keep synced with tensorspec.core.kinematics.ARPESKinematics.HBAR_C
+    # (remote runner uploads this file without the tensorspec package).
+    _HBAR_C = 1973.269804
 
 __all__ = ["photon_q_lab"]
 
@@ -33,5 +40,5 @@ def photon_q_lab(hv_eV: float, incidence_deg: float) -> np.ndarray:
     the ``x``–``y`` incidence plane (see module docstring).
     """
     alpha = np.radians(float(incidence_deg))
-    q_mag = float(hv_eV) / ARPESKinematics.HBAR_C
+    q_mag = float(hv_eV) / _HBAR_C
     return q_mag * np.array([-np.sin(alpha), -np.cos(alpha), 0.0], dtype=float)
