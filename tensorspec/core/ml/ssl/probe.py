@@ -22,6 +22,7 @@ class ProbeConfig:
     seed: int = 0
     batch_size: int = 64
     use_teacher: bool = True
+    roi_mode: str = "full"  # "full" | "mask"
 
 
 def filter_manifest_indices(manifest: dict, source_id: str) -> list[int]:
@@ -30,6 +31,70 @@ def filter_manifest_indices(manifest: dict, source_id: str) -> list[int]:
         for i, sample in enumerate(manifest["samples"])
         if sample.get("source_id") == source_id
     ]
+
+
+def roi_slices_from_reference(
+    roi: dict,
+    energy_axis: np.ndarray,
+    slit_axis: np.ndarray,
+) -> tuple[slice, slice]:
+    """Map floor-reference Energy/Angle physical window onto resampled (E, slit) grid."""
+    energy_axis = np.asarray(energy_axis, dtype=np.float64)
+    slit_axis = np.asarray(slit_axis, dtype=np.float64)
+    dims = {d["label"]: d for d in roi.get("dims", [])}
+    if "Energy" not in dims:
+        raise ValueError("ROI missing Energy dim")
+    angle = dims.get("Angle") or dims.get("Slit")
+    if angle is None:
+        raise ValueError("ROI missing Angle/Slit dim")
+    e = dims["Energy"]
+
+    def _bounds(axis: np.ndarray, lo: float, hi: float) -> slice:
+        a_lo, a_hi = float(np.min(axis)), float(np.max(axis))
+        lo_c = min(max(float(lo), a_lo), a_hi)
+        hi_c = min(max(float(hi), a_lo), a_hi)
+        if hi_c < lo_c:
+            lo_c, hi_c = hi_c, lo_c
+        i0 = int(np.searchsorted(axis, lo_c, side="left"))
+        i1 = int(np.searchsorted(axis, hi_c, side="right"))
+        i0 = max(0, min(i0, axis.size - 1))
+        i1 = max(i0 + 1, min(i1, axis.size))
+        return slice(i0, i1)
+
+    return _bounds(energy_axis, e["physical_lo"], e["physical_hi"]), _bounds(
+        slit_axis, angle["physical_lo"], angle["physical_hi"]
+    )
+
+
+def apply_roi_mask(
+    images: np.ndarray,
+    energy_slice: slice,
+    slit_slice: slice,
+    *,
+    renormalize: bool = True,
+) -> np.ndarray:
+    """Zero outside ROI; optional per-sample min-max on the kept window."""
+    x = np.asarray(images, dtype=np.float32)
+    if x.ndim != 3:
+        raise ValueError("images must be (N,H,W) with H=energy, W=slit")
+    out = np.zeros_like(x)
+    patch = x[:, energy_slice, slit_slice]
+    if patch.size == 0:
+        raise ValueError("ROI slice is empty")
+    if renormalize:
+        flat = patch.reshape(patch.shape[0], -1)
+        lo = flat.min(axis=1, keepdims=True)
+        hi = flat.max(axis=1, keepdims=True)
+        scale = hi - lo
+        flat_n = np.where(scale > 1e-6, (flat - lo) / np.maximum(scale, 1e-6), 1.0)
+        patch = flat_n.reshape(patch.shape)
+    out[:, energy_slice, slit_slice] = patch
+    return out
+
+
+def load_disp2d_axes(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
+    payload = np.load(path)
+    return np.asarray(payload["energy_axis"]), np.asarray(payload["slit_axis"])
 
 
 def load_dino_for_probe(ckpt, *, device):
@@ -253,9 +318,19 @@ def _save_overlay_pngs(out: Path, ref_map, ssl_map, ref_lab) -> None:
     plt.close(fig)
 
 
-def probe(*, ckpt, data_dir, reference, out_dir, config: ProbeConfig) -> dict:
+def probe(
+    *,
+    ckpt,
+    data_dir,
+    reference,
+    out_dir,
+    config: ProbeConfig,
+    axes_path: str | Path | None = None,
+) -> dict:
     if config.k < 2:
         raise ValueError(f"probe requires k>=2 (got k={config.k})")
+    if config.roi_mode not in ("full", "mask"):
+        raise ValueError(f"unknown roi_mode={config.roi_mode!r}")
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     ref = load_floor_reference(reference)
@@ -271,6 +346,20 @@ def probe(*, ckpt, data_dir, reference, out_dir, config: ProbeConfig) -> dict:
         images.append(np.asarray(sample, dtype=np.float32))
         provenances.append(prov)
     images = np.stack(images, axis=0)
+    roi_meta: dict = {"roi_mode": config.roi_mode}
+    if config.roi_mode == "mask":
+        if axes_path is None:
+            raise ValueError("axes_path required when roi_mode='mask'")
+        energy_axis, slit_axis = load_disp2d_axes(axes_path)
+        e_sl, s_sl = roi_slices_from_reference(ref.roi, energy_axis, slit_axis)
+        images = apply_roi_mask(images, e_sl, s_sl, renormalize=True)
+        roi_meta.update(
+            {
+                "energy_slice": [e_sl.start, e_sl.stop],
+                "slit_slice": [s_sl.start, s_sl.stop],
+                "axes_path": str(axes_path),
+            }
+        )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, _run_cfg = load_dino_for_probe(ckpt, device=device)
     emb = extract_cls_embeddings(
@@ -297,6 +386,7 @@ def probe(*, ckpt, data_dir, reference, out_dir, config: ProbeConfig) -> dict:
             "ckpt": str(ckpt),
             "reference_roi_source_id": ref.roi.get("source_id"),
             "reference_saved_utc": ref.roi.get("saved_utc"),
+            **roi_meta,
         }
     )
     (out / "metrics.json").write_text(

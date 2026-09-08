@@ -158,3 +158,37 @@ def test_reference_to_binary_two_level_map():
     right = np.unique(labels[:, 4:])
     assert left.size == 1 and right.size == 1
     assert left[0] != right[0]
+
+
+def test_roi_slices_and_mask():
+    from tensorspec.core.ml.ssl.probe import (
+        apply_roi_mask,
+        roi_slices_from_reference,
+    )
+
+    energy = np.linspace(-2.0, 0.5, 128)
+    slit = np.linspace(-5.0, 5.0, 128)
+    roi = {
+        "dims": [
+            {
+                "label": "Energy",
+                "physical_lo": float(energy[40]),
+                "physical_hi": float(energy[45]),
+            },
+            {
+                "label": "Angle",
+                "physical_lo": float(slit[10]),
+                "physical_hi": float(slit[20]),
+            },
+        ]
+    }
+    e_sl, s_sl = roi_slices_from_reference(roi, energy, slit)
+    assert e_sl.start <= 40 and e_sl.stop >= 45
+    assert s_sl.start <= 10 and s_sl.stop >= 20
+    images = np.ones((3, 128, 128), dtype=np.float32)
+    images[:, e_sl, s_sl] = 2.0
+    masked = apply_roi_mask(images, e_sl, s_sl, renormalize=True)
+    assert float(masked[:, 0, 0].sum()) == 0.0
+    ey = (e_sl.start + e_sl.stop) // 2
+    sx = (s_sl.start + s_sl.stop) // 2
+    assert float(masked[:, ey, sx].min()) > 0.0
