@@ -45,9 +45,11 @@ Approach B (radial + kz) did not fix wrong-arm / missing-branch intensity. Appro
 
 ### 1. Fresnel → local `A`
 
+**Note:** v2 (2026-09-07): refracted-angle rebuild replaced vacuum-angle. See `2026-09-07-arpes-fresnel-refracted-angle-design.md`.
+
 **Where:** extend `compute_A_lab` (or a thin wrapper `compute_A_lab_fresnel`) in `chinook_arpes_kmesh.py` so all callers of `build_k_bulk_mesh` get corrected `A_bulk`.
 
-**Model (v1 — simple, explicit):**
+**Model (v1 — simple, explicit; superseded by v2 refracted-angle):**
 
 - Build vacuum `A_vac` exactly as today (LH / LV / Arbitrary / CR / CL from incidence + `lin_pol_angle`).  
 - Decompose into p-components (in incidence plane) and s-component (⊥).  

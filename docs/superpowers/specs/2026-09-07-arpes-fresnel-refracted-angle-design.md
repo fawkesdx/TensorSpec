@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-07  
 **Branch:** `TensorSpec_GUI` (merge to `main` after smoke if requested)  
-**Status:** approved (design)  
+**Status:** approved / implemented  
 **Depends on:** Approach C v1 (`fresnel.py` vacuum-angle + photon-q)
 
 ## Problem
