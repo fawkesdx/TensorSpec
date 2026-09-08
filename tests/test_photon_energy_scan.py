@@ -4,6 +4,7 @@ from tensorspec.core.arpes.photon_energy_scan import (
     build_hv_list,
     stack_hv_cubes,
     is_dispersion_axes,
+    resolve_photon_energies,
 )
 
 
@@ -42,3 +43,14 @@ def test_is_dispersion_degenerate_phi():
     assert is_dispersion_axes(theta, phi) is True
     phi2 = np.linspace(-10, 10, 21)
     assert is_dispersion_axes(theta, phi2) is False
+
+
+def test_resolve_single():
+    assert resolve_photon_energies(mode="single", single=90.0) == [90.0]
+
+
+def test_resolve_range():
+    out = resolve_photon_energies(
+        mode="range", start=80.0, finish=90.0, step=5.0
+    )
+    assert out == [80.0, 85.0, 90.0]

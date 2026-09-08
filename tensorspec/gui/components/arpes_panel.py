@@ -11,6 +11,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from tensorspec.core.arpes_engine import ARPESEngineRouter
+from tensorspec.core.arpes.photon_energy_scan import resolve_photon_energies
 from tensorspec.core.workspace import global_workspace
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.compute import cluster_paths as cp
@@ -178,7 +179,47 @@ class ARPESPanel(QWidget):
         param_group = QGroupBox("2. Final State & Thermodynamics")
         param_layout = QFormLayout(param_group)
         
+        self.hv_mode_combo = QComboBox()
+        self.hv_mode_combo.addItem("Single", "single")
+        self.hv_mode_combo.addItem("Range", "range")
+        self.hv_mode_combo.setToolTip(
+            "hv-dependent scan = Chinook (Grizzly) only. SPR-KKR later."
+        )
+
         self.photon_energy_spin = QDoubleSpinBox(); self.photon_energy_spin.setRange(5.0, 2000.0); self.photon_energy_spin.setValue(90.0); self.photon_energy_spin.setSuffix(" eV")
+
+        self.hv_start_spin = QDoubleSpinBox()
+        self.hv_start_spin.setRange(5.0, 2000.0)
+        self.hv_start_spin.setValue(80.0)
+        self.hv_start_spin.setSuffix(" eV")
+        self.hv_finish_spin = QDoubleSpinBox()
+        self.hv_finish_spin.setRange(5.0, 2000.0)
+        self.hv_finish_spin.setValue(100.0)
+        self.hv_finish_spin.setSuffix(" eV")
+        self.hv_step_spin = QDoubleSpinBox()
+        self.hv_step_spin.setRange(0.01, 2000.0)
+        self.hv_step_spin.setValue(5.0)
+        self.hv_step_spin.setSuffix(" eV")
+
+        self.hv_range_widget = QWidget()
+        hv_range_layout = QHBoxLayout(self.hv_range_widget)
+        hv_range_layout.setContentsMargins(0, 0, 0, 0)
+        hv_range_layout.addWidget(QLabel("Start"))
+        hv_range_layout.addWidget(self.hv_start_spin)
+        hv_range_layout.addWidget(QLabel("Finish"))
+        hv_range_layout.addWidget(self.hv_finish_spin)
+        hv_range_layout.addWidget(QLabel("Step"))
+        hv_range_layout.addWidget(self.hv_step_spin)
+        self.hv_range_widget.hide()
+
+        hv_row_widget = QWidget()
+        hv_row_layout = QHBoxLayout(hv_row_widget)
+        hv_row_layout.setContentsMargins(0, 0, 0, 0)
+        hv_row_layout.addWidget(self.hv_mode_combo)
+        hv_row_layout.addWidget(self.photon_energy_spin)
+        hv_row_layout.addWidget(self.hv_range_widget)
+        self.hv_mode_combo.currentIndexChanged.connect(self.update_hv_mode_ui)
+
         self.work_function_spin = QDoubleSpinBox(); self.work_function_spin.setRange(0.0, 10.0); self.work_function_spin.setValue(4.5); self.work_function_spin.setSuffix(" eV")
         self.inner_potential_spin = QDoubleSpinBox(); self.inner_potential_spin.setRange(0.0, 30.0); self.inner_potential_spin.setValue(15.0); self.inner_potential_spin.setSuffix(" eV")
         self.temperature_spin = QDoubleSpinBox(); self.temperature_spin.setRange(0.1, 1000.0); self.temperature_spin.setValue(10.0); self.temperature_spin.setSuffix(" K")
@@ -204,7 +245,7 @@ class ARPESPanel(QWidget):
         self.mfp_spin.setDecimals(2)
         self.mfp_spin.setSuffix(" Å")
         
-        param_layout.addRow("Photon (hv):", self.photon_energy_spin)
+        param_layout.addRow("Photon (hv):", hv_row_widget)
         param_layout.addRow("Work Func (Φ):", self.work_function_spin)
         param_layout.addRow("Inner Pot (V0):", self.inner_potential_spin)
         param_layout.addRow("Radial Type:", self.rad_type_combo)
@@ -506,6 +547,38 @@ class ARPESPanel(QWidget):
         control_layout.addWidget(self.btn_push_workspace)
         control_layout.addWidget(self.btn_save_disk)
 
+    def _hv_scan_allowed(self) -> bool:
+        # B1 Chinook TB; B2 bare still uses chinook_wrapper path in panel — allow only
+        # engines that call Chinook/Grizzly ME (B1). Exclude A (three-step) and B3 (SPR-KKR).
+        return self.engine_dropdown.currentData() == "B1"
+
+    def update_hv_mode_ui(self, *_args):
+        scan_allowed = self._hv_scan_allowed()
+        range_item = self.hv_mode_combo.model().item(1)
+        if range_item is not None:
+            range_item.setEnabled(scan_allowed)
+        if not scan_allowed and self.hv_mode_combo.currentData() == "range":
+            self.hv_mode_combo.setCurrentIndex(0)
+
+        is_range = (
+            scan_allowed and self.hv_mode_combo.currentData() == "range"
+        )
+        self.photon_energy_spin.setVisible(not is_range)
+        self.hv_range_widget.setVisible(is_range)
+
+    def get_photon_energies(self) -> list[float]:
+        mode = self.hv_mode_combo.currentData()
+        if mode == "range":
+            return resolve_photon_energies(
+                mode="range",
+                start=self.hv_start_spin.value(),
+                finish=self.hv_finish_spin.value(),
+                step=self.hv_step_spin.value(),
+            )
+        return resolve_photon_energies(
+            mode="single", single=self.photon_energy_spin.value()
+        )
+
     def _on_kz_halfwidth_changed(self, value):
         """Enable kz_npoints only when broadening is on (halfwidth > 0)."""
         self.kz_npoints_spin.setEnabled(float(value) > 0.0)
@@ -671,6 +744,21 @@ class ARPESPanel(QWidget):
 
     def trigger_simulation(self):
         model_choice = self.engine_dropdown.currentData()
+        try:
+            hv_list = self.get_photon_energies()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid photon-energy range", str(exc))
+            return
+        if len(hv_list) > 64:
+            reply = QMessageBox.question(
+                self,
+                "Large photon-energy scan",
+                f"This scan contains {len(hv_list)} photon energies. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
         
         if model_choice == "B3":
             # --- SPRKKR Remote Execution ---
@@ -1589,6 +1677,7 @@ cd {remote_dir}
                 self.live_log_widget.hide()
                 self.btn_fetch_results.setEnabled(False)
                 self.btn_start_live.setEnabled(False)
+        self.update_hv_mode_ui()
         self._sync_remote_gpu_ui()
         if remote:
             self._refresh_remote_gpu_count()
