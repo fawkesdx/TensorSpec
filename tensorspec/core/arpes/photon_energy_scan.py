@@ -43,6 +43,26 @@ def stack_hv_cubes(
     return stacked, np.asarray(hv_list, dtype=float)
 
 
+def tensor_from_stacked_sim(
+    stacked: np.ndarray,
+    hv: np.ndarray,
+    theta: np.ndarray,
+    phi: np.ndarray,
+    energy: np.ndarray,
+    metadata: dict | None = None,
+):
+    from tensorspec.core.data_models import TensorData
+
+    return TensorData(
+        value=np.transpose(stacked, (0, 3, 1, 2)),
+        axes=[hv, energy, theta, phi],
+        labels=["Photon Energy", "Energy", "Θ (Slit)", "Φ (Deflect)"],
+        units=["eV", "eV", "deg", "deg"],
+        data_type="Simulated ARPES Matrix Elements",
+        metadata=metadata or {},
+    )
+
+
 def is_dispersion_axes(theta: np.ndarray, phi: np.ndarray, tol: float = 1e-9) -> bool:
     def _deg(a: np.ndarray) -> bool:
         a = np.asarray(a)

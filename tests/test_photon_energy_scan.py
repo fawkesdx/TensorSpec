@@ -5,6 +5,7 @@ from tensorspec.core.arpes.photon_energy_scan import (
     stack_hv_cubes,
     is_dispersion_axes,
     resolve_photon_energies,
+    tensor_from_stacked_sim,
 )
 
 
@@ -35,6 +36,20 @@ def test_stack_fermi_shapes_4d_raw():
     hv = np.array([84.0, 90.0])
     stacked, _ = stack_hv_cubes(cubes, hv)
     assert stacked.shape == (2, 8, 9, 4)
+
+
+def test_tensor_from_stacked_fermi():
+    stacked = np.zeros((2, 3, 4, 5))
+    hv = np.array([80.0, 90.0])
+    theta = np.linspace(-1, 1, 3)
+    phi = np.linspace(-2, 2, 4)
+    energy = np.linspace(-1, 0, 5)
+
+    td = tensor_from_stacked_sim(stacked, hv, theta, phi, energy)
+
+    assert td.value.shape == (2, 5, 3, 4)
+    assert td.labels[0] == "Photon Energy"
+    assert td.labels[1:] == ["Energy", "Θ (Slit)", "Φ (Deflect)"]
 
 
 def test_is_dispersion_degenerate_phi():
