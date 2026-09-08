@@ -11,6 +11,7 @@ from tensorspec.core.ml.ssl.probe import (
     filter_manifest_indices,
     labels_to_grid,
     load_dino_for_probe,
+    probe,
     reference_to_binary,
     spatial_contiguity,
 )
@@ -62,6 +63,19 @@ def test_filter_manifest_indices_by_source():
     }
     assert filter_manifest_indices(manifest, "a.h5") == [0, 2]
     assert filter_manifest_indices(manifest, "missing.h5") == []
+
+
+def test_probe_rejects_k_not_2(tmp_path):
+    import pytest
+
+    with pytest.raises(ValueError, match=r"k=2"):
+        probe(
+            ckpt=tmp_path / "missing.pt",
+            data_dir=tmp_path,
+            reference=tmp_path / "missing.npz",
+            out_dir=tmp_path / "out",
+            config=ProbeConfig(source_id="x", k=3),
+        )
 
 
 def test_extract_cls_shape(tmp_path):

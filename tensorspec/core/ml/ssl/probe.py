@@ -239,6 +239,10 @@ def _save_overlay_pngs(out: Path, ref_map, ssl_map, ref_lab) -> None:
 
 
 def probe(*, ckpt, data_dir, reference, out_dir, config: ProbeConfig) -> dict:
+    if config.k != 2:
+        raise ValueError(
+            f"B2 floor probe requires k=2 only (got k={config.k})"
+        )
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     ref = load_floor_reference(reference)
