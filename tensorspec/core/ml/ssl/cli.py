@@ -10,6 +10,7 @@ import sys
 import time
 
 from tensorspec.core.ml.ssl.preprocess import preprocess_file
+from tensorspec.core.ml.ssl.probe import ProbeConfig, probe
 from tensorspec.core.ml.ssl.spec import (
     NormSpec,
     PreprocessConfig,
@@ -66,6 +67,22 @@ def _parser() -> argparse.ArgumentParser:
     train_parser.add_argument(
         "--resume",
         help="checkpoint path to resume from",
+    )
+    probe_parser = subparsers.add_parser(
+        "probe", help="floor metrics from ckpt + reference map"
+    )
+    probe_parser.add_argument("--ckpt", required=True)
+    probe_parser.add_argument("--data", required=True)
+    probe_parser.add_argument("--reference", required=True)
+    probe_parser.add_argument("--out", required=True)
+    probe_parser.add_argument("--source-id", required=True)
+    probe_parser.add_argument("--k", type=int, default=2)
+    probe_parser.add_argument("--seed", type=int, default=0)
+    probe_parser.add_argument("--batch-size", type=int, default=64)
+    probe_parser.add_argument(
+        "--student",
+        action="store_true",
+        help="use student CLS instead of teacher",
     )
     return parser
 
@@ -144,6 +161,29 @@ def main(argv=None) -> int:
         print(
             f"done train: steps={summary['steps']} epoch={summary['epoch']} "
             f"last_loss={summary['last_loss']}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 0
+    if args.cmd == "probe":
+        config = ProbeConfig(
+            source_id=args.source_id,
+            k=args.k,
+            seed=args.seed,
+            batch_size=args.batch_size,
+            use_teacher=not args.student,
+        )
+        metrics = probe(
+            ckpt=args.ckpt,
+            data_dir=args.data,
+            reference=args.reference,
+            out_dir=args.out,
+            config=config,
+        )
+        print(
+            f"done probe: n_samples={metrics['n_samples']} "
+            f"ari={metrics['ari']:.4f} nmi={metrics['nmi']:.4f} "
+            f"iou={metrics['iou']:.4f} contiguity={metrics['contiguity']:.4f}",
             file=sys.stderr,
             flush=True,
         )

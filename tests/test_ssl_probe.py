@@ -8,6 +8,7 @@ from tensorspec.core.ml.ssl.probe import (
     agreement_metrics,
     cluster_embeddings,
     extract_cls_embeddings,
+    filter_manifest_indices,
     labels_to_grid,
     load_dino_for_probe,
     reference_to_binary,
@@ -49,6 +50,18 @@ def _tiny_ckpt(tmp_path):
         path,
     )
     return path, cfg
+
+
+def test_filter_manifest_indices_by_source():
+    manifest = {
+        "samples": [
+            {"source_id": "a.h5", "shard": 0, "offset": 0, "index": {"y": 0, "x": 0}},
+            {"source_id": "b.h5", "shard": 0, "offset": 1, "index": {"y": 0, "x": 1}},
+            {"source_id": "a.h5", "shard": 0, "offset": 2, "index": {"y": 1, "x": 0}},
+        ]
+    }
+    assert filter_manifest_indices(manifest, "a.h5") == [0, 2]
+    assert filter_manifest_indices(manifest, "missing.h5") == []
 
 
 def test_extract_cls_shape(tmp_path):
