@@ -64,11 +64,26 @@ def _best_permutation_metrics(pred: np.ndarray, ref: np.ndarray) -> dict[str, fl
 
 
 def agreement_metrics(pred, ref) -> dict[str, float]:
-    return _best_permutation_metrics(np.asarray(pred), np.asarray(ref))
+    pred_arr = np.asarray(pred)
+    ref_arr = np.asarray(ref)
+    allowed = {0, 1}
+    for name, arr in (("pred", pred_arr), ("ref", ref_arr)):
+        labels = set(np.unique(arr).tolist())
+        if not labels.issubset(allowed):
+            raise ValueError(
+                f"{name} labels must be a subset of {{0, 1}} for k=2 agreement"
+            )
+    return _best_permutation_metrics(pred_arr, ref_arr)
 
 
 def spatial_contiguity(labels) -> float:
-    """Fraction of pixels whose label equals the 8-neighbour majority (ties count)."""
+    """Fraction of pixels whose label equals the 8-neighbour majority (ties count).
+
+    Out-of-bounds slots in the 3x3 neighbourhood are filled by edge-replicate
+    padding: each missing neighbour takes the center pixel's label. Without this,
+    corner/edge pixels on small grids (e.g. 2x2 block tests) see too many
+    cross-boundary votes and contiguity collapses toward 0 even for perfect blocks.
+    """
     lab = np.asarray(labels)
     if lab.ndim != 2:
         raise ValueError("labels must be 2D")
