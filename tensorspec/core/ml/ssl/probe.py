@@ -22,7 +22,9 @@ class ProbeConfig:
     seed: int = 0
     batch_size: int = 64
     use_teacher: bool = True
-    roi_mode: str = "full"  # "full" | "mask"
+    roi_mode: str = "full"
+    embed: str = "cls"
+    l2_normalize: bool = True
 
 
 def filter_manifest_indices(manifest: dict, source_id: str) -> list[int]:
@@ -122,6 +124,26 @@ def extract_cls_embeddings(model, images, *, batch_size, use_teacher, device):
         batch = x_all[i : i + batch_size].unsqueeze(1).to(device)  # N,1,H,W
         cls, _ = backbone.forward_features(batch)
         outs.append(cls.float().cpu().numpy())
+    return np.concatenate(outs, axis=0)
+
+
+@torch.no_grad()
+def extract_patch_mean_embeddings(
+    model, images, *, batch_size, use_teacher, device, l2_normalize=True
+):
+    model.eval()
+    backbone = model.teacher if use_teacher else model.student
+    outs = []
+    x_all = torch.from_numpy(np.asarray(images, dtype=np.float32))
+    if x_all.ndim != 3:
+        raise ValueError("images must be (N,H,W)")
+    for i in range(0, len(x_all), batch_size):
+        batch = x_all[i : i + batch_size].unsqueeze(1).to(device)
+        _, patches = backbone.forward_features(batch)
+        vec = patches.float().mean(dim=1)
+        if l2_normalize:
+            vec = torch.nn.functional.normalize(vec, dim=-1)
+        outs.append(vec.cpu().numpy())
     return np.concatenate(outs, axis=0)
 
 
