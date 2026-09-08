@@ -65,17 +65,28 @@ def test_filter_manifest_indices_by_source():
     assert filter_manifest_indices(manifest, "missing.h5") == []
 
 
-def test_probe_rejects_k_not_2(tmp_path):
+def test_probe_rejects_k_lt_2(tmp_path):
     import pytest
 
-    with pytest.raises(ValueError, match=r"k=2"):
+    with pytest.raises(ValueError, match=r"k>=2"):
         probe(
             ckpt=tmp_path / "missing.pt",
             data_dir=tmp_path,
             reference=tmp_path / "missing.npz",
             out_dir=tmp_path / "out",
-            config=ProbeConfig(source_id="x", k=3),
+            config=ProbeConfig(source_id="x", k=1),
         )
+
+
+def test_agreement_metrics_multiclass_ari():
+    # 3 SSL domains vs binary ref: ARI defined; IoU is nan
+    pred = np.array([[0, 0, 1], [0, 2, 1], [2, 2, 1]])
+    ref = np.array([[0, 0, 1], [0, 0, 1], [1, 1, 1]])
+    m = agreement_metrics(pred, ref)
+    assert m["ari"] == m["ari"]  # not nan
+    assert m["nmi"] == m["nmi"]
+    assert m["iou"] != m["iou"]  # nan
+    assert 0.0 <= m["contiguity"] <= 1.0
 
 
 def test_extract_cls_shape(tmp_path):
