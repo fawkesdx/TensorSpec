@@ -1,10 +1,75 @@
 import numpy as np
+import torch
+
+from tensorspec.core.ml.ssl.dino import DinoModel
+from tensorspec.core.ml.ssl.models.vit2d import build_vit2d
 from tensorspec.core.ml.ssl.probe import (
+    ProbeConfig,
     agreement_metrics,
+    cluster_embeddings,
+    extract_cls_embeddings,
     labels_to_grid,
+    load_dino_for_probe,
     reference_to_binary,
     spatial_contiguity,
 )
+from tensorspec.core.ml.ssl.spec import (
+    AugmentSpec,
+    DinoSpec,
+    ModelSpec,
+    OptimSpec,
+    RunConfig,
+    to_jsonable,
+)
+
+
+def _tiny_ckpt(tmp_path):
+    cfg = RunConfig(
+        augment=AugmentSpec(arm="A1", n_global=2, n_local=0, global_size=32, local_size=32),
+        model=ModelSpec(name="vit_ti", img_size=32, patch_size=8, in_chans=1),
+        dino=DinoSpec(out_dim=64, hidden_dim=64, bottleneck_dim=32),
+        optim=OptimSpec(epochs=1, batch_size=2, lr=1e-3),
+        seed=0,
+    )
+    student = build_vit2d(cfg.model)
+    teacher = build_vit2d(cfg.model)
+    model = DinoModel(student, teacher, cfg.dino)
+    path = tmp_path / "last.pt"
+    torch.save(
+        {
+            "step": 1,
+            "epoch": 0,
+            "model": model.state_dict(),
+            "optimizer": {},
+            "scaler": {},
+            "config": to_jsonable(cfg),
+            "seed": 0,
+            "git_commit": "test",
+        },
+        path,
+    )
+    return path, cfg
+
+
+def test_extract_cls_shape(tmp_path):
+    path, cfg = _tiny_ckpt(tmp_path)
+    model, loaded_cfg = load_dino_for_probe(path, device=torch.device("cpu"))
+    images = np.random.randn(5, 32, 32).astype(np.float32)
+    emb = extract_cls_embeddings(
+        model, images, batch_size=2, use_teacher=True, device=torch.device("cpu")
+    )
+    assert emb.shape == (5, model.teacher.embed_dim)
+
+
+def test_cluster_two_blobs():
+    rng = np.random.default_rng(0)
+    a = rng.normal(0, 0.1, size=(40, 8))
+    b = rng.normal(5, 0.1, size=(40, 8))
+    emb = np.vstack([a, b]).astype(np.float32)
+    labels = cluster_embeddings(emb, ProbeConfig(source_id="x", k=2, pca_dim=4, seed=0))
+    assert set(labels.tolist()) == {0, 1}
+    assert labels[:40].mean() != labels[40:].mean()  # separated
+
 
 
 def test_labels_to_grid_fills_yx():
