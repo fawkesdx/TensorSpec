@@ -8,6 +8,7 @@ from tensorspec.core.ml.ssl.probe import (
     agreement_metrics,
     cluster_embeddings,
     extract_cls_embeddings,
+    extract_patch_mean_embeddings,
     filter_manifest_indices,
     labels_to_grid,
     load_dino_for_probe,
@@ -97,6 +98,39 @@ def test_extract_cls_shape(tmp_path):
         model, images, batch_size=2, use_teacher=True, device=torch.device("cpu")
     )
     assert emb.shape == (5, model.teacher.embed_dim)
+
+
+def test_extract_patch_mean_shape_and_l2(tmp_path):
+    path, cfg = _tiny_ckpt(tmp_path)
+    model, _ = load_dino_for_probe(path, device=torch.device("cpu"))
+    images = np.random.randn(5, 32, 32).astype(np.float32)
+    emb = extract_patch_mean_embeddings(
+        model,
+        images,
+        batch_size=2,
+        use_teacher=True,
+        device=torch.device("cpu"),
+        l2_normalize=True,
+    )
+    assert emb.shape == (5, model.teacher.embed_dim)
+    norms = np.linalg.norm(emb, axis=1)
+    assert np.allclose(norms, 1.0, atol=1e-5)
+
+
+def test_extract_patch_mean_no_l2_differs(tmp_path):
+    path, _ = _tiny_ckpt(tmp_path)
+    model, _ = load_dino_for_probe(path, device=torch.device("cpu"))
+    images = np.random.randn(3, 32, 32).astype(np.float32)
+    a = extract_patch_mean_embeddings(
+        model, images, batch_size=3, use_teacher=True,
+        device=torch.device("cpu"), l2_normalize=False,
+    )
+    b = extract_patch_mean_embeddings(
+        model, images, batch_size=3, use_teacher=True,
+        device=torch.device("cpu"), l2_normalize=True,
+    )
+    assert a.shape == b.shape
+    assert not np.allclose(a, b)
 
 
 def test_cluster_two_blobs():
