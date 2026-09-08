@@ -20,6 +20,31 @@ from tensorspec.core.workspace import global_workspace
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.compute import cluster_paths as cp
 
+
+def _remote_hv_cli_args(hv_list, hv_start, hv_finish, hv_step):
+    """Build one remote runner's photon-energy CLI arguments."""
+    if len(hv_list) == 1:
+        return f"--hv {hv_list[0]}"
+    return (
+        f"--hv_start {hv_start} --hv_finish {hv_finish} "
+        f"--hv_step {hv_step}"
+    )
+
+
+def _remote_cube_results(data):
+    """Map a fetched Chinook npz payload to the GUI result contract."""
+    cube = data["cube"]
+    results = {
+        "intensity_broadened": cube,
+        "energy": data["energy"] if "energy" in data else None,
+        "theta": data["theta"] if "theta" in data else None,
+        "phi": data["phi"] if "phi" in data else None,
+    }
+    if "hv" in data and cube.ndim == 4:
+        results["photon_energies"] = np.asarray(data["hv"], dtype=float)
+    return results
+
+
 class ARPESRunnerThread(QThread):
     """Runs the heavy 2D matrix element loop in the background to prevent UI freezing."""
     finished_signal = Signal(bool, object, str)
@@ -1117,7 +1142,13 @@ cd {remote_dir}
                 sftp.close()
                 
                 cores = self.remote_tb_cores_spin.value()
-                hv = self.photon_energy_spin.value()
+                hv_list = self.get_photon_energies()
+                hv_args = _remote_hv_cli_args(
+                    hv_list,
+                    self.hv_start_spin.value(),
+                    self.hv_finish_spin.value(),
+                    self.hv_step_spin.value(),
+                )
                 workf = self.work_function_spin.value()
                 v0 = self.inner_potential_spin.value()
                 temp = self.temperature_spin.value()
@@ -1138,7 +1169,7 @@ cd {remote_dir}
                     f"--tb_file tb_data.npz --theta_min {kx_min} --theta_max {kx_max} --ntheta {kx_steps} "
                     f"--phi_min {ky_min} --phi_max {ky_max} --nphi {ky_steps} "
                     f"--e_min {e_min} --e_max {e_max} --ne {e_steps} "
-                    f"--hv {hv} --workf {workf} --v0 {v0} --temp {temp} --polar {polar} "
+                    f"{hv_args} --workf {workf} --v0 {v0} --temp {temp} --polar {polar} "
                     f"--cores {cores} --engine {me_engine} --device {me_device} "
                     f"--layout {me_layout} --e_fermi {e_fermi} --theta_chunk 0 --ngpus {me_ngpus}"
                 )
@@ -1267,10 +1298,15 @@ cd {remote_dir}
 
             self.sim_intensity = results['intensity_broadened']
             if self.sim_intensity.ndim == 4:
-                self.sim_hv = np.asarray(
-                    results["photon_energies"], dtype=float
+                photon_energies = results.get("photon_energies")
+                self.sim_hv = (
+                    np.asarray(photon_energies, dtype=float)
+                    if photon_energies is not None
+                    else None
                 )
-                preview_intensity = self.sim_intensity[len(self.sim_hv) // 2]
+                preview_intensity = self.sim_intensity[
+                    self.sim_intensity.shape[0] // 2
+                ]
             else:
                 self.sim_hv = None
                 preview_intensity = self.sim_intensity
@@ -1574,13 +1610,7 @@ cd {remote_dir}
             # Load the file
             data = np.load(local_path, allow_pickle=True)
             if 'cube' in data:
-                intensity_3d = data['cube']
-                results = {
-                    'intensity_broadened': intensity_3d,
-                    'energy': data['energy'] if 'energy' in data else None,
-                    'theta': data['theta'] if 'theta' in data else None,
-                    'phi': data['phi'] if 'phi' in data else None,
-                }
+                results = _remote_cube_results(data)
             else:
                 intensity_3d = data['intensity']
                 results = {
