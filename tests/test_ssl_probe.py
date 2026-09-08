@@ -42,3 +42,16 @@ def test_agreement_permutation_invariant():
 def test_contiguity_perfect_blocks():
     lab = np.array([[0, 0], [1, 1]])
     assert spatial_contiguity(lab) == 1.0
+
+
+def test_reference_to_binary_two_level_map():
+    low = np.full((3, 4), 1.0, dtype=np.float32)
+    high = np.full((3, 4), 10.0, dtype=np.float32)
+    map_ = np.hstack([low, high])
+    labels = reference_to_binary(map_, seed=0)
+    assert labels.shape == map_.shape
+    assert set(np.unique(labels).tolist()) == {0, 1}
+    left = np.unique(labels[:, :4])
+    right = np.unique(labels[:, 4:])
+    assert left.size == 1 and right.size == 1
+    assert left[0] != right[0]
