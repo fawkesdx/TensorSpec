@@ -54,16 +54,17 @@ urllib3==2.6.3
 vtk==9.3.0
 zipp==3.23.1
 setuptools<70.0.0
-h5py
+h5py>=3.10.0
 xarray
-
-
+umap-learn>=0.5.12
 
 # --- ARPES SIMULATION ENGINES ---
 chinook==1.1.3
 oscarpes==3.1.1
 psutil==5.9.8
-h5py>=3.10.0
+# GrizzlyME: prefer PyPI/wheel; local editable OK: pip install -e GrizzlyME
+grizzlyme>=0.2.0
+torch>=2.0
 
 paramiko
 fastapi
