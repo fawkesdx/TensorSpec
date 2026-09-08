@@ -1,3 +1,8 @@
+import argparse
+import ast
+from pathlib import Path
+from unittest.mock import Mock, call
+
 import numpy as np
 import pytest
 from tensorspec.core.arpes.photon_energy_scan import (
@@ -8,6 +13,30 @@ from tensorspec.core.arpes.photon_energy_scan import (
     resolve_photon_energies,
     tensor_from_stacked_sim,
 )
+
+
+_RUNNER_PATH = (
+    Path(__file__).parents[1]
+    / "tensorspec/core/arpes/one_step/chinook_remote_runner_template.py"
+)
+
+
+def _load_runner_helpers(*names):
+    tree = ast.parse(_RUNNER_PATH.read_text(encoding="utf-8"))
+    functions = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in names
+    ]
+    assert {node.name for node in functions} == set(names)
+    namespace = {
+        "argparse": argparse,
+        "np": np,
+        "stack_hv_cubes": stack_hv_cubes,
+    }
+    helper_module = ast.Module(body=functions, type_ignores=[])
+    exec(compile(helper_module, str(_RUNNER_PATH), "exec"), namespace)
+    return namespace
 
 
 class _Args:
@@ -27,6 +56,74 @@ def test_cli_range_overrides_single():
         _Args(hv=90.0, hv_start=80.0, hv_finish=90.0, hv_step=5.0)
     )
     assert out == [80.0, 85.0, 90.0]
+
+
+def test_remote_runner_parser_accepts_hv_range():
+    build_arg_parser = _load_runner_helpers("build_arg_parser")["build_arg_parser"]
+    args = build_arg_parser().parse_args(
+        [
+            "--tb_file",
+            "tb.npz",
+            "--theta_min",
+            "-10",
+            "--theta_max",
+            "10",
+            "--ntheta",
+            "3",
+            "--phi_min",
+            "0",
+            "--phi_max",
+            "0",
+            "--nphi",
+            "1",
+            "--hv_start",
+            "80",
+            "--hv_finish",
+            "90",
+            "--hv_step",
+            "5",
+        ]
+    )
+    assert (args.hv_start, args.hv_finish, args.hv_step) == (80.0, 90.0, 5.0)
+
+
+def test_remote_hv_loop_calls_compute_with_fresh_me_shell_and_stacks():
+    run_hv_loop = _load_runner_helpers("_run_hv_loop")["_run_hv_loop"]
+    compute = Mock(
+        side_effect=[
+            np.full((2, 3, 4), 80.0),
+            np.full((2, 3, 4), 85.0),
+            np.full((2, 3, 4), 90.0),
+        ]
+    )
+
+    cube, hv = run_hv_loop([80.0, 85.0, 90.0], compute)
+
+    assert cube.shape == (3, 2, 3, 4)
+    assert np.allclose(hv, [80.0, 85.0, 90.0])
+    assert compute.call_args_list == [
+        call(0, 80.0, me_shell=None),
+        call(1, 85.0, me_shell=None),
+        call(2, 90.0, me_shell=None),
+    ]
+
+
+def test_remote_single_hv_save_keeps_legacy_cube_and_omits_hv():
+    helpers = _load_runner_helpers("_run_hv_loop", "_save_hv_npz")
+    cube, hv = helpers["_run_hv_loop"](
+        [84.0], Mock(return_value=np.ones((2, 3, 4)))
+    )
+    save = Mock()
+
+    helpers["_save_hv_npz"](
+        "result.npz", cube, hv, save=save, energy=np.arange(4)
+    )
+
+    assert cube.shape == (2, 3, 4)
+    assert hv is None
+    _, kwargs = save.call_args
+    assert kwargs["cube"].shape == (2, 3, 4)
+    assert "hv" not in kwargs
 
 
 def test_build_hv_list_inclusive_finish():
