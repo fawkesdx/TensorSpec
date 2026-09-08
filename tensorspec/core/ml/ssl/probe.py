@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +9,8 @@ import torch
 
 from tensorspec.core.ml.ssl.dino import DinoModel
 from tensorspec.core.ml.ssl.models.vit2d import build_vit2d
+from tensorspec.core.ml.ssl.reference import load_floor_reference
+from tensorspec.core.ml.ssl.shards import ShardDataset, load_manifest
 from tensorspec.core.ml.ssl.spec import run_config_from_dict
 
 
@@ -19,6 +22,14 @@ class ProbeConfig:
     seed: int = 0
     batch_size: int = 64
     use_teacher: bool = True
+
+
+def filter_manifest_indices(manifest: dict, source_id: str) -> list[int]:
+    return [
+        i
+        for i, sample in enumerate(manifest["samples"])
+        if sample.get("source_id") == source_id
+    ]
 
 
 def load_dino_for_probe(ckpt, *, device):
@@ -173,3 +184,106 @@ def spatial_contiguity(labels) -> float:
             if center in modes:
                 matches += 1
     return float(matches) / float(ny * nx)
+
+
+def _save_overlay_pngs(out: Path, ref_map, ssl_map, ref_lab) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    ref_map = np.asarray(ref_map)
+    ssl_map = np.asarray(ssl_map)
+    ref_lab = np.asarray(ref_lab)
+
+    fig, ax = plt.subplots(figsize=(4, 4))
+    im = ax.imshow(ref_map, origin="lower", aspect="equal")
+    ax.set_title("reference intensity")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(out / "fig_ref.png", dpi=120)
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(4, 4))
+    im = ax.imshow(ssl_map, origin="lower", aspect="equal", interpolation="nearest")
+    ax.set_title("SSL cluster map")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    fig.tight_layout()
+    fig.savefig(out / "fig_ssl.png", dpi=120)
+    plt.close(fig)
+
+    # Best label flip for overlay (same policy as agreement_metrics)
+    best_ssl = ssl_map
+    best_iou = -1.0
+    for flip in (False, True):
+        p = (1 - ssl_map) if flip else ssl_map
+        iou = _mean_iou(p, ref_lab)
+        if iou > best_iou:
+            best_iou = iou
+            best_ssl = p
+    disagree = (best_ssl != ref_lab).astype(np.float32)
+
+    fig, axes = plt.subplots(1, 3, figsize=(10, 3.5))
+    axes[0].imshow(ref_lab, origin="lower", aspect="equal", interpolation="nearest")
+    axes[0].set_title("ref binary")
+    axes[1].imshow(best_ssl, origin="lower", aspect="equal", interpolation="nearest")
+    axes[1].set_title("SSL (matched)")
+    axes[2].imshow(disagree, origin="lower", aspect="equal", interpolation="nearest", cmap="Reds")
+    axes[2].set_title("disagreement")
+    for ax in axes:
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.tight_layout()
+    fig.savefig(out / "fig_overlay.png", dpi=120)
+    plt.close(fig)
+
+
+def probe(*, ckpt, data_dir, reference, out_dir, config: ProbeConfig) -> dict:
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    ref = load_floor_reference(reference)
+    manifest = load_manifest(str(Path(data_dir) / "manifest.json"))
+    idxs = filter_manifest_indices(manifest, config.source_id)
+    if not idxs:
+        raise ValueError(f"no samples for source_id={config.source_id!r}")
+    dataset = ShardDataset(str(data_dir))
+    images = []
+    provenances = []
+    for i in idxs:
+        sample, prov = dataset[i]
+        images.append(np.asarray(sample, dtype=np.float32))
+        provenances.append(prov)
+    images = np.stack(images, axis=0)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model, _run_cfg = load_dino_for_probe(ckpt, device=device)
+    emb = extract_cls_embeddings(
+        model,
+        images,
+        batch_size=config.batch_size,
+        use_teacher=config.use_teacher,
+        device=device,
+    )
+    np.save(out / "embeddings.npy", emb)
+    assigns = cluster_embeddings(emb, config)
+    ny, nx = ref.map.shape
+    ssl_map = labels_to_grid(assigns, provenances, ny=ny, nx=nx)
+    ref_lab = reference_to_binary(ref.map, seed=config.seed)
+    metrics = agreement_metrics(ssl_map, ref_lab)
+    metrics.update(
+        {
+            "source_id": config.source_id,
+            "k": config.k,
+            "pca_dim": config.pca_dim,
+            "seed": config.seed,
+            "use_teacher": config.use_teacher,
+            "n_samples": int(len(idxs)),
+            "ckpt": str(ckpt),
+            "reference_roi_source_id": ref.roi.get("source_id"),
+            "reference_saved_utc": ref.roi.get("saved_utc"),
+        }
+    )
+    (out / "metrics.json").write_text(
+        json.dumps(metrics, indent=2), encoding="utf-8"
+    )
+    _save_overlay_pngs(out, ref.map, ssl_map, ref_lab)
+    return metrics
