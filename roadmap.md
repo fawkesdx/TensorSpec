@@ -1,6 +1,6 @@
 # TensorSpec Roadmap
 General Rule for the App
-- [] Always give option to work with GPU or CPU. With PyVista or MatplotLib. In any suite, detect what kind of machine is being used and use the right machinary.
+- [] Always give option to work with GPU or CPU. With PyVista or MatplotLib. In any suite, detect what kind of machine is being used and use the right machinary. (SPR-KKR = Fortran, CPU only; GPU toggle N/A for ARPES B3 / SPR-KKR SCF.)
 - [] 
 Grand App
 - Crystal viewer Suite
@@ -27,6 +27,8 @@ Grand App
 	- [x] Multi-Orbital Projection: Calculate eigenvector probabilities for atomic character mapping (Fat Bands).
 	- [ ] k.p Perturbation Capability: Near-band-edge models (e.g., Dirac cone effective mass).
 	- [ ] Full DFT Capability: Wrappers to trigger/parse external solvers from Quantum Espresso
+		- [x] SPR-KKR SCF runner (local/remote kkrscf, ase2sprkkr inputs) + converged-potential vault. (`core/dft/sprkkr/`, `gui/components/sprkkr_panels.py`)
+		- [x] SPR-KKR live convergence monitor (iter, RMS err, EF) in DFT Suite.
 		- [x] Abstract QE Input Generator (scf.in, nscf.in, wannier90.win) decoupled from local executables.
 		- [x] GUI component for defining pseudo_dir, k-mesh, and functionals (PBE, LDA, HSE).
 		- [x] Local subprocess execution runner with thread-safety.
@@ -47,7 +49,7 @@ Grand App
 		- [x] Option B: One-Step Photoemission Model
 			- [x] B1: Tight-Binding + Free Electron Final State (Chinook Engine integration)
 			- [ ] B2: Real-space DFT Orbitals + Plane Wave Final State (kMap FFT tomography integration)
-			- [ ] B3: Full Multiple Scattering & Time-Reversed LEED (SPR-KKR execution wrapper using oscarpes API)
+			- [x] B3: Full Multiple Scattering & Time-Reversed LEED (SPR-KKR `kkrspec` wrapper: native θ×φ grid, MPI, energy/hv fan-out, local or remote; `.spc` → DataTree). Code done 2026-09-09; real-run check on Einstein pending (Gate D).
 	- [ ] Data Loader from various beamlines (MAESTRO, i05 Diamond, SIS SLS, etc.)
 	- [ ] Linked Crosshair Data Viewer (Interactive EDC and MDC extraction)
 	- [ ] data loader from various beamline
