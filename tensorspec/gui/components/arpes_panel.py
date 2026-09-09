@@ -306,6 +306,25 @@ class ARPESPanel(QWidget):
         self.spin_kkr_nl.setValue(3)
         sprkkr_form.addRow("NL:", self.spin_kkr_nl)
 
+        self.chk_iq_auto = QCheckBox("Auto surface site (top atom)")
+        self.chk_iq_auto.setChecked(True)
+        self.chk_iq_auto.setToolTip(
+            "hkl is read in the loaded structure's CIF frame and converted to "
+            "SPR-KKR's raw ABAS frame; the surface IQ is auto-picked (topmost "
+            "non-vacancy site) unless you pin one below."
+        )
+        self.spin_iq_surf = QSpinBox()
+        self.spin_iq_surf.setRange(1, 999)
+        self.spin_iq_surf.setEnabled(False)
+        self.chk_iq_auto.toggled.connect(lambda on: self.spin_iq_surf.setEnabled(not on))
+        sprkkr_form.addRow("", self.chk_iq_auto)
+        sprkkr_form.addRow("IQ_AT_SURF:", self.spin_iq_surf)
+
+        self.lbl_kkr_geom = QLabel("geometry: —")
+        self.lbl_kkr_geom.setStyleSheet("color: #9ad; font-size: 11px;")
+        self.lbl_kkr_geom.setWordWrap(True)
+        sprkkr_form.addRow(self.lbl_kkr_geom)
+
         self.lbl_kkr_eta = QLabel("ETA: —")
         self.lbl_kkr_eta.setStyleSheet("color: #9ad; font-size: 11px;")
         sprkkr_form.addRow(self.lbl_kkr_eta)
@@ -1014,6 +1033,34 @@ class ARPESPanel(QWidget):
                 experiment_kwargs['pol_e'] = axis_map.get(self.combo_spin_axis.currentText(), "PZ")
                 experiment_kwargs['spin_filter'] = comp_map.get(self.combo_spin_comp.currentText(), "up")
 
+            # Surface geometry (design doc §0): hkl above is typed in the loaded
+            # structure's own (CIF) cell frame -- resolve it to SPR-KKR's raw
+            # ABAS frame + CRYS_VECS via the vault's stored cif_lattice, falling
+            # back to a pushed crystal structure. No lattice -> warn + treat hkl
+            # as already-ABAS (old, wrong-but-previous behavior) rather than crash.
+            vault_name = self.vault_combo.currentText()
+            cif_lattice = None
+            vault_entry = global_workspace.get(vault_name) if vault_name else None
+            if vault_entry and vault_entry.get('meta', {}).get('cif_lattice'):
+                cif_lattice = vault_entry['meta']['cif_lattice']
+            else:
+                crystal = global_workspace.pull_crystal_structure(self.ws_combo.currentText())
+                if crystal is not None and hasattr(crystal, 'lattice'):
+                    try:
+                        cif_lattice = crystal.lattice.matrix.tolist()
+                    except Exception:
+                        cif_lattice = None
+            if cif_lattice is not None:
+                experiment_kwargs['hkl_frame'] = 'cif'
+                experiment_kwargs['cif_lattice'] = cif_lattice
+            else:
+                QMessageBox.warning(
+                    self, "No CIF lattice",
+                    "No CIF lattice for this vault; treating h k l as cell frame",
+                )
+                experiment_kwargs['hkl_frame'] = 'abas'
+            experiment_kwargs['iq_at_surf'] = None if self.chk_iq_auto.isChecked() else self.spin_iq_surf.value()
+
             try:
                 if self._is_remote_target():
                     cluster = self.get_selected_cluster()
@@ -1427,7 +1474,15 @@ cd {remote_dir}
         if success:
             self.btn_push_workspace.setEnabled(True)
             self.btn_save_disk.setEnabled(True)
-            
+
+            # SPR-KKR (B3) only: show the resolved surface geometry (hkl_abas / IQ).
+            geometry = results.get('geometry') if isinstance(results, dict) else None
+            if geometry is not None:
+                self.lbl_kkr_geom.setText(
+                    f"geometry: hkl_abas={tuple(geometry.hkl_abas)} "
+                    f"IQ_AT_SURF={geometry.iq_at_surf} ({geometry.planes_summary})"
+                )
+
             e_min, e_max, e_steps = self.spin_e_min.value(), self.spin_e_max.value(), self.spin_e_steps.value()
             kx_min, kx_max, kx_steps = self.spin_kx_min.value(), self.spin_kx_max.value(), self.spin_kx_steps.value()
             ky_min, ky_max, ky_steps = self.spin_ky_min.value(), self.spin_ky_max.value(), self.spin_ky_steps.value()

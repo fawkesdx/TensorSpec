@@ -99,7 +99,7 @@ class ArpesParams:
     imv_ini_eV: float = 0.05
     imv_fin_eV: float = 2.0
     hkl: Tuple[int, int, int] = (0, 0, 1)
-    iq_at_surf: int = 1
+    iq_at_surf: Optional[int] = 1  # None/0 -> auto-pick surface site (workflow.resolve_surface_geometry)
     n_layer: int = 50
     nlat_g_vec: int = 57
     n_laydbl: Tuple[float, float] = (10, 10)
@@ -109,6 +109,7 @@ class ArpesParams:
     spol: Optional[int] = None
     pol_e: str = "PZ"
     dataset: str = "arpes"
+    hkl_frame: str = "conventional"  # "conventional" | "abas" (raw ABAS, needs CRYS_VECS) | "cif" (resolved by workflow.run_arpes)
 
     @property
     def n_points(self) -> int:
@@ -135,13 +136,16 @@ class ArpesParams:
             raise ValueError(f"nktab must be >= 1, got {self.nktab}")
         if not self.dataset:
             raise ValueError("dataset must be a non-empty string")
+        if self.hkl_frame not in ("conventional", "abas", "cif"):
+            raise ValueError(f"hkl_frame must be 'conventional', 'abas' or 'cif', got {self.hkl_frame!r}")
 
     def to_ase2sprkkr_dict(self) -> dict:
         """Nested {section: {REAL_KEYWORD: value}} for ase2sprkkr InputParameters.
 
-        Never emits CRYS_VECS (design doc §0: that keyword flips MILLER_HKL to
-        the primitive-cell frame; ase2sprkkr's own CRYS_VEC default flag is
-        harmless and left alone by inputs.py).
+        Emits CRYS_VECS (design doc §0: that keyword flips MILLER_HKL to the
+        raw ABAS frame) only when ``hkl_frame == "abas"`` -- see
+        ``inputs.build_arpes_inputs``, which raw-injects it into TASK since
+        ase2sprkkr's own CRYS_VEC (no S) flag does not match this keyword.
         """
         spec_el = {
             "THETA": _range_value(self.theta_e),

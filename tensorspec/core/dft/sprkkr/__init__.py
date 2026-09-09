@@ -45,7 +45,15 @@ from .progress import (
 )
 from .fanout import FanoutPlan, full_energy_axis, plan_jobs, split_energy, split_hv
 from .vault import Vault, VaultEntry, pot_key
-from .workflow import ArpesResult, ArpesRunHandle, ScfResult, run_arpes, run_scf
+from .workflow import (
+    ArpesResult,
+    ArpesRunHandle,
+    ScfResult,
+    SurfaceGeometry,
+    resolve_surface_geometry,
+    run_arpes,
+    run_scf,
+)
 from .settings import SprkkrSettings, load_settings, save_settings, local_binaries_present
 
 __all__ = [
@@ -64,6 +72,7 @@ __all__ = [
     "Vault", "VaultEntry", "pot_key",
     # workflow
     "ScfResult", "run_scf", "ArpesResult", "ArpesRunHandle", "run_arpes",
+    "SurfaceGeometry", "resolve_surface_geometry",
     # settings
     "SprkkrSettings", "load_settings", "save_settings", "local_binaries_present",
 ]

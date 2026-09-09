@@ -50,16 +50,19 @@ class WorkspaceManager:
             crystals.append(key)
         return crystals
     
-    def push_remote_run(self, name, cluster_name, remote_path, engine):
+    def push_remote_run(self, name, cluster_name, remote_path, engine, meta=None):
         """
         Stores a pointer to a remote DFT calculation output folder.
-        engine should be 'SPRKKR' or 'QE'.
+        engine should be 'SPRKKR' or 'QE'. ``meta`` (optional dict) carries
+        extra provenance -- e.g. SPR-KKR's CIF lattice matrix for surface
+        geometry resolution (see tensorspec.core.dft.sprkkr.workflow).
         """
         self._data[name] = {
             'type': 'remote_run',
             'cluster': cluster_name,
             'remote_path': remote_path,
-            'engine': engine
+            'engine': engine,
+            'meta': meta or {},
         }
 
     def pull_remote_run(self, name):

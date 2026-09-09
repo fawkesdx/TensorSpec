@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tensorspec.gui.components import arpes_panel as ap
+from tensorspec.core.workspace import global_workspace
 
 
 def _make_panel(qapp):
@@ -60,6 +61,9 @@ def test_trigger_simulation_b3_local_builds_expected_kwargs(qapp, monkeypatch, t
     monkeypatch.setattr(ap.ARPESRunnerThread, "start", _fake_start)
     # Default grid (100x100x100) trips the new long-run ETA gate; say Yes.
     monkeypatch.setattr(ap.QMessageBox, "question", staticmethod(lambda *a, **k: ap.QMessageBox.Yes))
+    # No vault / no pushed crystal structure selected -> geometry.py falls back
+    # to "no CIF lattice" and warns (see test below for the cif_lattice path).
+    monkeypatch.setattr(ap.QMessageBox, "warning", staticmethod(lambda *a, **k: None))
 
     panel.trigger_simulation()
 
@@ -70,6 +74,58 @@ def test_trigger_simulation_b3_local_builds_expected_kwargs(qapp, monkeypatch, t
     assert kwargs["n_layer"] == panel.spin_n_layer.value()
     assert "launcher" in kwargs
     assert kwargs["temperature_K"] == panel.temperature_spin.value()
+    # No lattice available -> falls back to treating hkl as already-ABAS.
+    assert kwargs["hkl_frame"] == "abas"
+    assert kwargs["iq_at_surf"] is None  # chk_iq_auto defaults to checked
+
+
+def test_trigger_simulation_b3_uses_vault_cif_lattice(qapp, monkeypatch, tmp_path):
+    """A vault with a stored cif_lattice -> hkl_frame='cif' + cif_lattice passthrough;
+    pinning IQ_AT_SURF via the spinbox overrides auto-pick."""
+    panel = _make_panel(qapp)
+    idx = panel.engine_dropdown.findData("B3")
+    panel.engine_dropdown.setCurrentIndex(idx)
+
+    local_idx = panel.target_dropdown.findData(None)
+    if local_idx < 0:
+        local_idx = 0
+    panel.target_dropdown.setCurrentIndex(local_idx)
+
+    fake_pot = Path(__file__).resolve()
+    panel.sprkkr_pot_edit.setText(str(fake_pot))
+    panel.sprkkr_bin_edit.setText(str(tmp_path))
+
+    lattice = [[14.175, 0.0, -4.977], [0.0, 3.541, 0.0], [0.0, 0.0, 9.058]]
+    global_workspace.push_remote_run(
+        name="VTe2_test_vault", cluster_name="local", engine="SPRKKR",
+        remote_path=str(fake_pot), meta={"cif_lattice": lattice},
+    )
+    panel.vault_combo.addItem("VTe2_test_vault")
+    panel.vault_combo.setCurrentText("VTe2_test_vault")
+
+    panel.chk_iq_auto.setChecked(False)
+    panel.spin_iq_surf.setValue(7)
+
+    recorded = {}
+
+    def _fake_start(self):
+        recorded["kwargs"] = dict(self.experiment_kwargs)
+
+    monkeypatch.setattr(ap.ARPESRunnerThread, "start", _fake_start)
+    monkeypatch.setattr(ap.QMessageBox, "question", staticmethod(lambda *a, **k: ap.QMessageBox.Yes))
+    monkeypatch.setattr(ap.QMessageBox, "warning", staticmethod(lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("should not warn: vault has a cif_lattice")
+    )))
+
+    try:
+        panel.trigger_simulation()
+    finally:
+        global_workspace.remove("VTe2_test_vault")
+
+    kwargs = recorded["kwargs"]
+    assert kwargs["hkl_frame"] == "cif"
+    assert kwargs["cif_lattice"] == lattice
+    assert kwargs["iq_at_surf"] == 7
 
 
 def test_update_kkr_eta_ky_degenerate_matches_single_step(qapp):

@@ -21,14 +21,34 @@ pytestmark = pytest.mark.skipif(
 )
 
 from tensorspec.core.dft.sprkkr.fanout import split_energy
+from tensorspec.core.dft.sprkkr.geometry import parse_pot_geometry
 from tensorspec.core.dft.sprkkr.inputs import build_scf_inputs, read_inp_keywords
 from tensorspec.core.dft.sprkkr.params import ArpesParams, ScfParams
-from tensorspec.core.dft.sprkkr.workflow import ArpesRunHandle, run_arpes, run_scf
+from tensorspec.core.dft.sprkkr.workflow import (
+    ArpesRunHandle,
+    resolve_surface_geometry,
+    run_arpes,
+    run_scf,
+)
 from tensorspec.core.arpes.one_step.kkr_wrapper import KKRWrapper, _build_arpes_params
 
 FIXTURES = Path(__file__).parent / "fixtures"
 SCF_LOG_TAIL = FIXTURES / "Cu_SCF.out.tail"
 ARPES_SPC_FULL = FIXTURES / "_Cu_ARPES_ARPES_data.spc"  # NE=8 NT=9 NP=1
+VTE2_POT = FIXTURES / "VTe2_prim.pot"
+
+
+def _vte2_cif_lattice():
+    """VTe2_CDW.cif's own cell (monoclinic, a/b/c/beta below) -- the frame the
+    user's h k l means, independent of the primitive cell the .pot was built
+    from. Hardcoded here (pymatgen Lattice.from_parameters) so the test does
+    not depend on any CIF file existing on disk."""
+    from pymatgen.core import Lattice
+
+    return Lattice.from_parameters(
+        14.175314511441162, 3.5408678879728384, 9.058026999706719,
+        90.0, 110.5531492904914, 90.0,
+    ).matrix
 
 
 def _cu_structure():
@@ -269,6 +289,69 @@ class TestRunArpes:
         assert handle.is_done() is True  # FakeHandle.poll() -> 0 immediately
         result = handle.collect()
         assert result.tensor.value.shape == (8, 9)
+
+
+# ---------------------------------------------------------------------------
+# resolve_surface_geometry (core, shared by GUI B3 + CLI e2e -- design doc §0)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveSurfaceGeometry:
+    def test_vte2_cif_frame_converts_hkl_and_picks_te_site(self):
+        geom = resolve_surface_geometry(VTE2_POT, (-2, 0, 1), cif_lattice_matrix=_vte2_cif_lattice())
+        assert geom.hkl_abas == (0, 1, -1)
+        pot_geom = parse_pot_geometry(VTE2_POT)
+        site = next(s for s in pot_geom.sites if s[0] == geom.iq_at_surf)
+        assert site[2].startswith("Te")
+        assert geom.atoms_per_plane_max >= 1
+        assert "plane 0" in geom.planes_summary
+
+    def test_iq_at_surf_pin_overrides_auto_pick(self):
+        geom = resolve_surface_geometry(
+            VTE2_POT, (-2, 0, 1), cif_lattice_matrix=_vte2_cif_lattice(), iq_at_surf=3
+        )
+        assert geom.iq_at_surf == 3
+
+    def test_no_cif_lattice_assumes_hkl_already_abas(self):
+        geom = resolve_surface_geometry(VTE2_POT, (0, 1, -1))
+        assert geom.hkl_abas == (0, 1, -1)
+
+
+class TestRunArpesCifFrame:
+    def test_hkl_frame_cif_rewrites_inp_with_crys_vecs_and_int_iq(self, tmp_path):
+        bin_dir = tmp_path / "bin"
+        _touch_bin(bin_dir, "kkrspec9.7")
+        launcher = FakeLauncher(bin_dir=bin_dir, arpes_spc_fixture=ARPES_SPC_FULL)
+
+        params = ArpesParams(
+            ne=8, nt=9, np_=1, hkl=(-2, 0, 1), hkl_frame="cif", iq_at_surf=None,
+            dataset="_VTe2_cif",
+        )
+        result = run_arpes(
+            str(VTE2_POT), params, tmp_path / "arpes_cif", launcher, nproc=1, mode="mpi",
+            cif_lattice=_vte2_cif_lattice(),
+        )
+
+        assert result.geometry is not None
+        assert result.geometry.hkl_abas == (0, 1, -1)
+        assert result.params.hkl == (0, 1, -1)
+        assert result.params.hkl_frame == "abas"
+        assert isinstance(result.params.iq_at_surf, int)
+
+        inp_path = tmp_path / "arpes_cif" / params.dataset / f"{params.dataset}.inp"
+        sections = read_inp_keywords(inp_path)
+        assert sections["TASK"]["MILLER_HKL"] == "{0,1,-1}"
+        assert sections["TASK"]["CRYS_VECS"] == ""
+        assert sections["TASK"]["IQ_AT_SURF"] == str(result.geometry.iq_at_surf)
+
+    def test_hkl_frame_cif_without_cif_lattice_raises(self, tmp_path):
+        bin_dir = tmp_path / "bin"
+        _touch_bin(bin_dir, "kkrspec9.7")
+        launcher = FakeLauncher(bin_dir=bin_dir, arpes_spc_fixture=ARPES_SPC_FULL)
+
+        params = ArpesParams(ne=8, nt=9, np_=1, hkl=(-2, 0, 1), hkl_frame="cif", dataset="_VTe2_nolat")
+        with pytest.raises(ValueError, match="cif_lattice"):
+            run_arpes(str(VTE2_POT), params, tmp_path / "arpes_nolat", launcher, nproc=1, mode="mpi")
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,21 @@ _ARPES_FIELDS = {f.name for f in dataclasses.fields(ArpesParams)}
 _EXPLICIT_FIELDS = {
     "hv_eV", "pol_p", "theta_e", "nt", "phi_e", "np_",
     "e_min_eV", "e_max_eV", "ne", "ework_eV", "hkl",
+    "iq_at_surf", "hkl_frame",
 }
+
+
+def _map_iq_at_surf(value) -> Optional[int]:
+    """GUI/CLI iq_at_surf -> Optional[int]. None/0/"auto" -> None (auto-pick,
+    resolved later by workflow.resolve_surface_geometry)."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if value.strip().lower() == "auto":
+            return None
+        return int(value)
+    ivalue = int(value)
+    return ivalue if ivalue else None
 
 
 def _map_polarization(value: Optional[str]) -> str:
@@ -117,6 +131,8 @@ def _build_arpes_params(kwargs: Dict[str, Any]) -> ArpesParams:
         ne=ne,
         ework_eV=float(kwargs.get("work_function", defaults.ework_eV)),
         hkl=tuple(kwargs.get("hkl", defaults.hkl)),
+        hkl_frame=kwargs.get("hkl_frame", defaults.hkl_frame),
+        iq_at_surf=_map_iq_at_surf(kwargs.get("iq_at_surf", defaults.iq_at_surf)),
         **passthrough,
     )
 
@@ -166,6 +182,7 @@ class KKRWrapper:
         mpi_available = bool(kwargs.get("mpi_available", True))
         wait = not bool(kwargs.get("async_", False))
         remote_workdir = kwargs.get("remote_workdir")
+        cif_lattice = kwargs.get("cif_lattice")
 
         outcome = run_arpes(
             pot_path=pot_path,
@@ -177,6 +194,7 @@ class KKRWrapper:
             mpi_available=mpi_available,
             wait=wait,
             remote_workdir=remote_workdir,
+            cif_lattice=cif_lattice,
         )
 
         if not wait:
@@ -216,4 +234,5 @@ class KKRWrapper:
             "dataset": result.dataset,
             "params": result.params,
             "result": result,
+            "geometry": result.geometry,
         }
