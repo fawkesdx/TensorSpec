@@ -76,3 +76,4 @@ uvicorn
 
 # --- DEV ---
 pytest>=7.0
+ase2sprkkr==3.4.2

@@ -1,0 +1,91 @@
+"""Gate C / P5 GUI smoke tests: ARPESPanel B3 (SPR-KKR) settings + trigger wiring.
+
+Qt only (no real kkrspec run): ARPESRunnerThread.start is monkeypatched so
+trigger_simulation never actually launches a job; we just check the kwargs
+it would have started with.
+"""
+from pathlib import Path
+
+import pytest
+
+from tensorspec.gui.components import arpes_panel as ap
+
+
+def _make_panel(qapp):
+    return ap.ARPESPanel()
+
+
+def test_b3_engine_shows_sprkkr_group(qapp):
+    panel = _make_panel(qapp)
+    idx = panel.engine_dropdown.findData("B3")
+    assert idx >= 0
+    panel.engine_dropdown.setCurrentIndex(idx)
+
+    assert not panel.sprkkr_group.isHidden()
+
+
+def test_update_kkr_eta_sets_label(qapp):
+    panel = _make_panel(qapp)
+    idx = panel.engine_dropdown.findData("B3")
+    panel.engine_dropdown.setCurrentIndex(idx)
+
+    panel._update_kkr_eta()
+
+    assert "ETA" in panel.lbl_kkr_eta.text()
+
+
+def test_trigger_simulation_b3_local_builds_expected_kwargs(qapp, monkeypatch, tmp_path):
+    panel = _make_panel(qapp)
+    idx = panel.engine_dropdown.findData("B3")
+    panel.engine_dropdown.setCurrentIndex(idx)
+
+    # Force local compute target (index 0 is "Local only" already, but be explicit).
+    local_idx = panel.target_dropdown.findData(None)
+    if local_idx < 0:
+        local_idx = 0
+    panel.target_dropdown.setCurrentIndex(local_idx)
+    assert not panel._is_remote_target()
+
+    # Any real file works as a fake ".pot_new" for this smoke test (existence check only).
+    fake_pot = Path(__file__).resolve()
+    panel.sprkkr_pot_edit.setText(str(fake_pot))
+    panel.sprkkr_bin_edit.setText(str(tmp_path))
+
+    recorded = {}
+
+    def _fake_start(self):
+        recorded["kwargs"] = dict(self.experiment_kwargs)
+        recorded["model_choice"] = self.model_choice
+
+    monkeypatch.setattr(ap.ARPESRunnerThread, "start", _fake_start)
+    # Default grid (100x100x100) trips the new long-run ETA gate; say Yes.
+    monkeypatch.setattr(ap.QMessageBox, "question", staticmethod(lambda *a, **k: ap.QMessageBox.Yes))
+
+    panel.trigger_simulation()
+
+    assert recorded.get("model_choice") == "B3"
+    kwargs = recorded["kwargs"]
+    assert kwargs["pot_path"] == str(fake_pot)
+    assert "k_bounds" in kwargs and "X" in kwargs["k_bounds"] and "Y" in kwargs["k_bounds"]
+    assert kwargs["n_layer"] == panel.spin_n_layer.value()
+    assert "launcher" in kwargs
+    assert kwargs["temperature_K"] == panel.temperature_spin.value()
+
+
+def test_update_kkr_eta_ky_degenerate_matches_single_step(qapp):
+    """min==max on ky (with ky_steps=10) must ETA the same as ky_steps=1."""
+    panel = _make_panel(qapp)
+    idx = panel.engine_dropdown.findData("B3")
+    panel.engine_dropdown.setCurrentIndex(idx)
+
+    panel.spin_ky_min.setValue(0.0)
+    panel.spin_ky_max.setValue(0.0)
+    panel.spin_ky_steps.setValue(10)
+    panel._update_kkr_eta()
+    degenerate_text = panel.lbl_kkr_eta.text()
+
+    panel.spin_ky_steps.setValue(1)
+    panel._update_kkr_eta()
+    single_step_text = panel.lbl_kkr_eta.text()
+
+    assert degenerate_text == single_step_text

@@ -15,7 +15,7 @@ old_working_py/
 currentproblem
 currentproblem2
 # Local-only / private (never push)
-SPRKKR/
+/SPRKKR/
 GrizzlyME/
 AGENT_HANDOFF.md
 
@@ -64,3 +64,8 @@ tensorspec_clusters.json
 .tensorspec_clusters.json
 **/tensorspec_clusters.local.json
 .worktrees/
+
+# graphify local map (contains SPRKKR names)
+graphify-out/
+.graphifyignore
+OSKI/

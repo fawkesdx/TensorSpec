@@ -1,10 +1,10 @@
 import numpy as np
 from typing import Optional
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-                               QComboBox, QPushButton, QDoubleSpinBox, 
-                               QFormLayout, QGroupBox, QMessageBox, QSlider, 
+                               QComboBox, QPushButton, QDoubleSpinBox,
+                               QFormLayout, QGroupBox, QMessageBox, QSlider,
                                QSpinBox, QScrollArea, QApplication, QInputDialog, QSplitter,
-                               QCheckBox, QTextEdit)
+                               QCheckBox, QTextEdit, QLineEdit, QFileDialog)
 from PySide6.QtCore import Qt, QThread, Signal
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -19,6 +19,17 @@ from tensorspec.core.arpes.photon_energy_scan import (
 from tensorspec.core.workspace import global_workspace
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.compute import cluster_paths as cp
+from tensorspec.core.dft.sprkkr import (
+    ArpesParams as SprkkrArpesParams,
+    EtaModel as SprkkrEtaModel,
+    format_eta as sprkkr_format_eta,
+    LocalLauncher as SprkkrLocalLauncher,
+    RemoteLauncher as SprkkrRemoteLauncher,
+    load_settings as sprkkr_load_settings,
+    local_binaries_present as sprkkr_local_binaries_present,
+    parse_spc as sprkkr_parse_spc,
+    stitch_spc as sprkkr_stitch_spc,
+)
 
 
 def _remote_hv_cli_args(hv_list, hv_start, hv_finish, hv_step):
@@ -232,7 +243,81 @@ class ARPESPanel(QWidget):
         vault_layout.addWidget(self.btn_vault_delete)
         control_layout.addWidget(self.vault_group)
         self.vault_group.hide()
-        
+
+        # --- SPR-KKR (B3) settings ---
+        _kkr_settings = sprkkr_load_settings()
+        self.sprkkr_group = QGroupBox("SPR-KKR (B3) settings")
+        sprkkr_form = QFormLayout(self.sprkkr_group)
+
+        self.sprkkr_bin_edit = QLineEdit(_kkr_settings.bin_dir)
+        self.sprkkr_bin_edit.setToolTip("dir with kkrspec9.7[MPI]; local runs only")
+        self.lbl_kkr_bins = QLabel("")
+        self.lbl_kkr_bins.setStyleSheet("color: #9ad; font-size: 11px;")
+        self.sprkkr_bin_edit.textChanged.connect(self._update_kkr_bin_status)
+        sprkkr_form.addRow("Bin dir:", self.sprkkr_bin_edit)
+        sprkkr_form.addRow("", self.lbl_kkr_bins)
+
+        pot_row = QHBoxLayout()
+        self.sprkkr_pot_edit = QLineEdit()
+        self.sprkkr_pot_edit.setToolTip("local converged .pot_new (used when compute target is local)")
+        self.btn_sprkkr_pot_browse = QPushButton("Browse")
+        self.btn_sprkkr_pot_browse.clicked.connect(self._browse_sprkkr_pot)
+        pot_row.addWidget(self.sprkkr_pot_edit)
+        pot_row.addWidget(self.btn_sprkkr_pot_browse)
+        sprkkr_form.addRow("Local pot:", pot_row)
+
+        self.spin_kkr_nproc = QSpinBox()
+        self.spin_kkr_nproc.setRange(1, 256)
+        self.spin_kkr_nproc.setValue(_kkr_settings.nproc)
+        sprkkr_form.addRow("nproc:", self.spin_kkr_nproc)
+
+        self.combo_kkr_mode = QComboBox()
+        self.combo_kkr_mode.addItems(["auto", "mpi", "chunks"])
+        sprkkr_form.addRow("Fan-out mode:", self.combo_kkr_mode)
+
+        self.spin_n_layer = QSpinBox()
+        self.spin_n_layer.setRange(5, 200)
+        self.spin_n_layer.setValue(50)
+        self.spin_n_layer.setToolTip("slab layers; cost ∝ N_LAYER")
+        sprkkr_form.addRow("N_LAYER:", self.spin_n_layer)
+
+        self.spin_nlat_g_vec = QSpinBox()
+        self.spin_nlat_g_vec.setRange(9, 300)
+        self.spin_nlat_g_vec.setValue(57)
+        self.spin_nlat_g_vec.setToolTip("2D reciprocal vectors; cost ∝ NLAT_G_VEC")
+        sprkkr_form.addRow("NLAT_G_VEC:", self.spin_nlat_g_vec)
+
+        self.spin_imv_ini = QDoubleSpinBox()
+        self.spin_imv_ini.setRange(0.0, 5.0)
+        self.spin_imv_ini.setDecimals(3)
+        self.spin_imv_ini.setValue(0.05)
+        self.spin_imv_ini.setSuffix(" eV")
+        sprkkr_form.addRow("IMV_INI:", self.spin_imv_ini)
+
+        self.spin_imv_fin = QDoubleSpinBox()
+        self.spin_imv_fin.setRange(0.0, 10.0)
+        self.spin_imv_fin.setDecimals(3)
+        self.spin_imv_fin.setValue(2.0)
+        self.spin_imv_fin.setSuffix(" eV")
+        sprkkr_form.addRow("IMV_FIN:", self.spin_imv_fin)
+
+        self.spin_kkr_nl = QSpinBox()
+        self.spin_kkr_nl.setRange(2, 5)
+        self.spin_kkr_nl.setValue(3)
+        sprkkr_form.addRow("NL:", self.spin_kkr_nl)
+
+        self.lbl_kkr_eta = QLabel("ETA: —")
+        self.lbl_kkr_eta.setStyleSheet("color: #9ad; font-size: 11px;")
+        sprkkr_form.addRow(self.lbl_kkr_eta)
+
+        self.btn_kkr_kill = QPushButton("⛔ Kill SPR-KKR jobs")
+        self.btn_kkr_kill.clicked.connect(self._kill_sprkkr_jobs)
+        sprkkr_form.addRow(self.btn_kkr_kill)
+
+        control_layout.addWidget(self.sprkkr_group)
+        self.sprkkr_group.hide()
+        self._update_kkr_bin_status()
+
         self.engine_dropdown.currentIndexChanged.connect(self.on_engine_changed)
         self.target_dropdown.currentIndexChanged.connect(self.on_target_changed)
         
@@ -475,7 +560,14 @@ class ARPESPanel(QWidget):
         domain_layout.addLayout(row_kx)
         domain_layout.addLayout(row_ky)
         domain_layout.addLayout(row_e)
-        
+
+        # SPR-KKR (B3) ETA depends on these grid sizes + its own nproc spin.
+        self.spin_e_steps.valueChanged.connect(self._update_kkr_eta)
+        self.spin_kx_steps.valueChanged.connect(self._update_kkr_eta)
+        self.spin_ky_steps.valueChanged.connect(self._update_kkr_eta)
+        self.spin_kkr_nproc.valueChanged.connect(self._update_kkr_eta)
+        self._update_kkr_eta()
+
         res_layout = QFormLayout()
         self.ui_se_spinbox = QDoubleSpinBox(); self.ui_se_spinbox.setRange(0.001, 1.0); self.ui_se_spinbox.setValue(0.01); self.ui_se_spinbox.setSingleStep(0.01); self.ui_se_spinbox.setDecimals(3); self.ui_se_spinbox.setSuffix(" eV")
         self.ui_res_e_spinbox = QDoubleSpinBox(); self.ui_res_e_spinbox.setRange(0.001, 1.0); self.ui_res_e_spinbox.setValue(0.02); self.ui_res_e_spinbox.setSingleStep(0.01); self.ui_res_e_spinbox.setDecimals(3); self.ui_res_e_spinbox.setSuffix(" eV")
@@ -861,119 +953,126 @@ class ARPESPanel(QWidget):
                 return
         
         if model_choice == "B3":
-            # --- SPRKKR Remote Execution ---
+            # --- SPR-KKR (B3) native execution: workflow.run_arpes via ARPESRunnerThread ---
             import os
-            vault_name = self.vault_combo.currentText()
-            if not vault_name or vault_name == "No SPRKKR Vaults Found":
-                QMessageBox.warning(self, "Error", "No valid SPRKKR Vault selected! Run an SCF job first.")
-                return
-                
+            import time as _time
+
+            kx_min, kx_max, kx_steps = self.spin_kx_min.value(), self.spin_kx_max.value(), self.spin_kx_steps.value()
+            ky_min, ky_max, ky_steps = self.spin_ky_min.value(), self.spin_ky_max.value(), self.spin_ky_steps.value()
+            e_min, e_max, e_steps = self.spin_e_min.value(), self.spin_e_max.value(), self.spin_e_steps.value()
+            ts = _time.strftime("%Y%m%d_%H%M%S")
+
+            # Same min==max -> 1 sample rule as chinook branch / _update_kkr_eta.
+            kx_steps_eff = 1 if kx_min == kx_max else kx_steps
+            ky_steps_eff = 1 if ky_min == ky_max else ky_steps
+            e_steps_eff = 1 if e_min == e_max else e_steps
+            nproc = self.spin_kkr_nproc.value()
             try:
-                import json, paramiko
-                cluster = self.get_selected_cluster()
-                if not cluster:
-                    QMessageBox.critical(self, "Error", "No remote cluster found in configuration!")
-                    return
-                
-                if vault_name == "Temporary Scratch Run (sprkkr_gui_run)":
-                    remote_dir = cp.job_dir(cluster, "sprkkr")
-                    cluster_name = cluster.get('name', cluster['host'])
-                else:
-                    vault = global_workspace.get(vault_name)
-                    remote_dir = vault.get('remote_path') if vault else cp.job_dir(cluster, "sprkkr")
-                    cluster_name = vault.get('cluster_name', vault.get('cluster', cluster.get('name', cluster['host'])))
-
-                ssh = self._ssh_connect(cluster)
-                
-                task_str = "ARPES"
-                polar = self.polarization_combo.currentText()
-                
-                from tensorspec.core.dft.sprkkr_generator import SPRKKRInputGenerator
-                gen = SPRKKRInputGenerator(None)
-                
-                out_dir = "scratch/sprkkr_gui_run"
-                gen.write_arpes_input(
-                    out_dir,
-                    task=task_str,
-                    ne=self.spin_e_steps.value(),
-                    e_min=self.spin_e_min.value(),
-                    e_max=self.spin_e_max.value(),
-                    ephot=self.photon_energy_spin.value(),
-                    temp=self.temperature_spin.value(),
-                    workf=self.work_function_spin.value(),
-                    polar=polar,
-                    hkl=(self.spin_h.value(), self.spin_k.value(), self.spin_l.value())
+                eta_store = os.path.expanduser("~/.tensorspec_sprkkr_eta.json")
+                eta_model = SprkkrEtaModel(store_path=eta_store)
+                eta_model.load()
+                eta_params = SprkkrArpesParams(ne=e_steps_eff, nt=kx_steps_eff, np_=ky_steps_eff)
+                eta_seconds = eta_model.estimate_seconds(eta_params, nproc)
+            except Exception:
+                eta_seconds = 0.0
+            if eta_seconds > 900:
+                n_points = e_steps_eff * kx_steps_eff * ky_steps_eff
+                reply = QMessageBox.question(
+                    self,
+                    "Long SPR-KKR run",
+                    f"SPR-KKR run ≈ {sprkkr_format_eta(eta_seconds)}, "
+                    f"{n_points} points on {nproc} ranks. Continue?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
                 )
-                
-                sftp = ssh.open_sftp()
-                sftp.put(f"{out_dir}/sys.inp", f"{remote_dir}/sys.inp")
-                
-                # Upload the parallel mapping python script
-                local_runner = os.path.join(os.path.dirname(__file__), "..", "..", "core", "dft", "arpes_map_runner_template.py")
-                sftp.put(local_runner, f"{remote_dir}/arpes_map_runner.py")
-                sftp.close()
-                
-                kx_min, kx_max, kx_steps = self.spin_kx_min.value(), self.spin_kx_max.value(), self.spin_kx_steps.value()
-                ky_min, ky_max, ky_steps = self.spin_ky_min.value(), self.spin_ky_max.value(), self.spin_ky_steps.value()
-                hv = self.photon_energy_spin.value()
-                workf = self.work_function_spin.value()
-                cores = self.remote_cores_spin.value()
-                
-                bin_path = cp.sprkkr_binary(cluster, "kkrspec9.7")
-                py = cp.python_bin(cluster)
-                run_args = f"--theta_min {kx_min} --theta_max {kx_max} --ntheta {kx_steps} --phi_min {ky_min} --phi_max {ky_max} --nphi {ky_steps} --bin {bin_path} --cores {cores}"
+                if reply != QMessageBox.Yes:
+                    return
 
-                # SARPES Args
-                if self.chk_enable_sarpes.isChecked():
-                    axis_map = {"Sz (Z-Axis)": "Z", "Sx (X-Axis)": "X", "Sy (Y-Axis)": "Y"}
-                    comp_map = {"Spin Up (+)": 1, "Spin Down (-)": -1}
-                    run_args += f" --sarpes True --spin_axis {axis_map[self.combo_spin_axis.currentText()]} --spin_comp {comp_map[self.combo_spin_comp.currentText()]}"
+            experiment_kwargs = {
+                'photon_energy': float(hv_list[0]),
+                'polarization': self.polarization_combo.currentText(),
+                'work_function': self.work_function_spin.value(),
+                'k_bounds': {'X': [kx_min, kx_max, kx_steps], 'Y': [ky_min, ky_max, ky_steps]},
+                'e_min': e_min,
+                'e_max': e_max,
+                'e_steps': e_steps,
+                'hkl': (self.spin_h.value(), self.spin_k.value(), self.spin_l.value()),
+                'n_layer': self.spin_n_layer.value(),
+                'nlat_g_vec': self.spin_nlat_g_vec.value(),
+                'imv_ini_eV': self.spin_imv_ini.value(),
+                'imv_fin_eV': self.spin_imv_fin.value(),
+                'nl': self.spin_kkr_nl.value(),
+                'nproc': self.spin_kkr_nproc.value(),
+                'mode': self.combo_kkr_mode.currentText(),
+                'workdir': f"scratch/sprkkr_gui_run/{ts}",
+                'temperature_K': self.temperature_spin.value(),
+            }
+            # SARPES filter (same widgets as B1): axis -> SPR-KKR POL_E, comp -> I_up/I_dn.
+            if self.chk_enable_sarpes.isChecked():
+                axis_map = {"Sz (Z-Axis)": "PZ", "Sx (X-Axis)": "PX", "Sy (Y-Axis)": "PY"}
+                comp_map = {"Spin Up (+)": "up", "Spin Down (-)": "down"}
+                experiment_kwargs['pol_e'] = axis_map.get(self.combo_spin_axis.currentText(), "PZ")
+                experiment_kwargs['spin_filter'] = comp_map.get(self.combo_spin_comp.currentText(), "up")
 
-                
-                is_slurm = cluster.get('mode', '').upper() == 'SLURM'
-                if is_slurm:
-                    sbatch_content = f"""#!/bin/bash
-#SBATCH --job-name=sprkkr_arpes
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task={cores}
-#SBATCH --output=sys.out.full
-#SBATCH --error=sys.out.full
+            try:
+                if self._is_remote_target():
+                    cluster = self.get_selected_cluster()
+                    if not cluster:
+                        QMessageBox.critical(self, "Error", "No remote cluster found in configuration!")
+                        return
+                    vault_name = self.vault_combo.currentText()
+                    if not vault_name or vault_name == "No SPRKKR Vaults Found":
+                        QMessageBox.warning(self, "Error", "No valid SPRKKR Vault selected! Run an SCF job first.")
+                        return
 
-cd {remote_dir}
-{cp.shell_export_tmp(cluster)}
-{cp.shell_thread_limits()}
-{cp.qe_env_exports(cluster)}
+                    if vault_name == "Temporary Scratch Run (sprkkr_gui_run)":
+                        remote_dir = cp.job_dir(cluster, "sprkkr")
+                    else:
+                        vault = global_workspace.get(vault_name)
+                        remote_dir = vault.get('remote_path') if vault else cp.job_dir(cluster, "sprkkr")
 
-{py} -u arpes_map_runner.py {run_args}
-"""
-                    sftp = ssh.open_sftp()
-                    with sftp.file(f"{remote_dir}/job.sbatch", "w") as f:
-                        f.write(sbatch_content)
-                    sftp.close()
-                    
-                    cmd = f"cd {remote_dir} && sbatch job.sbatch"
+                    experiment_kwargs['pot_path'] = f"{remote_dir}/scf.pot_new"
+                    experiment_kwargs['workdir'] = f"scratch/sprkkr_gui_run/arpes_{ts}"
+                    experiment_kwargs['remote_workdir'] = f"{remote_dir}/arpes_{ts}"
+                    experiment_kwargs['launcher'] = SprkkrRemoteLauncher(cluster)
                 else:
-                    cmd = (
-                        f"bash -c 'cd {remote_dir} && "
-                        f"{cp.shell_export_tmp(cluster, one_line=True)} && "
-                        f"{cp.shell_thread_limits(one_line=True)} && "
-                        f"{cp.qe_env_exports(cluster, one_line=True)} && "
-                        f"nohup {py} -u arpes_map_runner.py {run_args} > sys.out.full 2>&1 &'"
-                    )
-                
-                ssh.exec_command(cmd)
-                ssh.close()
+                    pot_path = self.sprkkr_pot_edit.text().strip()
+                    if not pot_path or not os.path.isfile(pot_path):
+                        QMessageBox.warning(self, "Error", "Pick a valid local converged .pot_new file first (Local pot: Browse).")
+                        return
+                    experiment_kwargs['pot_path'] = pot_path
+                    experiment_kwargs['launcher'] = SprkkrLocalLauncher(bin_dir=self.sprkkr_bin_edit.text().strip())
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to prepare SPR-KKR ARPES run:\n{str(e)}")
+                return
+
+            self.ax.clear()
+            self.ax.set_title("Calculating SPR-KKR (B3) ARPES... (Running in Background)")
+            self.canvas.draw()
+
+            self.run_sim_btn.setEnabled(False)
+            self.run_sim_btn.setText("⏳ SPR-KKR running... Please Wait")
+            self.run_sim_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #555555; color: white;")
+
+            self.arpes_thread = ARPESRunnerThread(
+                self.engine_router,
+                "B3",
+                {},
+                experiment_kwargs,
+                photon_energies=hv_list,
+            )
+            self.arpes_thread.progress.connect(
+                lambda text: self.run_sim_btn.setText(f"⏳ {text}")
+            )
+            self.arpes_thread.finished_signal.connect(self.on_simulation_finished)
+            self.arpes_thread.start()
+
+            if self._is_remote_target():
                 self.btn_fetch_results.setEnabled(True)
-                msg_type = "via SLURM Queue" if is_slurm else "via Background Daemon"
-                QMessageBox.information(self, "Success", f"SPRKKR ARPES submitted to {cluster.get('name', cluster['host'])} ({msg_type})!\n\nLogs: {remote_dir}/sys.out.full\n\nCheck 'Calculation Live Logs' tab to watch the calculation!")
-                
                 # Auto-start the live monitor so the user sees the output immediately
                 self.toggle_embedded_monitor(force_start=True)
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to run SPRKKR ARPES:\n{str(e)}")
             return
-            
+
         # --- CHINOOK EXECUTION (LOCAL OR REMOTE CLUSTER) ---
         target_crystal = self.ws_combo.currentText()
         me_mode = self.matrix_element_combo.currentText()
@@ -1614,59 +1713,127 @@ cd {remote_dir}
     def fetch_sprkkr_results(self):
         vault_name = self.vault_combo.currentText()
         model_choice = self.engine_dropdown.currentData()
-        
+
         import json, os, paramiko
         config_file = os.path.expanduser('~/.tensorspec_clusters.json')
         with open(config_file, 'r') as f:
             clusters = json.load(f)
         cluster = self.get_selected_cluster()
         if not cluster: return
-        
-        # Chinook / bare / three-step remote → chinook_gui_run.
-        # Only SPR-KKR (B3) uses SPRKKR vault paths.
+
+        # Chinook / bare / three-step remote → chinook_gui_run npz cube (unchanged).
+        # Only SPR-KKR (B3) uses the native .spc fetch path below.
         is_chinook_remote = model_choice != "B3" and self._is_remote_target()
-        
+
         if is_chinook_remote:
             remote_dir = cp.job_dir(cluster, "chinook")
             target_cube_name = "chinook_arpes_cube.npz"
-        elif vault_name == "Temporary Scratch Run (sprkkr_gui_run)":
+
+            try:
+                ssh = self._ssh_connect(cluster)
+
+                sftp = ssh.open_sftp()
+                os.makedirs("scratch", exist_ok=True)
+                local_path = f"scratch/{target_cube_name}"
+                sftp.get(f"{remote_dir}/{target_cube_name}", local_path)
+                sftp.close()
+                ssh.close()
+
+                # Load the file
+                data = np.load(local_path, allow_pickle=True)
+                if 'cube' in data:
+                    results = _remote_cube_results(data)
+                else:
+                    intensity_3d = data['intensity']
+                    results = {
+                        'intensity_broadened': intensity_3d,
+                        'energy': data['e_axis'] if 'e_axis' in data else None,
+                        'theta': data['kx'] if 'kx' in data else None,
+                        'phi': data['ky'] if 'ky' in data else None,
+                    }
+
+                self.on_simulation_finished(True, results, "Fetched successfully")
+
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Error",
+                    f"Failed to fetch results:\n{str(e)}\n\n"
+                    "If this is a Paramiko key-exchange timeout, retry Fetch "
+                    "(slow network / VPN). Connect timeout was increased to 90s banner.",
+                )
+            return
+
+        # --- SPR-KKR (B3): native *_ARPES_data.spc fetch + parse ---
+        if vault_name == "Temporary Scratch Run (sprkkr_gui_run)":
             remote_dir = cp.job_dir(cluster, "sprkkr")
-            target_cube_name = "arpes_cube.npz"
         else:
             vault = global_workspace.get(vault_name)
             remote_dir = vault.get('remote_path') if vault else cp.job_dir(cluster, "sprkkr")
-            target_cube_name = "arpes_cube.npz"
 
         try:
+            import stat as _stat
+
             ssh = self._ssh_connect(cluster)
-            
             sftp = ssh.open_sftp()
-            os.makedirs("scratch", exist_ok=True)
-            local_path = f"scratch/{target_cube_name}"
-            sftp.get(f"{remote_dir}/{target_cube_name}", local_path)
+
+            def _is_dir(attr) -> bool:
+                return _stat.S_ISDIR(attr.st_mode)
+
+            # workflow.run_arpes writes into workdir=f"{remote_dir}/arpes_<ts>" —
+            # pick the newest such subdir if any exist, else search remote_dir itself.
+            try:
+                entries = sftp.listdir_attr(remote_dir)
+            except IOError:
+                entries = []
+            run_dirs = sorted(
+                (e for e in entries if e.filename.startswith("arpes_") and _is_dir(e)),
+                key=lambda e: e.st_mtime,
+            )
+            search_dir = f"{remote_dir}/{run_dirs[-1].filename}" if run_dirs else remote_dir
+
+            def _find_spc(d):
+                found = []
+                for e in sftp.listdir_attr(d):
+                    if e.filename.endswith("_ARPES_data.spc"):
+                        found.append(f"{d}/{e.filename}")
+                    elif _is_dir(e):
+                        found.extend(_find_spc(f"{d}/{e.filename}"))
+                return found
+
+            spc_remote_paths = sorted(_find_spc(search_dir))
+            if not spc_remote_paths:
+                raise FileNotFoundError(f"No *_ARPES_data.spc found under {search_dir}")
+
+            local_dir = os.path.join("scratch", "sprkkr_gui_fetch")
+            os.makedirs(local_dir, exist_ok=True)
+            local_paths = []
+            for i, rp in enumerate(spc_remote_paths):
+                lp = os.path.join(local_dir, f"{i}_{os.path.basename(rp)}")
+                sftp.get(rp, lp)
+                local_paths.append(lp)
             sftp.close()
             ssh.close()
-            
-            # Load the file
-            data = np.load(local_path, allow_pickle=True)
-            if 'cube' in data:
-                results = _remote_cube_results(data)
-            else:
-                intensity_3d = data['intensity']
-                results = {
-                    'intensity_broadened': intensity_3d,
-                    'energy': data['e_axis'] if 'e_axis' in data else None,
-                    'theta': data['kx'] if 'kx' in data else None,
-                    'phi': data['ky'] if 'ky' in data else None,
-                }
-            
+
+            datasets = [sprkkr_parse_spc(lp) for lp in local_paths]
+            merged = sprkkr_stitch_spc(datasets) if len(datasets) > 1 else datasets[0]
+
+            # dataset dims are (energy, theta, phi); GUI layout is (theta, phi, energy)
+            intensity = np.transpose(merged["I_tot"].values, (1, 2, 0))
+            results = {
+                'intensity_broadened': intensity,
+                'energy': merged["energy"].values,
+                'theta': merged["theta"].values,
+                'phi': merged["phi"].values,
+            }
+
             self.on_simulation_finished(True, results, "Fetched successfully")
-            
+
         except Exception as e:
             QMessageBox.critical(
                 self,
                 "Error",
-                f"Failed to fetch results:\n{str(e)}\n\n"
+                f"Failed to fetch SPR-KKR results:\n{str(e)}\n\n"
                 "If this is a Paramiko key-exchange timeout, retry Fetch "
                 "(slow network / VPN). Connect timeout was increased to 90s banner.",
             )
@@ -1802,6 +1969,7 @@ cd {remote_dir}
         if model == "B3":
             self.ws_group.hide()
             self.vault_group.show()
+            self.sprkkr_group.show()
             self.remote_tb_opts.hide()
             self.matrix_element_combo.hide()
             self.live_log_widget.show()
@@ -1810,6 +1978,7 @@ cd {remote_dir}
         else:
             self.ws_group.show()
             self.vault_group.hide()
+            self.sprkkr_group.hide()
             self.matrix_element_combo.show()
             if remote:
                 self.remote_tb_opts.show()
@@ -1920,6 +2089,86 @@ cd {remote_dir}
 
     def on_engine_changed(self):
         self._sync_remote_ui()
+
+    def _update_kkr_bin_status(self):
+        """Refresh the 'which SPR-KKR binaries were found' status label."""
+        bin_dir = self.sprkkr_bin_edit.text().strip() or "."
+        try:
+            bins = sprkkr_local_binaries_present(bin_dir)
+        except Exception:
+            bins = {}
+        found = [k for k, v in bins.items() if v]
+        if found:
+            self.lbl_kkr_bins.setText("found: " + ", ".join(found))
+        else:
+            self.lbl_kkr_bins.setText("no kkrscf/kkrspec binaries found in this dir")
+
+    def _browse_sprkkr_pot(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select converged potential", "", "SPR-KKR potential (*.pot_new);;All files (*)"
+        )
+        if path:
+            self.sprkkr_pot_edit.setText(path)
+
+    def _update_kkr_eta(self):
+        """SPR-KKR B3 ETA label from grid size (NE, NT, NP) × nproc."""
+        import os as _os
+
+        try:
+            store_path = _os.path.expanduser("~/.tensorspec_sprkkr_eta.json")
+            model = SprkkrEtaModel(store_path=store_path)
+            model.load()
+            e_steps_eff = 1 if self.spin_e_min.value() == self.spin_e_max.value() else self.spin_e_steps.value()
+            kx_steps_eff = 1 if self.spin_kx_min.value() == self.spin_kx_max.value() else self.spin_kx_steps.value()
+            ky_steps_eff = 1 if self.spin_ky_min.value() == self.spin_ky_max.value() else self.spin_ky_steps.value()
+            params = SprkkrArpesParams(
+                ne=e_steps_eff,
+                nt=kx_steps_eff,
+                np_=ky_steps_eff,
+            )
+            seconds = model.estimate_seconds(params, self.spin_kkr_nproc.value())
+            self.lbl_kkr_eta.setText(f"ETA: {sprkkr_format_eta(seconds)}")
+        except Exception:
+            self.lbl_kkr_eta.setText("ETA: —")
+
+    def _kill_sprkkr_jobs(self):
+        """Force-kill any running kkrspec9.7/kkrscf9.7 processes (local or remote target)."""
+        reply = QMessageBox.question(
+            self,
+            "Kill SPR-KKR jobs",
+            "Kill all running kkrspec9.7 / kkrscf9.7 processes on the "
+            "current compute target?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            if self._is_remote_target():
+                cluster = self.get_selected_cluster()
+                if not cluster:
+                    QMessageBox.critical(self, "Error", "No remote cluster found in configuration!")
+                    return
+                ssh = self._ssh_connect(cluster)
+                try:
+                    _, stdout, _ = ssh.exec_command(
+                        "pkill -f kkrspec9.7; pkill -f kkrscf9.7; sleep 1; "
+                        "pgrep -fl 'kkrspec9.7|kkrscf9.7' || echo none"
+                    )
+                    out = stdout.read().decode(errors="ignore")
+                finally:
+                    ssh.close()
+                QMessageBox.information(self, "Kill SPR-KKR jobs", f"Remote result:\n{out}")
+            else:
+                import subprocess
+                subprocess.run(["pkill", "-f", "kkrspec9.7"])
+                subprocess.run(["pkill", "-f", "kkrscf9.7"])
+                QMessageBox.information(self, "Kill SPR-KKR jobs", "Sent pkill for kkrspec9.7 / kkrscf9.7 locally.")
+            self.run_sim_btn.setEnabled(True)
+            self.run_sim_btn.setText("🚀 Run ARPES Simulation")
+            self.run_sim_btn.setStyleSheet("font-weight: bold; padding: 10px; background-color: #2b5c8f; color: white;")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to kill SPR-KKR jobs:\n{str(e)}")
 
 
     def _update_band_energy_meta_label(self):
