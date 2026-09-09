@@ -246,6 +246,10 @@ class SPRKKRDftPanel(QWidget):
             )
 
             structure = struct
+            # cif_lattice meta below uses THIS (pre-primitive-reduction) structure --
+            # hkl the user types means "in this frame", not a possibly-reoriented
+            # primitive cell (design doc §0 / resolve_surface_geometry).
+            self._scf_orig_structure = struct
             if self.chk_primitive.isChecked() and len(structure) > 1:
                 structure = structure.get_primitive_structure()
 
@@ -340,17 +344,30 @@ class SPRKKRDftPanel(QWidget):
             settings = load_settings()
             vault = Vault(settings.vault_root)
             key = pot_key(self._scf_structure, self._scf_params)
+            orig_structure = getattr(self, "_scf_orig_structure", None) or self._scf_structure
+            try:
+                cif_lattice = orig_structure.lattice.matrix.tolist()
+            except Exception:
+                cif_lattice = None
+            meta = {
+                "ef_ry": result.status.ef_ry,
+                "workdir": result.workdir,
+                "cif_lattice": cif_lattice,
+                "formula": getattr(orig_structure, "formula", None),
+                "nonmag": self._scf_params.nonmag,
+            }
             entry = vault.register(
                 key=key,
                 name=self._scf_name,
                 pot_path=result.pot_path,
-                meta={"ef_ry": result.status.ef_ry, "workdir": result.workdir},
+                meta=meta,
             )
             global_workspace.push_remote_run(
                 name=self._scf_name,
                 cluster_name="local",
                 engine="SPRKKR",
                 remote_path=entry.pot_path,
+                meta=meta,
             )
 
         QMessageBox.information(

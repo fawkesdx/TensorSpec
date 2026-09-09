@@ -130,6 +130,11 @@ def build_arpes_inputs(pot_path: PathLike, params: ArpesParams, out_dir: PathLik
     from ase2sprkkr.sprkkr.calculator import SPRKKR
 
     params.validate()
+    if not params.iq_at_surf:
+        raise ValueError(
+            "params.iq_at_surf must be resolved to an int before build_arpes_inputs "
+            "(None/0 means 'auto' -- see workflow.resolve_surface_geometry / run_arpes)"
+        )
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -145,6 +150,8 @@ def build_arpes_inputs(pot_path: PathLike, params: ArpesParams, out_dir: PathLik
     )
 
     inp_path = out_dir / input_file
+    if getattr(params, "hkl_frame", "conventional") == "abas":
+        rejected = list(rejected) + [("TASK", "CRYS_VECS", True)]
     _inject_raw_lines(inp_path, rejected)
 
     # Verified pattern (design doc §0): DATASET=_Cu_ARPES -> _Cu_ARPES_ARPES_data.spc

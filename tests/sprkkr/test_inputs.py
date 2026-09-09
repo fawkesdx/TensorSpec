@@ -138,6 +138,35 @@ def test_arpes_inputs_match_ref(tmp_path):
     assert sections["SPEC_STR"]["N_LAYER"] == "50"
 
 
+def test_arpes_inputs_conventional_frame_omits_crys_vecs(tmp_path):
+    structure = _cu_fcc_structure()
+    scf_result = build_scf_inputs(structure, ScfParams(), tmp_path / "scf")
+
+    params = ArpesParams(hkl=(0, 0, 1))  # hkl_frame default: "conventional"
+    result = build_arpes_inputs(scf_result.pot_path, params, tmp_path / "arpes")
+
+    sections = read_inp_keywords(result.inp_path)
+    assert "CRYS_VECS" not in sections["TASK"]
+
+
+def test_arpes_inputs_abas_frame_injects_crys_vecs(tmp_path):
+    structure = _cu_fcc_structure()
+    scf_result = build_scf_inputs(structure, ScfParams(), tmp_path / "scf")
+
+    params = ArpesParams(hkl=(1, 1, 0), hkl_frame="abas")
+    result = build_arpes_inputs(scf_result.pot_path, params, tmp_path / "arpes")
+
+    sections = read_inp_keywords(result.inp_path)
+    assert sections["TASK"]["CRYS_VECS"] == ""
+    assert sections["TASK"]["MILLER_HKL"] == "{1,1,0}"
+
+
+def test_arpes_params_validate_bad_hkl_frame():
+    params = ArpesParams(hkl_frame="bogus")
+    with pytest.raises(ValueError):
+        params.validate()
+
+
 def test_arpes_expected_output_names():
     params = ArpesParams(dataset="_Cu_ARPES")
     # No binary run needed to compute the expected filenames.

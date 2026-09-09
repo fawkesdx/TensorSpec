@@ -22,7 +22,7 @@ pot's bare filename before uploading both into the remote subdir.
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Tuple, Union
 
@@ -31,6 +31,14 @@ import xarray as xr
 from tensorspec.core.data_models import TensorData
 
 from .fanout import plan_jobs
+from .geometry import (
+    ANGSTROM_PER_BOHR,
+    atoms_per_plane_max as _atoms_per_plane_max,
+    hkl_to_abas_frame,
+    layer_stack,
+    parse_pot_geometry,
+    pick_surface_site,
+)
 from .inputs import build_arpes_inputs, build_scf_inputs
 from .jobs import JobSpec, LocalLauncher, RemoteLauncher, resolve_binary
 from .outputs import ScfStatus, parse_spc, spc_to_datatree, spc_to_tensor, stitch_spc
@@ -79,10 +87,22 @@ def _remote_rows_done(handle: Any, remote_path: str) -> int:
 
 
 def _sync_remote_log(handle: Any, local_log: Path, n: int = 400) -> None:
-    """Pull the tail of the remote log into the local staging log so the
-    normal local parsers (scf_progress) see live progress."""
+    """Pull remote log progress into the local staging log so the local parsers
+    (scf_progress) see live progress.
+
+    SPR-KKR reprints long core-state tables every SCF iteration, so a plain
+    tail window may never contain the `N ERR ... EF ...` summary lines. We
+    therefore fetch: all iteration summary / convergence lines (grep) + the
+    last ``n`` lines.
+    """
     try:
-        text = handle.tail(n)
+        ssh = handle.launcher.connect()
+        lp = handle.log_path
+        cmd = (
+            f"grep -E '^ *[0-9]+ ERR |cycle converged|SCF - cycle|STOP|rror' {lp} 2>/dev/null | tail -n 60; "
+            f"echo '#--- tail ---'; tail -n {n} {lp} 2>/dev/null"
+        )
+        text, _ = handle.launcher._run(ssh, cmd)
         if text:
             local_log.parent.mkdir(parents=True, exist_ok=True)
             local_log.write_text(text)
@@ -223,6 +243,57 @@ def run_scf(
 
 
 # ---------------------------------------------------------------------------
+# Surface geometry (shared by GUI B3 + CLI e2e -- design doc §0)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SurfaceGeometry:
+    hkl_abas: Tuple[int, int, int]
+    iq_at_surf: int
+    planes_summary: str
+    atoms_per_plane_max: int
+
+
+def resolve_surface_geometry(
+    pot_path: PathLike,
+    hkl: Tuple[float, float, float],
+    cif_lattice_matrix: Any = None,
+    iq_at_surf: Optional[int] = None,
+) -> SurfaceGeometry:
+    """Work out the raw-ABAS-frame Miller index + surface IQ from a .pot.
+
+    ``hkl`` is read in the CIF conventional-cell frame when
+    ``cif_lattice_matrix`` is given (converted via ``hkl_to_abas_frame``);
+    otherwise ``hkl`` is assumed to already be the raw ABAS frame.
+    ``iq_at_surf``: an int (nonzero) pins the surface site; ``None``/``0``
+    auto-picks the topmost non-vacancy site (``pick_surface_site``).
+    """
+    pot_geom = parse_pot_geometry(pot_path)
+    if cif_lattice_matrix is not None:
+        abas_cart = pot_geom.abas * pot_geom.alat_bohr * ANGSTROM_PER_BOHR
+        hkl_abas = hkl_to_abas_frame(cif_lattice_matrix, hkl, abas_cart)
+    else:
+        hkl_abas = tuple(int(round(v)) for v in hkl)
+
+    iq = int(iq_at_surf) if iq_at_surf else pick_surface_site(pot_geom, hkl_abas)
+
+    planes = layer_stack(pot_geom, hkl_abas)
+    lines = []
+    for i, pl in enumerate(planes[:5]):
+        species = ",".join(sorted(set(pl.species)))
+        lines.append(f"plane {i}: proj={pl.proj_alat:.4f} n={len(pl.iqs)} species=[{species}]")
+    planes_summary = "; ".join(lines)
+
+    return SurfaceGeometry(
+        hkl_abas=hkl_abas,
+        iq_at_surf=iq,
+        planes_summary=planes_summary,
+        atoms_per_plane_max=_atoms_per_plane_max(pot_geom, hkl_abas),
+    )
+
+
+# ---------------------------------------------------------------------------
 # ARPES
 # ---------------------------------------------------------------------------
 
@@ -235,6 +306,7 @@ class ArpesResult:
     params: ArpesParams
     wall_s: float
     spc_paths: List[str] = field(default_factory=list)
+    geometry: Optional[SurfaceGeometry] = None
 
 
 @dataclass
@@ -257,12 +329,14 @@ class ArpesRunHandle:
         launcher: Any,
         start_time: float,
         progress_cb: Optional[Callable[[float], None]] = None,
+        geometry: Optional[SurfaceGeometry] = None,
     ):
         self.handles = subjobs
         self.params = params
         self._launcher = launcher
         self._start_time = start_time
         self._progress_cb = progress_cb
+        self._geometry = geometry
 
     def fraction_done(self) -> float:
         expected = sum(sj.sub_params.n_points for sj in self.handles)
@@ -344,6 +418,7 @@ class ArpesRunHandle:
             params=self.params,
             wall_s=wall_s,
             spc_paths=spc_paths,
+            geometry=self._geometry,
         )
 
 
@@ -358,6 +433,7 @@ def run_arpes(
     wait: bool = True,
     progress_cb: Optional[Callable[[float], None]] = None,
     remote_workdir: Optional[str] = None,
+    cif_lattice: Any = None,
 ):
     """Fan out (mpi | energy-chunks), launch every job, then parse+stitch.
 
@@ -371,9 +447,15 @@ def run_arpes(
     file that exists locally, it is assumed to be a cluster-only path and is
     downloaded to ``workdir`` first -- ``build_arpes_inputs`` needs a local
     pot (ase2sprkkr reads it directly).
+
+    ``params.hkl_frame == "cif"``: ``params.hkl`` is read as a Miller index
+    in the CIF conventional-cell frame (requires ``cif_lattice`` -- a 3x3
+    matrix, rows = direct lattice vectors, cartesian Angstrom, from the CIF
+    exactly as loaded, before any primitive reduction) and is converted here
+    to the raw ABAS frame + CRYS_VECS via ``resolve_surface_geometry``;
+    ``params.iq_at_surf`` (None/0 -> auto-pick) is resolved the same way.
     """
     workdir = Path(workdir)
-    plan = plan_jobs(params, nproc, mode=mode, mpi_available=mpi_available)
     remote = _is_remote(launcher)
     start_time = time.time()  # before any launch (remote launch may block)
     if remote and remote_workdir is None:
@@ -382,6 +464,28 @@ def run_arpes(
     local_pot_path: PathLike = pot_path
     if remote and not Path(pot_path).is_file():
         local_pot_path = launcher.download([str(pot_path)], str(workdir))[0]
+
+    # Resolve surface geometry (design doc §0) BEFORE plan_jobs -- plan_jobs
+    # fans `params` out into per-chunk sub_params, so hkl/iq_at_surf must
+    # already be final (raw ABAS + a resolved int) by the time it runs.
+    geometry: Optional[SurfaceGeometry] = None
+    if params.hkl_frame == "cif":
+        if cif_lattice is None:
+            raise ValueError("hkl_frame='cif' needs cif_lattice=")
+        geometry = resolve_surface_geometry(
+            local_pot_path, params.hkl, cif_lattice_matrix=cif_lattice, iq_at_surf=params.iq_at_surf
+        )
+        params = replace(params, hkl=geometry.hkl_abas, hkl_frame="abas", iq_at_surf=geometry.iq_at_surf)
+    elif params.hkl_frame == "abas" and not params.iq_at_surf:
+        geometry = resolve_surface_geometry(local_pot_path, params.hkl, iq_at_surf=None)
+        params = replace(params, iq_at_surf=geometry.iq_at_surf)
+    if geometry is not None:
+        print(
+            f"[geom] hkl_abas={geometry.hkl_abas} IQ_AT_SURF={geometry.iq_at_surf} "
+            f"atoms_per_plane_max={geometry.atoms_per_plane_max}"
+        )
+
+    plan = plan_jobs(params, nproc, mode=mode, mpi_available=mpi_available)
 
     subjobs: List[_SubJob] = []
     for sub_params, subdir_name, nproc_i in plan.jobs:
@@ -415,7 +519,7 @@ def run_arpes(
         )
 
     run_handle = ArpesRunHandle(
-        subjobs, params, launcher, start_time=start_time, progress_cb=progress_cb
+        subjobs, params, launcher, start_time=start_time, progress_cb=progress_cb, geometry=geometry
     )
 
     if not wait:
