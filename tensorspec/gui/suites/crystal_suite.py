@@ -4,7 +4,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                                QFileDialog, QLabel, QSpinBox, QDoubleSpinBox, 
                                QComboBox, QColorDialog, QTabWidget, QCheckBox, 
                                QGroupBox, QGridLayout, QSlider, QSplitter, 
-                               QInputDialog, QMessageBox, QFrame, QScrollArea)
+                               QInputDialog, QMessageBox, QFrame, QScrollArea,
+                               QDialog, QDialogButtonBox)
 from PySide6.QtCore import Qt
 from pymatgen.core import Structure
 
@@ -297,6 +298,19 @@ class CrystalViewerSuite(QWidget):
         btn_draw_stack.clicked.connect(self.handle_draw_stack)
         layout.addWidget(btn_draw_stack)
 
+        vac_row = QHBoxLayout()
+        vac_row.addWidget(QLabel("DFT vacuum (Å):"))
+        self.spin_stack_vacuum = QDoubleSpinBox()
+        self.spin_stack_vacuum.setRange(5.0, 100.0)
+        self.spin_stack_vacuum.setSingleStep(1.0)
+        self.spin_stack_vacuum.setValue(20.0)
+        self.spin_stack_vacuum.setToolTip(
+            "Vacuum padding along c for Push→DFT cell. Interlayer spacing uses each layer's z spinbox."
+        )
+        vac_row.addWidget(self.spin_stack_vacuum)
+        vac_row.addStretch()
+        layout.addLayout(vac_row)
+
         self.btn_moire = QPushButton("🌀 Calculate Moiré Superlattice")
         self.btn_moire.setStyleSheet("background-color: #8A2BE2; color: white; font-weight: bold; padding: 6px;")
         self.btn_moire.clicked.connect(self.handle_moire)
@@ -415,18 +429,121 @@ class CrystalViewerSuite(QWidget):
             self.renderer.canvas.draw_idle()
         
     def push_current_to_workspace(self):
-        """Pushes the full PyMatgen Structure object to the central memory."""
-        if getattr(self, 'current_structure', None) is None:
-            QMessageBox.warning(self, "Warning", "No active structure to push!")
+        """Push Tab 1 structure, or rebuild DFT-ready cell from Tab 3 stack rows."""
+        # Non-stack path: Tab 1 / no hetero rows
+        if not getattr(self, "stack_layer_rows", None):
+            if getattr(self, "current_structure", None) is None:
+                QMessageBox.warning(self, "Warning", "No active structure to push!")
+                return
+            default_name = getattr(self, "current_filename", "My_Crystal")
+            name, ok = QInputDialog.getText(
+                self, "Workspace Export", "Enter a variable name for this structure:", text=default_name
+            )
+            if ok and name:
+                global_workspace.push_crystal_structure(name, self.current_structure)
+                QMessageBox.information(
+                    self, "Success",
+                    f"Structure '{name}' sent to Global Workspace!\nYou can now load it in the DFT or ARPES Suites.",
+                )
             return
-            
-        default_name = getattr(self, 'current_filename', "My_Crystal")
-        name, ok = QInputDialog.getText(self, "Workspace Export", "Enter a variable name for this structure:", text=default_name)
-        if ok and name:
-            # Push the FULL PyMatgen object, not just the raw coordinates!
-            global_workspace.push_crystal_structure(name, self.current_structure)
-            QMessageBox.information(self, "Success", f"Structure '{name}' sent to Global Workspace!\nYou can now load it in the DFT or ARPES Suites.")
-            
+
+        layers = [row.get_layer_dict() for row in self.stack_layer_rows]
+        kind = CrystalEngine.classify_stack_for_dft(layers)
+
+        if kind == "empty":
+            QMessageBox.warning(self, "Warning", "No layers in the stack to push.")
+            return
+
+        if kind == "reject_multitwist":
+            QMessageBox.information(
+                self,
+                "Multi-twist stacks — coming later",
+                "DFT cell rebuild for more than two twisted layers is not available yet.\n\n"
+                "This week: N layers with all twists = 0°, or exactly 2 layers with twist "
+                "(e.g. graphene/hBN). Render/view still works.",
+            )
+            return
+
+        vacuum = float(self.spin_stack_vacuum.value())
+        suggested, strains = CrystalEngine.suggest_reference_layer(layers)
+        ref_idx = suggested
+        need_dialog = False
+        dialog_status = ""
+
+        if kind == "aligned":
+            need_dialog = CrystalEngine.aligned_needs_strain_dialog(layers, suggested)
+            dialog_status = "lattice mismatch"
+        else:
+            moire = CrystalEngine.calculate_moire_superlattice(
+                layers[0]["struct"], layers[1]["struct"],
+                float(layers[0]["twist"]), float(layers[1]["twist"]),
+            )
+            if moire.get("status") == "error":
+                QMessageBox.critical(self, "Moiré error", moire.get("message", "Failed."))
+                return
+            need_dialog = moire.get("status") == "incommensurate"
+            dialog_status = moire.get("status", "")
+
+        if need_dialog:
+            names = [
+                row.lbl_name.text().replace("<b>", "").replace("</b>", "")
+                for row in self.stack_layer_rows
+            ]
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Forced strain for DFT")
+            lay = QVBoxLayout(dlg)
+            sug_name = names[suggested]
+            sug_pct = strains[suggested]
+            lay.addWidget(QLabel(
+                f"Status: {dialog_status}.\n\n"
+                "To run DFT, non-reference layer(s) will be stretched/compressed to match the "
+                "reference layer's in-plane cell. Band structures will reflect that forced strain.\n\n"
+                f"Suggested reference (smallest total strain): {sug_name} (~{sug_pct:.2f}%)."
+            ))
+            lay.addWidget(QLabel("Reference layer:"))
+            combo = QComboBox()
+            for i, name_i in enumerate(names):
+                label = name_i + ("  ← suggested (min strain)" if i == suggested else "")
+                combo.addItem(label)
+            combo.setCurrentIndex(suggested)
+            lay.addWidget(combo)
+            buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+            buttons.button(QDialogButtonBox.Ok).setText("Push anyway")
+            buttons.accepted.connect(dlg.accept)
+            buttons.rejected.connect(dlg.reject)
+            lay.addWidget(buttons)
+            if dlg.exec() != QDialog.Accepted:
+                return
+            ref_idx = combo.currentIndex()
+
+        try:
+            if kind == "aligned":
+                dft_struct = CrystalEngine.build_dft_aligned_stack(layers, vacuum, ref_idx)
+                info_note = "aligned"
+            else:
+                dft_struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum, ref_idx)
+                info_note = info["status"]
+        except Exception as e:
+            QMessageBox.critical(self, "DFT cell rebuild failed", str(e))
+            return
+
+        default_name = getattr(self, "current_filename", "Heterostructure_Stack")
+        name, ok = QInputDialog.getText(
+            self, "Workspace Export", "Enter a variable name for this structure:", text=default_name
+        )
+        if not (ok and name):
+            return
+
+        global_workspace.push_crystal_structure(name, dft_struct)
+        a, b, c = dft_struct.lattice.a, dft_struct.lattice.b, dft_struct.lattice.c
+        QMessageBox.information(
+            self,
+            "Success",
+            f"DFT structure '{name}' sent to Global Workspace ({info_note}).\n"
+            f"Cell a={a:.3f} Å, b={b:.3f} Å, c={c:.3f} Å (vacuum={vacuum:.1f} Å).\n"
+            f"Load it in the DFT Suite — not the 500 Å viewer canvas.",
+        )
+
     def handle_add_template(self):
         name = self.combo_tpl.currentText()
         struct = CrystalEngine.generate_template_structure(name)
