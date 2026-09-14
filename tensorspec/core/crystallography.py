@@ -387,3 +387,64 @@ class CrystalEngine:
         up_vector = up_vector / np.linalg.norm(up_vector)
         
         return normal, up_vector
+
+    @staticmethod
+    def classify_stack_for_dft(layers: list[dict], twist_eps: float = 1e-6) -> str:
+        if not layers:
+            return "empty"
+        twists = [abs(float(l.get("twist", 0.0))) for l in layers]
+        any_twist = any(t > twist_eps for t in twists)
+        if any_twist and len(layers) != 2:
+            return "reject_multitwist"
+        if any_twist:
+            return "twist"
+        return "aligned"
+
+    @staticmethod
+    def inplane_strain_percent(ref_2x2: np.ndarray, other_2x2: np.ndarray) -> float:
+        ref = np.asarray(ref_2x2, dtype=float)
+        other = np.asarray(other_2x2, dtype=float)
+        denom = np.linalg.norm(ref, ord="fro")
+        if denom < 1e-12:
+            raise ValueError("Degenerate reference in-plane lattice.")
+        return float(100.0 * np.linalg.norm(other - ref, ord="fro") / denom)
+
+    @staticmethod
+    def _inplane_2x2(struct: Structure, sc_x: int = 1, sc_y: int = 1) -> np.ndarray:
+        m = struct.lattice.matrix.copy()
+        m[0] *= sc_x
+        m[1] *= sc_y
+        return m[:2, :2]
+
+    @staticmethod
+    def suggest_reference_layer(layers: list[dict]) -> tuple[int, list[float]]:
+        n = len(layers)
+        if n == 0:
+            raise ValueError("No layers for reference suggestion.")
+        strains = []
+        for r in range(n):
+            ref = CrystalEngine._inplane_2x2(layers[r]["struct"], layers[r]["sc_x"], layers[r]["sc_y"])
+            total = 0.0
+            for j in range(n):
+                if j == r:
+                    continue
+                other = CrystalEngine._inplane_2x2(layers[j]["struct"], layers[j]["sc_x"], layers[j]["sc_y"])
+                # relative twist: rotate other in-plane by (twist_j - twist_r)
+                dtheta = np.radians(float(layers[j]["twist"]) - float(layers[r]["twist"]))
+                c, s = np.cos(dtheta), np.sin(dtheta)
+                R = np.array([[c, -s], [s, c]])
+                other_rot = other @ R.T
+                total += CrystalEngine.inplane_strain_percent(ref, other_rot)
+            strains.append(total)
+        best = int(np.argmin(strains))
+        # tie-break within 0.1% relative -> layer 0 preference among ties
+        min_s = strains[best]
+        ties = [
+            i for i, s in enumerate(strains)
+            if min_s <= 0 or abs(s - min_s) / min_s <= 1e-3
+        ]
+        if 0 in ties:
+            best = 0
+        else:
+            best = ties[0]
+        return best, strains
