@@ -91,8 +91,8 @@ def test_slurm_helpers_and_batch():
 
 def test_adapt_pipeline_mpi_launcher_slurm_vs_daemon():
     script = (
-        "mpirun --use-hwthread-cpus --oversubscribe -np 128 pw.x -in scf.in\n"
-        "mpirun --use-hwthread-cpus --oversubscribe -np 36 pw2wannier90.x -in pw2wan.in\n"
+        "mpirun -np 128 pw.x -in scf.in\n"
+        "mpirun -np 36 pw2wannier90.x -in pw2wan.in\n"
     )
     slurm = {"mode": "SLURM", "paths": {"slurm": {"account": "als"}}}
     adapted = adapt_pipeline_mpi_launcher(script, slurm)
@@ -102,13 +102,27 @@ def test_adapt_pipeline_mpi_launcher_slurm_vs_daemon():
 
     daemon = {"mode": "Daemon"}
     back = adapt_pipeline_mpi_launcher(adapted, daemon)
-    assert "mpirun --use-hwthread-cpus --oversubscribe -np 128 pw.x" in back
-    assert "mpirun --use-hwthread-cpus --oversubscribe -np 36 pw2wannier90.x" in back
+    assert "mpirun -np 128 pw.x" in back
+    assert "mpirun -np 36 pw2wannier90.x" in back
+    assert "--oversubscribe" not in back
+    assert "--use-hwthread-cpus" not in back
     assert "srun" not in back
 
+    # Legacy oversubscribe scripts still rewrite cleanly
+    legacy = (
+        "mpirun --use-hwthread-cpus --oversubscribe -np 16 pw.x -in scf.in\n"
+    )
+    cleaned = adapt_pipeline_mpi_launcher(legacy, daemon)
+    assert cleaned.strip() == "mpirun -np 16 pw.x -in scf.in"
+
     local = adapt_pipeline_mpi_launcher(adapted, None)
-    assert "mpirun" in local
+    assert "mpirun -np" in local
     assert "srun" not in local
+
+
+def test_mpi_launch_prefix_daemon_is_plain():
+    assert mpi_launch_prefix({"mode": "Daemon"}, 8) == "mpirun -np 8 "
+    assert "--oversubscribe" not in mpi_launch_prefix(None, 4)
 
 
 def test_load_private_key_nersc_rsa_pem():
