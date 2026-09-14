@@ -507,3 +507,98 @@ class CrystalEngine:
                 carts.append([xy_in_ref[0], xy_in_ref[1], coords[i, 2]])
                 tags.append(f"{site.specie.symbol}_L{idx + 1}")
         return CrystalEngine._finalize_slab_structure(ab, species, carts, tags, vacuum_ang)
+
+    @staticmethod
+    def _place_layer_atoms(layer: dict, idx: int, apply_twist: bool) -> tuple[list, list, list]:
+        """Return species, cartesian coords, tags for one layer (xy centered, z from spinbox)."""
+        supercell = layer["struct"] * (layer["sc_x"], layer["sc_y"], 1)
+        coords = supercell.cart_coords.copy()
+        center_xy = np.mean(coords[:, :2], axis=0)
+        coords[:, :2] -= center_xy
+        if apply_twist:
+            theta = np.radians(float(layer["twist"]))
+            R = np.array([[np.cos(theta), -np.sin(theta), 0],
+                          [np.sin(theta),  np.cos(theta), 0],
+                          [0, 0, 1]])
+            coords = coords @ R.T
+        coords[:, 2] = coords[:, 2] - np.mean(coords[:, 2]) + (float(layer["z_shift"]) - 12.5)
+        species, carts, tags = [], [], []
+        for i, site in enumerate(supercell):
+            species.append(site.specie.symbol)
+            carts.append(coords[i].tolist())
+            tags.append(f"{site.specie.symbol}_L{idx + 1}")
+        return species, carts, tags
+
+    @staticmethod
+    def _tile_into_cell(ab_2x2, species, carts, tags, n_max: int = 40) -> tuple[list, list, list]:
+        """Replicate atoms by integer combos of ab until cell is covered; fold into [0,1)."""
+        ab_inv_t = np.linalg.inv(ab_2x2.T)
+        out_s, out_c, out_t = [], [], []
+        # n_max along each lattice vector is enough for small moiré n_cells
+        for n1 in range(-n_max, n_max + 1):
+            for n2 in range(-n_max, n_max + 1):
+                shift = n1 * ab_2x2[0] + n2 * ab_2x2[1]
+                for s, c, t in zip(species, carts, tags):
+                    xy = np.asarray(c[:2]) + shift
+                    frac = xy @ ab_inv_t
+                    if np.all(frac >= -1e-8) and np.all(frac < 1.0 - 1e-8):
+                        frac = frac - np.floor(frac + 1e-12)
+                        xy_f = frac @ ab_2x2.T
+                        out_s.append(s)
+                        out_c.append([xy_f[0], xy_f[1], c[2]])
+                        out_t.append(t)
+        # Deduplicate near-identical sites
+        keep = []
+        seen = []
+        for i, c in enumerate(out_c):
+            arr = np.array(c)
+            if any(np.linalg.norm(arr - s) < 0.15 for s in seen):
+                continue
+            seen.append(arr)
+            keep.append(i)
+        return [out_s[i] for i in keep], [out_c[i] for i in keep], [out_t[i] for i in keep]
+
+    @staticmethod
+    def build_dft_twist_stack(layers: list[dict], vacuum_ang: float, ref_idx: int) -> tuple[Structure, dict]:
+        if len(layers) != 2:
+            raise ValueError("Twist DFT rebuild requires exactly 2 layers.")
+        suggested, strains = CrystalEngine.suggest_reference_layer(layers)
+        l0, l1 = layers[0], layers[1]
+        moire = CrystalEngine.calculate_moire_superlattice(
+            l0["struct"], l1["struct"], float(l0["twist"]), float(l1["twist"])
+        )
+        status = moire.get("status", "error")
+        info = {"status": status, "suggested_ref": suggested, "strains": strains, "moire": moire}
+        if status == "error":
+            raise ValueError(moire.get("message", "Moiré calculation failed."))
+        if status == "perfect_alignment":
+            return CrystalEngine.build_dft_aligned_stack(layers, vacuum_ang, ref_idx), info
+
+        species, carts, tags = [], [], []
+        for idx, layer in enumerate(layers):
+            s, c, t = CrystalEngine._place_layer_atoms(layer, idx, apply_twist=True)
+            species.extend(s); carts.extend(c); tags.extend(t)
+
+        if status == "commensurate":
+            ab = np.asarray(moire["matrix"], dtype=float)
+            n_cells = int(moire.get("n_cells", 5))
+            n_max = max(n_cells + 2, 6)
+            species, carts, tags = CrystalEngine._tile_into_cell(ab, species, carts, tags, n_max=n_max)
+            if len(species) == 0:
+                raise ValueError("Commensurate tiling produced no atoms — check moiré matrix.")
+            struct = CrystalEngine._finalize_slab_structure(ab, species, carts, tags, vacuum_ang)
+            return struct, info
+
+        # incommensurate: forced strain into ref_idx ab (no extra tiling beyond SC)
+        ab = CrystalEngine._inplane_2x2(
+            layers[ref_idx]["struct"], layers[ref_idx]["sc_x"], layers[ref_idx]["sc_y"]
+        )
+        ab_inv_t = np.linalg.inv(ab.T)
+        new_carts = []
+        for c in carts:
+            frac = np.asarray(c[:2]) @ ab_inv_t
+            frac = frac - np.floor(frac)
+            xy = frac @ ab.T
+            new_carts.append([xy[0], xy[1], c[2]])
+        struct = CrystalEngine._finalize_slab_structure(ab, species, new_carts, tags, vacuum_ang)
+        return struct, info
