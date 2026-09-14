@@ -37,18 +37,12 @@ class WorkspaceManager:
         return None
     
     def list_crystal_structures(self):
-        """
-        Returns a list of all currently loaded crystal structure names.
-        Filters out band structures to ensure only crystals are returned.
-        """
-        crystals = []
-        for key, value in self._data.items():
-            # If it's a dictionary and specifically labeled as a band_structure, skip it
-            if isinstance(value, dict) and value.get('type') == 'band_structure':
-                continue
-            # Otherwise, assume it's a crystal structure from our earlier code
-            crystals.append(key)
-        return crystals
+        """Names of entries pushed via ``push_crystal_structure`` only."""
+        return [
+            key
+            for key, value in self._data.items()
+            if isinstance(value, dict) and value.get("type") == "crystal_structure"
+        ]
     
     def push_remote_run(self, name, cluster_name, remote_path, engine, meta=None):
         """

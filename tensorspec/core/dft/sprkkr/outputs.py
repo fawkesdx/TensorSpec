@@ -25,8 +25,9 @@ Row-order fact (verified 2026-09-09 with a real NP=2 kkrspec9.7 run,
 
 from __future__ import annotations
 
+import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -36,6 +37,8 @@ from xarray import DataTree
 
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.data_tree import DataTreeBuilder
+
+from .pointwise import AnglePoint
 
 _HEADER_SCALAR_RE = re.compile(r"^\s*(NE|NT|NP|EFERMI|IREL)\s+([-+0-9.EeDd]+)\s*$")
 _HASH_LINE_RE = re.compile(r"^#+\s*$")
@@ -296,3 +299,116 @@ def stitch_spc(datasets: List[xr.Dataset]) -> xr.Dataset:
     attrs["NE"] = merged.sizes["energy"]
     merged.attrs.update(attrs)
     return merged
+
+
+def stitch_points(
+    datasets: List[xr.Dataset],
+    points: List[AnglePoint],
+    deflector_deg: float = 0.0,
+) -> xr.Dataset:
+    """Stitch N single-point (theta=1, phi=1) `.spc` datasets into one lab-axis dataset.
+
+    Each input dataset corresponds to one AnglePoint; its theta and phi coordinates
+    are replaced with the lab slit angle and deflector angle respectively.
+    Lab momenta (k_par, k_defl) are computed from the energy-independent ratio
+    of lab to SPR-KKR k values.
+
+    Args:
+        datasets: List of single-point xr.Dataset, each with theta size=1, phi size=1
+        points: Corresponding AnglePoint list, len(points) == len(datasets)
+        deflector_deg: Fixed deflector angle for the phi axis (all points)
+
+    Returns:
+        Merged xr.Dataset with theta axis = lab slit angles, phi axis = [deflector_deg],
+        and data vars k_par (signed lab slit k), k_defl (signed lab deflector k),
+        k_par_sprkkr (original SPR-KKR k_par), plus all original I_tot, I_up, I_dn, pol, det.
+    """
+    if len(datasets) != len(points):
+        raise ValueError(
+            f"stitch_points: len(datasets)={len(datasets)} != len(points)={len(points)}"
+        )
+
+    # Validate and transform each dataset
+    processed = []
+    for ds, p in zip(datasets, points):
+        # Assert single-point structure
+        if ds.sizes.get("theta", 0) != 1:
+            raise ValueError(f"stitch_points: dataset theta size != 1 (got {ds.sizes.get('theta')})")
+        if ds.sizes.get("phi", 0) != 1:
+            raise ValueError(f"stitch_points: dataset phi size != 1 (got {ds.sizes.get('phi')})")
+
+        # Replace theta with lab slit angle, phi with deflector angle
+        ds = ds.assign_coords(theta=[p.slit_deg], phi=[float(deflector_deg)])
+
+        # Preserve SPR-KKR k_par before overwriting
+        ds = ds.rename({"k_par": "k_par_sprkkr"})
+
+        processed.append(ds)
+
+    # Concat along theta (slit angle) and sort
+    merged = xr.concat(processed, dim="theta").sortby("theta")
+
+    # Compute lab momenta from energy-independent ratios
+    # ratio = lab_k / sprkkr_k; both proportional to sin(angle), so ratio is const per point
+    n_points = len(points)
+    ratio_slit = np.zeros(n_points)
+    ratio_defl = np.zeros(n_points)
+    for i, p in enumerate(points):
+        if p.k_par > 0.0:
+            ratio_slit[i] = p.k_slit / p.k_par
+            ratio_defl[i] = p.k_defl / p.k_par
+        else:
+            ratio_slit[i] = 0.0
+            ratio_defl[i] = 0.0
+
+    # Broadcast ratios along energy and phi axes, then apply
+    # merged has dims (energy, theta, phi); ratios indexed by theta
+    # Carry the slit-angle coordinate so xarray aligns by value, not by position
+    # (merged was sortby("theta"); `points` may arrive in any order).
+    slit_coord = [float(p.slit_deg) for p in points]
+    ratio_slit_bcast = xr.DataArray(ratio_slit, dims="theta", coords={"theta": slit_coord})
+    ratio_defl_bcast = xr.DataArray(ratio_defl, dims="theta", coords={"theta": slit_coord})
+
+    merged["k_par"] = merged["k_par_sprkkr"] * ratio_slit_bcast
+    merged["k_defl"] = merged["k_par_sprkkr"] * ratio_defl_bcast
+
+    # Update attributes
+    attrs = dict(datasets[0].attrs)
+    attrs["NT"] = n_points
+    attrs["NP"] = 1
+    attrs["pointwise"] = True
+    attrs["deflector_deg"] = deflector_deg
+    attrs["phi_is_index"] = False
+    merged.attrs.update(attrs)
+
+    return merged
+
+
+def write_points_json(
+    path: str,
+    points: List[AnglePoint],
+    meta: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Write AnglePoint list and metadata to JSON file.
+
+    File format: {"points": [asdict of each AnglePoint], "meta": metadata dict}
+    """
+    data = {
+        "points": [asdict(p) for p in points],
+        "meta": meta or {},
+    }
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def read_points_json(path: str) -> Tuple[List[AnglePoint], Dict[str, Any]]:
+    """Read AnglePoint list and metadata from JSON file.
+
+    Returns:
+        (points list, metadata dict)
+    """
+    with open(path, "r") as f:
+        data = json.load(f)
+    points = [AnglePoint(**d) for d in data.get("points", [])]
+    meta = data.get("meta", {})
+    return points, meta

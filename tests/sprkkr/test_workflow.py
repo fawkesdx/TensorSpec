@@ -24,12 +24,14 @@ from tensorspec.core.dft.sprkkr.fanout import split_energy
 from tensorspec.core.dft.sprkkr.geometry import parse_pot_geometry
 from tensorspec.core.dft.sprkkr.inputs import build_scf_inputs, read_inp_keywords
 from tensorspec.core.dft.sprkkr.params import ArpesParams, ScfParams
+from tensorspec.core.dft.sprkkr.pointwise import angle_points
 from tensorspec.core.dft.sprkkr.workflow import (
     ArpesRunHandle,
     resolve_surface_geometry,
     run_arpes,
     run_scf,
 )
+from tensorspec.core.dft.sprkkr import read_points_json
 from tensorspec.core.arpes.one_step.kkr_wrapper import KKRWrapper, _build_arpes_params
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -573,3 +575,274 @@ def test_smoke_real_run_arpes(tmp_path):
     print(f"\nSPRKKR_SMOKE workflow.run_arpes wall time: {wall_s:.1f}s")
 
     assert result.tensor.value.shape == (2, 3)
+
+
+# ---------------------------------------------------------------------------
+# Pointwise deflector cut (single-point jobs per lab angle)
+# ---------------------------------------------------------------------------
+
+
+class TestPointwiseFanout:
+    def test_angle_points_launch_one_job_per_point(self, tmp_path, cu_pot):
+        bin_dir = tmp_path / "bin"
+        _touch_bin(bin_dir, "kkrspec9.7")
+        
+        # Create angle points: 5 points
+        pts = angle_points(
+            (-15, 15), 5, hv_eV=84, work_function_eV=4.5, deflector_deg=-10.3
+        )
+        assert len(pts) == 5
+        
+        # Build spc_by_dataset with single-point params for each
+        base_params = ArpesParams(ne=8, nt=1, np_=1, dataset="_Pointwise")
+        spc_by_dataset = {}
+        for p in pts:
+            dataset_name = f"{base_params.dataset}_p{p.index:04d}"
+            params = ArpesParams(
+                ne=base_params.ne, nt=1, np_=1,
+                theta_e=(p.theta_e_deg, p.theta_e_deg),
+                phi_e=(p.phi_e_deg, p.phi_e_deg),
+                dataset=dataset_name
+            )
+            spc_by_dataset[dataset_name] = params
+        
+        launcher = FakeLauncher(bin_dir=bin_dir, spc_by_dataset=spc_by_dataset)
+        
+        params = ArpesParams(ne=8, nt=5, np_=1, theta_e=(-15.0, 15.0), dataset="_Pointwise")
+        result = run_arpes(
+            str(cu_pot), params, tmp_path / "pointwise_run", launcher,
+            nproc=1, angle_points=pts, deflector_deg=-10.3
+        )
+        
+        assert len(launcher.launched) == 5
+        assert result.dataset is not None
+
+    def test_sub_params_are_single_point(self, tmp_path, cu_pot):
+        bin_dir = tmp_path / "bin"
+        _touch_bin(bin_dir, "kkrspec9.7")
+
+        pts = angle_points(
+            (-15, 15), 5, hv_eV=84, work_function_eV=4.5, deflector_deg=-10.3
+        )
+
+        base_params = ArpesParams(ne=8, nt=1, np_=1, dataset="_PointSingle")
+        spc_by_dataset = {}
+        for p in pts:
+            dataset_name = f"{base_params.dataset}_p{p.index:04d}"
+            params = ArpesParams(
+                ne=base_params.ne, nt=1, np_=1,
+                theta_e=(p.theta_e_deg, p.theta_e_deg),
+                phi_e=(p.phi_e_deg, p.phi_e_deg),
+                dataset=dataset_name
+            )
+            spc_by_dataset[dataset_name] = params
+
+        launcher = FakeLauncher(bin_dir=bin_dir, spc_by_dataset=spc_by_dataset)
+
+        params = ArpesParams(ne=8, nt=5, np_=1, theta_e=(-15.0, 15.0), dataset="_PointSingle")
+        result = run_arpes(
+            str(cu_pot), params, tmp_path / "pointwise_run2", launcher,
+            nproc=1, angle_points=pts, deflector_deg=-10.3
+        )
+
+        # Check each launched job's .inp file has NT=1, NP=1
+        for job in launcher.launched:
+            inp_path = Path(job.workdir) / job.inp_name
+            kw = read_inp_keywords(inp_path)
+            assert kw["SPEC_EL"]["NT"] == "1"
+            assert kw["SPEC_EL"]["NP"] == "1"
+
+    def test_sub_dataset_names_unique(self, tmp_path, cu_pot):
+        bin_dir = tmp_path / "bin"
+        _touch_bin(bin_dir, "kkrspec9.7")
+        
+        pts = angle_points(
+            (-15, 15), 5, hv_eV=84, work_function_eV=4.5, deflector_deg=-10.3
+        )
+        
+        base_params = ArpesParams(ne=8, nt=1, np_=1, dataset="_PointUnique")
+        spc_by_dataset = {}
+        for p in pts:
+            dataset_name = f"{base_params.dataset}_p{p.index:04d}"
+            params = ArpesParams(
+                ne=base_params.ne, nt=1, np_=1,
+                theta_e=(p.theta_e_deg, p.theta_e_deg),
+                phi_e=(p.phi_e_deg, p.phi_e_deg),
+                dataset=dataset_name
+            )
+            spc_by_dataset[dataset_name] = params
+        
+        launcher = FakeLauncher(bin_dir=bin_dir, spc_by_dataset=spc_by_dataset)
+        
+        params = ArpesParams(ne=8, nt=5, np_=1, theta_e=(-15.0, 15.0), dataset="_PointUnique")
+        result = run_arpes(
+            str(cu_pot), params, tmp_path / "pointwise_run3", launcher,
+            nproc=1, angle_points=pts, deflector_deg=-10.3
+        )
+        
+        # Extract dataset names from launched jobs
+        dataset_names = [Path(job.inp_name).stem for job in launcher.launched]
+        assert len(dataset_names) == len(set(dataset_names))
+        assert all("_p" in name for name in dataset_names)
+
+    def test_pointwise_sidecar_written(self, tmp_path, cu_pot):
+        bin_dir = tmp_path / "bin"
+        _touch_bin(bin_dir, "kkrspec9.7")
+        
+        pts = angle_points(
+            (-15, 15), 5, hv_eV=84, work_function_eV=4.5, deflector_deg=-10.3
+        )
+        
+        base_params = ArpesParams(ne=8, nt=1, np_=1, dataset="_PointSidecar")
+        spc_by_dataset = {}
+        for p in pts:
+            dataset_name = f"{base_params.dataset}_p{p.index:04d}"
+            params = ArpesParams(
+                ne=base_params.ne, nt=1, np_=1,
+                theta_e=(p.theta_e_deg, p.theta_e_deg),
+                phi_e=(p.phi_e_deg, p.phi_e_deg),
+                dataset=dataset_name
+            )
+            spc_by_dataset[dataset_name] = params
+        
+        launcher = FakeLauncher(bin_dir=bin_dir, spc_by_dataset=spc_by_dataset)
+        
+        workdir = tmp_path / "pointwise_run4"
+        params = ArpesParams(ne=8, nt=5, np_=1, theta_e=(-15.0, 15.0), dataset="_PointSidecar")
+        result = run_arpes(
+            str(cu_pot), params, workdir, launcher,
+            nproc=1, angle_points=pts, deflector_deg=-10.3
+        )
+        
+        sidecar_path = workdir / "pointwise_points.json"
+        assert sidecar_path.exists()
+        
+        read_pts, meta = read_points_json(str(sidecar_path))
+        assert len(read_pts) == 5
+        assert meta.get("deflector_deg") == -10.3
+
+    def test_pointwise_result_theta_axis_is_lab_slit_angle(self, tmp_path, cu_pot):
+        bin_dir = tmp_path / "bin"
+        _touch_bin(bin_dir, "kkrspec9.7")
+        
+        pts = angle_points(
+            (-15, 15), 5, hv_eV=84, work_function_eV=4.5, deflector_deg=-10.3
+        )
+        
+        base_params = ArpesParams(ne=8, nt=1, np_=1, dataset="_PointAxis")
+        spc_by_dataset = {}
+        for p in pts:
+            dataset_name = f"{base_params.dataset}_p{p.index:04d}"
+            params = ArpesParams(
+                ne=base_params.ne, nt=1, np_=1,
+                theta_e=(p.theta_e_deg, p.theta_e_deg),
+                phi_e=(p.phi_e_deg, p.phi_e_deg),
+                dataset=dataset_name
+            )
+            spc_by_dataset[dataset_name] = params
+        
+        launcher = FakeLauncher(bin_dir=bin_dir, spc_by_dataset=spc_by_dataset)
+        
+        params = ArpesParams(ne=8, nt=5, np_=1, theta_e=(-15.0, 15.0), dataset="_PointAxis")
+        result = run_arpes(
+            str(cu_pot), params, tmp_path / "pointwise_run5", launcher,
+            nproc=1, angle_points=pts, deflector_deg=-10.3
+        )
+        
+        # Check that theta axis matches lab slit angles
+        lab_slit_angles = [p.slit_deg for p in pts]
+        result_theta = result.dataset["theta"].values
+        assert np.allclose(sorted(result_theta), sorted(lab_slit_angles), atol=1e-6)
+        
+        # Check that phi axis is the deflector value
+        result_phi = result.dataset["phi"].values
+        assert len(result_phi) == 1
+        assert np.isclose(result_phi[0], -10.3, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# KKRWrapper pointwise mode kwargs mapping (kkr_wrapper.py)
+# ---------------------------------------------------------------------------
+
+
+class TestPointwiseKwargs:
+    def test_pointwise_off_by_default(self):
+        from tensorspec.core.arpes.one_step.kkr_wrapper import _build_angle_points
+
+        params = ArpesParams()
+        points = _build_angle_points({}, params)
+        assert points == []
+
+    def test_deflector_falls_back_to_phi_e(self):
+        from tensorspec.core.arpes.one_step.kkr_wrapper import _map_deflector
+
+        params = ArpesParams(phi_e=(5.0, 10.0))
+        deflector = _map_deflector({}, params)
+        assert deflector == 5.0
+
+    def test_deflector_angle_key_wins(self):
+        from tensorspec.core.arpes.one_step.kkr_wrapper import _map_deflector
+
+        params = ArpesParams(phi_e=(5.0, 10.0))
+        deflector = _map_deflector({"deflector_angle": -10.3}, params)
+        assert deflector == -10.3
+
+    def test_wrapper_pointwise_returns_lab_theta_axis(self, tmp_path, cu_pot):
+        bin_dir = tmp_path / "bin"
+        _touch_bin(bin_dir, "kkrspec9.7")
+
+        # Create angle points: 5 points
+        pts = angle_points(
+            (-15, 15), 5, hv_eV=84, work_function_eV=4.5, deflector_deg=-10.3
+        )
+
+        # Build spc_by_dataset with single-point params for each
+        base_params = ArpesParams(ne=8, nt=1, np_=1, dataset="_KWrapperPW")
+        spc_by_dataset = {}
+        for p in pts:
+            dataset_name = f"{base_params.dataset}_p{p.index:04d}"
+            params = ArpesParams(
+                ne=base_params.ne, nt=1, np_=1,
+                theta_e=(p.theta_e_deg, p.theta_e_deg),
+                phi_e=(p.phi_e_deg, p.phi_e_deg),
+                dataset=dataset_name
+            )
+            spc_by_dataset[dataset_name] = params
+
+        launcher = FakeLauncher(
+            bin_dir=bin_dir, arpes_spc_fixture=ARPES_SPC_FULL, spc_by_dataset=spc_by_dataset
+        )
+
+        # Run through KKRWrapper with pointwise=True
+        wrapper = KKRWrapper()
+        kwargs = {
+            "pot_path": str(cu_pot),
+            "k_bounds": {"X": [-15.0, 15.0, 5], "Y": [0.0, 0.0, 1]},
+            "e_range": [-6.0, 1.0, 8],
+            "launcher": launcher,
+            "workdir": str(tmp_path / "kkr_pointwise_run"),
+            "nproc": 1,
+            "mode": "mpi",
+            "pointwise": True,
+            "slit_angle": 0.0,
+            "deflector_angle": -10.3,
+            "manip_theta": 0.0,
+            "manip_azimuth": 0.0,
+            "manip_tilt": 0.0,
+            "phi_offset_deg": 0.0,
+            "ref_energy_eV": 0.0,
+            "dataset": "_KWrapperPW",
+        }
+        out = wrapper.run_simulation({}, kwargs)
+
+        # Check theta axis is lab slit angles
+        lab_slit_angles = [p.slit_deg for p in pts]
+        assert np.allclose(sorted(out["theta"]), sorted(lab_slit_angles), atol=1e-6)
+
+        # Check phi axis is the deflector value
+        assert len(out["phi"]) == 1
+        assert np.isclose(out["phi"][0], -10.3, atol=1e-6)
+
+        # Check angle_points is in the output
+        assert "angle_points" in out
+        assert len(out["angle_points"]) == 5

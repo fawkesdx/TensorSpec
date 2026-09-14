@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QFormLayout,
                                QSpinBox, QDoubleSpinBox, QComboBox, QPushButton,
                                QLabel, QMessageBox, QLineEdit, QTextEdit, QCheckBox)
@@ -6,6 +8,7 @@ from PySide6.QtCore import Signal, QThread
 
 import time
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 from tensorspec.gui.services.cluster_utils import (
     cluster_display_name,
@@ -30,6 +33,106 @@ def _connect_cluster(cluster):
         timeout=30,
     )
     return ssh
+
+
+def remote_latest_scf_dir(cluster, scratch_root: Optional[str] = None) -> Optional[str]:
+    """Newest ``scf_*/scf.pot_new`` under SPR-KKR scratch whose SCFSTATUS is
+    CONVERGED. Returns None if there is none -- deliberately NO fallback to
+    ``<scratch>/scf.pot_new`` (2026-09-12: that root file was a stale,
+    unconverged Cu test pot and a GUI ARPES run silently used it)."""
+    from tensorspec.core.compute import cluster_paths
+
+    scratch = (scratch_root or cluster_paths.job_dir(cluster, "sprkkr")).rstrip("/")
+    ssh = _connect_cluster(cluster)
+    try:
+        cmd = (
+            "bash -c '"
+            f"SCRATCH={scratch}; best=\"\"; best_t=0; "
+            "for d in \"$SCRATCH\"/scf_*; do "
+            "  [ -f \"$d/scf.pot_new\" ] || continue; "
+            "  grep -q \"SCFSTATUS *.CONVERGED\" \"$d/scf.pot_new\" 2>/dev/null || continue; "
+            "  t=$(stat -c %Y \"$d/scf.pot_new\" 2>/dev/null || echo 0); "
+            "  if [ \"$t\" -ge \"$best_t\" ]; then best_t=$t; best=$d; fi; "
+            "done; "
+            "if [ -n \"$best\" ]; then echo \"$best\"; fi'"
+        )
+        _, stdout, _ = ssh.exec_command(cmd, timeout=60)
+        out = stdout.read().decode(errors="replace").strip()
+        return out or None
+    finally:
+        ssh.close()
+
+
+def remote_pot_summary(cluster, pot_path: str) -> dict:
+    """Read the header of a remote SPR-KKR ``.pot``/``.pot_new`` and return
+    ``{exists, system, nq, nt, bravais, scfstatus}`` so the GUI can show/verify
+    WHICH material it is about to run on before launching kkrspec."""
+    ssh = _connect_cluster(cluster)
+    try:
+        cmd = (
+            f"bash -c 'if [ -f \"{pot_path}\" ]; then echo __EXISTS__; "
+            f"head -80 \"{pot_path}\" | grep -E \"^(SYSTEM|NQ|NT|BRAVAIS|SCFSTATUS) \"; fi'"
+        )
+        _, stdout, _ = ssh.exec_command(cmd, timeout=60)
+        out = stdout.read().decode(errors="replace")
+    finally:
+        ssh.close()
+    info = {"exists": "__EXISTS__" in out, "system": "", "nq": None, "nt": None,
+            "bravais": "", "scfstatus": "", "path": pot_path}
+    for line in out.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) < 2:
+            continue
+        key, val = parts[0], parts[1].strip()
+        if key == "SYSTEM":
+            info["system"] = val
+        elif key == "NQ":
+            info["nq"] = int(val.split()[0])
+        elif key == "NT":
+            info["nt"] = int(val.split()[0])
+        elif key == "BRAVAIS":
+            info["bravais"] = " ".join(val.split()[1:4])
+        elif key == "SCFSTATUS":
+            info["scfstatus"] = val.strip("'\" ")
+    return info
+
+
+def format_pot_summary(info: dict) -> str:
+    sysname = info.get("system") or "(unnamed)"
+    return (
+        f"SYSTEM={sysname}  NQ={info.get('nq')}  NT={info.get('nt')}  "
+        f"{info.get('bravais') or '?'}  SCFSTATUS={info.get('scfstatus') or '?'}\n"
+        f"{info.get('path')}"
+    )
+
+
+def discover_remote_vault_dirs(cluster) -> List[Tuple[str, str]]:
+    """List ``{heavy}/vaults/*/scf.pot_new`` as (name, remote_path) pairs."""
+    from tensorspec.core.compute import cluster_paths
+
+    vault_root = f"{cluster_paths.heavy_root(cluster)}/vaults"
+    ssh = _connect_cluster(cluster)
+    try:
+        cmd = (
+            "bash -c '"
+            f"ROOT={vault_root}; "
+            "for d in \"$ROOT\"/*; do "
+            "  [ -d \"$d\" ] && [ -f \"$d/scf.pot_new\" ] || continue; "
+            "  echo \"$(basename \"$d\")|$d\"; "
+            "done'"
+        )
+        _, stdout, _ = ssh.exec_command(cmd, timeout=60)
+        rows = []
+        for line in stdout.read().decode(errors="replace").splitlines():
+            line = line.strip()
+            if "|" not in line:
+                continue
+            name, path = line.split("|", 1)
+            if name:
+                rows.append((name, path))
+        return rows
+    finally:
+        ssh.close()
 
 
 class ScfRunnerThread(QThread):
@@ -173,6 +276,7 @@ class SPRKKRDftPanel(QWidget):
     def save_remote_vault(self):
         from PySide6.QtWidgets import QInputDialog
         from tensorspec.core.workspace import global_workspace
+        from tensorspec.core.compute import cluster_paths
         
         if not is_remote_target(self.combo_target):
             QMessageBox.warning(
@@ -194,41 +298,72 @@ class SPRKKRDftPanel(QWidget):
         vault_name, ok = QInputDialog.getText(
             self,
             "Save Remote Vault",
-            "Enter a permanent name for this checkpoint (e.g., Cu_SCF_Converged):",
+            "Enter a permanent name for this checkpoint (e.g., VTe2_SCF_Converged):",
         )
         if not ok or not vault_name:
             return
             
         try:
-            user = cluster["user"]
+            scratch_dir = cluster_paths.job_dir(cluster, "sprkkr")
+            vault_root = f"{cluster_paths.heavy_root(cluster)}/vaults"
+            perm_dir = f"{vault_root}/{vault_name}"
+
+            # Prefer newest scf_* run dir (has the real pot), not scratch root
+            # which may still hold a stale Cu scf.pot_new.
+            src_dir = remote_latest_scf_dir(cluster, scratch_dir)
+            if not src_dir:
+                QMessageBox.warning(
+                    self,
+                    "Error",
+                    f"No CONVERGED scf_*/scf.pot_new found under {scratch_dir} on the "
+                    "cluster. Run/finish an SCF first -- refusing to vault the root "
+                    "scratch pot (may be a stale test pot).",
+                )
+                return
+
             ssh = _connect_cluster(cluster)
-            
-            scratch_dir = f"/mnt/data/{user}/tensorspec_heavy/sprkkr_gui_run"
-            perm_dir = f"/mnt/data/{user}/tensorspec_heavy/vaults/{vault_name}"
-            
-            cmd = f"mkdir -p /mnt/data/{user}/tensorspec_heavy/vaults && cp -r {scratch_dir} {perm_dir}"
+            cmd = (
+                f"mkdir -p {vault_root} && rm -rf {perm_dir} && mkdir -p {perm_dir} && "
+                f"cp -a {src_dir}/. {perm_dir}/ && "
+                f"cp -a {src_dir}/scf.pot_new {scratch_dir}/scf.pot_new && "
+                f"echo OK"
+            )
             stdin, stdout, stderr = ssh.exec_command(cmd)
             exit_status = stdout.channel.recv_exit_status()
+            err = stderr.read().decode(errors="replace")
             ssh.close()
             
             if exit_status == 0:
+                orig_structure = getattr(self, "_scf_orig_structure", None)
+                try:
+                    cif_lattice = orig_structure.lattice.matrix.tolist() if orig_structure is not None else None
+                except Exception:
+                    cif_lattice = None
+                meta = {
+                    "cif_lattice": cif_lattice,
+                    "source_scf_dir": src_dir,
+                    "formula": getattr(orig_structure, "formula", None),
+                }
                 global_workspace.push_remote_run(
                     name=vault_name,
                     cluster_name=cluster_display_name(cluster),
                     engine="SPRKKR",
                     remote_path=perm_dir,
+                    meta=meta,
                 )
                 QMessageBox.information(
                     self,
                     "Success",
-                    f"Remote folder copied and saved to Workspace as '{vault_name}'.\n\n"
-                    "You can now load this in the ARPES suite.",
+                    f"Saved vault '{vault_name}' from:\n{src_dir}\n\n"
+                    f"Remote path: {perm_dir}\n"
+                    "Also refreshed scratch-root scf.pot_new for Temporary Scratch.\n\n"
+                    "Refresh the vault list in the ARPES suite.",
                 )
             else:
                 QMessageBox.critical(
                     self,
                     "Error",
-                    f"Failed to copy directory on cluster.\n{stderr.read().decode()}",
+                    f"Failed to copy directory on cluster.\n{err}",
                 )
                 
         except Exception as e:
@@ -300,6 +435,7 @@ class SPRKKRDftPanel(QWidget):
             self._scf_params = params
             self._scf_workdir = workdir
             self._scf_remote = remote
+            self._scf_remote_workdir = remote_workdir
             self._scf_cluster = cluster
             self._scf_name = f"{getattr(structure, 'formula', 'structure').replace(' ', '')}_{ts}"
 
@@ -337,18 +473,22 @@ class SPRKKRDftPanel(QWidget):
             f"converged={result.status.converged}  EF={result.status.ef_ry} Ry"
         )
 
+        from tensorspec.core.workspace import global_workspace
+
+        orig_structure = getattr(self, "_scf_orig_structure", None) or getattr(
+            self, "_scf_structure", None
+        )
+        try:
+            cif_lattice = orig_structure.lattice.matrix.tolist() if orig_structure else None
+        except Exception:
+            cif_lattice = None
+
         if not self._scf_remote:
             from tensorspec.core.dft.sprkkr import Vault, pot_key, load_settings
-            from tensorspec.core.workspace import global_workspace
 
             settings = load_settings()
             vault = Vault(settings.vault_root)
             key = pot_key(self._scf_structure, self._scf_params)
-            orig_structure = getattr(self, "_scf_orig_structure", None) or self._scf_structure
-            try:
-                cif_lattice = orig_structure.lattice.matrix.tolist()
-            except Exception:
-                cif_lattice = None
             meta = {
                 "ef_ry": result.status.ef_ry,
                 "workdir": result.workdir,
@@ -369,13 +509,54 @@ class SPRKKRDftPanel(QWidget):
                 remote_path=entry.pot_path,
                 meta=meta,
             )
+        else:
+            # Remote: register this SCF run dir so ARPES vault list sees it.
+            remote_path = getattr(self, "_scf_remote_workdir", None) or getattr(
+                result, "remote_workdir", None
+            )
+            if remote_path:
+                meta = {
+                    "ef_ry": result.status.ef_ry,
+                    "workdir": result.workdir,
+                    "cif_lattice": cif_lattice,
+                    "formula": getattr(orig_structure, "formula", None),
+                    "nonmag": getattr(self._scf_params, "nonmag", None),
+                }
+                cluster = getattr(self, "_scf_cluster", None)
+                # Promote pot to scratch root for Temporary Scratch.
+                try:
+                    from tensorspec.core.compute import cluster_paths
+
+                    if cluster:
+                        scratch = cluster_paths.job_dir(cluster, "sprkkr")
+                        ssh = _connect_cluster(cluster)
+                        try:
+                            ssh.exec_command(
+                                f"cp -a {remote_path}/scf.pot_new {scratch}/scf.pot_new"
+                            )[1].channel.recv_exit_status()
+                        finally:
+                            ssh.close()
+                except Exception:
+                    pass
+                global_workspace.push_remote_run(
+                    name=self._scf_name,
+                    cluster_name=cluster_display_name(cluster) if cluster else "remote",
+                    engine="SPRKKR",
+                    remote_path=remote_path,
+                    meta=meta,
+                )
 
         QMessageBox.information(
             self,
             "SPRKKR SCF Done",
             f"Converged: {result.status.converged}\n"
             f"EF = {result.status.ef_ry} Ry\n"
-            f"Potential: {result.pot_path}",
+            f"Potential: {result.pot_path}"
+            + (
+                f"\nRegistered vault: {self._scf_name}"
+                if getattr(self, "_scf_name", None)
+                else ""
+            ),
         )
 
 
