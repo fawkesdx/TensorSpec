@@ -70,3 +70,22 @@ def test_aligned_mismatch_flag():
     assert CrystalEngine.aligned_needs_strain_dialog(layers, ref_idx=0) is True
     same = [_layer(_mono(2.46), 0.0), _layer(_mono(2.46), 3.4)]
     assert CrystalEngine.aligned_needs_strain_dialog(same, ref_idx=0) is False
+
+
+def test_twist_two_layer_cell_not_dummy():
+    layers = [_layer(_mono(2.46), 0.0, 0.0), _layer(_mono(2.50, ("B", "N")), 3.4, 30.0)]
+    suggested, strains = CrystalEngine.suggest_reference_layer(layers)
+    struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=suggested)
+    assert struct.lattice.a < 499.0
+    assert struct.lattice.c > 20.0
+    assert info["status"] in ("commensurate", "incommensurate", "perfect_alignment")
+    assert "layer_tag" in struct.site_properties
+
+
+def test_twist_requires_two_layers():
+    layers = [_layer(_mono(2.46), 0.0, 5.0)]
+    try:
+        CrystalEngine.build_dft_twist_stack(layers, 20.0, 0)
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
