@@ -530,52 +530,51 @@ class CrystalEngine:
         return species, carts, tags
 
     @staticmethod
+    def _supercell_shifts(moire_ab, layer_ab) -> list:
+        """Integer layer-lattice shifts for one moiré cell via rounded S = moiré @ inv(layer)."""
+        moire_ab = np.asarray(moire_ab, dtype=float)
+        layer_ab = np.asarray(layer_ab, dtype=float)
+        S = np.round(moire_ab @ np.linalg.inv(layer_ab))
+        det = int(abs(round(np.linalg.det(S))))
+        if det < 1:
+            return []
+        Sinv = np.linalg.inv(S)
+        n_max = int(np.max(np.abs(S))) + 3
+        shifts = []
+        for n1 in range(-2 * n_max, 2 * n_max + 1):
+            for n2 in range(-2 * n_max, 2 * n_max + 1):
+                u = Sinv @ np.array([n1, n2], dtype=float)
+                if np.all(u >= -1e-10) and np.all(u < 1.0 - 1e-10):
+                    shifts.append(n1 * layer_ab[0] + n2 * layer_ab[1])
+        return shifts
+
+    @staticmethod
     def _tile_into_cell(moire_ab, layer_ab, species, carts, tags) -> tuple[list, list, list]:
-        """Replicate by layer in-plane lattice, keep images inside moiré cell, fold to [0,1)."""
+        """Replicate on layer lattice using rounded-S supercell; fold into moiré [0,1)."""
         moire_ab = np.asarray(moire_ab, dtype=float)
         layer_ab = np.asarray(layer_ab, dtype=float)
         moire_inv_t = np.linalg.inv(moire_ab.T)
-        layer_inv_t = np.linalg.inv(layer_ab.T)
-
-        # Span layer translates that can land inside the moiré parallelogram.
-        corners = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
-        corner_xy = corners @ moire_ab.T
-        corner_frac = corner_xy @ layer_inv_t
-        atom_xy = np.array([np.asarray(c[:2], dtype=float) for c in carts]) if carts else np.zeros((0, 2))
-        if len(atom_xy):
-            atom_frac = atom_xy @ layer_inv_t
-            a_lo, a_hi = atom_frac.min(axis=0), atom_frac.max(axis=0)
-        else:
-            a_lo, a_hi = np.zeros(2), np.zeros(2)
-        pad = 2
-        n1_lo = int(np.floor(corner_frac[:, 0].min() - a_hi[0])) - pad
-        n1_hi = int(np.ceil(corner_frac[:, 0].max() - a_lo[0])) + pad
-        n2_lo = int(np.floor(corner_frac[:, 1].min() - a_hi[1])) - pad
-        n2_hi = int(np.ceil(corner_frac[:, 1].max() - a_lo[1])) + pad
+        shifts = CrystalEngine._supercell_shifts(moire_ab, layer_ab)
+        if not shifts:
+            return [], [], []
 
         out_s, out_c, out_t = [], [], []
-        for n1 in range(n1_lo, n1_hi + 1):
-            for n2 in range(n2_lo, n2_hi + 1):
-                shift = n1 * layer_ab[0] + n2 * layer_ab[1]
-                for s, c, t in zip(species, carts, tags):
-                    xy = np.asarray(c[:2], dtype=float) + shift
-                    frac = xy @ moire_inv_t
-                    if np.all(frac >= -1e-8) and np.all(frac < 1.0 - 1e-8):
-                        frac = frac - np.floor(frac + 1e-12)
-                        xy_f = frac @ moire_ab.T
-                        out_s.append(s)
-                        out_c.append([float(xy_f[0]), float(xy_f[1]), float(c[2])])
-                        out_t.append(t)
-        # Deduplicate near-identical sites (same layer images on boundary)
-        keep = []
-        seen = []
-        for i, c in enumerate(out_c):
-            arr = np.array(c)
-            if any(np.linalg.norm(arr - s) < 0.15 for s in seen):
-                continue
-            seen.append(arr)
-            keep.append(i)
-        return [out_s[i] for i in keep], [out_c[i] for i in keep], [out_t[i] for i in keep]
+        seen = set()
+        for shift in shifts:
+            for s, c, t in zip(species, carts, tags):
+                xy = np.asarray(c[:2], dtype=float) + shift
+                frac = xy @ moire_inv_t
+                frac = frac - np.floor(frac + 1e-12)
+                frac = np.where(frac > 1.0 - 1e-10, 0.0, frac)
+                key = (round(float(frac[0]), 6), round(float(frac[1]), 6), s, t)
+                if key in seen:
+                    continue
+                seen.add(key)
+                xy_f = frac @ moire_ab.T
+                out_s.append(s)
+                out_c.append([float(xy_f[0]), float(xy_f[1]), float(c[2])])
+                out_t.append(t)
+        return out_s, out_c, out_t
 
     @staticmethod
     def build_dft_twist_stack(layers: list[dict], vacuum_ang: float, ref_idx: int) -> tuple[Structure, dict]:

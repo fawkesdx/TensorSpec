@@ -111,6 +111,12 @@ def test_twist_commensurate_fills_moire_cell():
     # Must be far above a single primitive bilayer (4); allow boundary/dedup slack
     assert len(struct) > 4 * n_cells
     assert abs(len(struct) - expected) / expected < 0.35
+    # Identical lattices → same fill per layer (no half-open/dedup imbalance)
+    tags = struct.site_properties["layer_tag"]
+    n_l1 = sum(1 for t in tags if t.endswith("_L1"))
+    n_l2 = sum(1 for t in tags if t.endswith("_L2"))
+    assert n_l1 == n_l2, f"identical-lattice layers unequal: L1={n_l1} L2={n_l2}"
+    assert n_l1 * 2 == len(struct)
 
 
 def test_twist_commensurate_empty_tile_raises(monkeypatch):
