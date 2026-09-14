@@ -28,6 +28,7 @@ import argparse
 import shutil
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +44,7 @@ from tensorspec.core.dft.sprkkr import (  # noqa: E402
     RemoteLauncher,
     ScfParams,
     Vault,
+    angle_points,
     build_arpes_inputs,
     build_scf_inputs,
     format_eta,
@@ -147,6 +149,14 @@ def parse_args():
     ap.add_argument("--imv-fin", type=float, default=2.0, help="final-state imaginary potential eV")
     ap.add_argument("--theta", type=float, nargs=3, default=(-20.0, 20.0, 21), metavar=("MIN", "MAX", "N"))
     ap.add_argument("--phi", type=float, nargs=3, default=(0.0, 0.0, 1), metavar=("MIN", "MAX", "N"))
+    ap.add_argument("--slit", type=float, default=0.0, help="analyzer slit orientation in lab, deg")
+    ap.add_argument("--deflector", type=float, default=0.0, help="deflector angle, deg")
+    ap.add_argument("--manip-theta", type=float, default=0.0)
+    ap.add_argument("--tilt", type=float, default=0.0)
+    ap.add_argument("--azimuth", type=float, default=0.0)
+    ap.add_argument("--phi-offset", type=float, default=0.0, help="UNCALIBRATED SPR-KKR PHI zero offset")
+    ap.add_argument("--ref-energy", type=float, default=0.0, help="eV rel. E_F where (Theta,Phi) are evaluated")
+    ap.add_argument("--pointwise", action="store_true", help="one kkrspec job per slit angle")
     ap.add_argument("--erange", type=float, nargs=3, default=(-6.0, 1.0, 71), metavar=("MIN", "MAX", "N"))
     ap.add_argument("--n-layer", type=int, default=50)
     ap.add_argument("--nlat-g-vec", type=int, default=57)
@@ -161,11 +171,43 @@ def parse_args():
     ap.add_argument("--dry-run", action="store_true",
                      help="build SCF+ARPES inputs only, no binary launch; print geometry and exit 0")
     ap.add_argument("--mpi-prefix", default=None)
+    ap.add_argument(
+        "--raw", action="append", default=[], metavar="SECTION.KEY=VALUE",
+        help="inject an extra raw .inp keyword not in ArpesParams, e.g. "
+             "--raw SPEC_EL.TYP=3 --raw SPEC_EL.BETA1=-15.0 (repeatable; "
+             "2026-09-12 design-doc probe, see docs/superpowers/specs/"
+             "2026-09-11-sprkkr-full-geometry-design.md §7)",
+    )
     return ap.parse_args()
+
+
+def _parse_raw_overrides(raw_args) -> dict:
+    """"SECTION.KEY=VALUE" list -> {SECTION: {KEY: value}}. VALUE is parsed as
+    float when possible, {a,b,c} as a list of floats, else kept as a string
+    (ase2sprkkr's own setattr validates/rejects it either way)."""
+    out: dict = {}
+    for item in raw_args:
+        path, _, value_str = item.partition("=")
+        section, _, key = path.partition(".")
+        if not section or not key or not value_str:
+            raise ValueError(f"--raw expects SECTION.KEY=VALUE, got: {item!r}")
+        value_str = value_str.strip()
+        if value_str.startswith("{") and value_str.endswith("}"):
+            value = [float(v) for v in value_str[1:-1].split(",")]
+        else:
+            try:
+                value = float(value_str)
+                if value.is_integer():
+                    value = int(value)
+            except ValueError:
+                value = value_str
+        out.setdefault(section, {})[key] = value
+    return out
 
 
 def main() -> int:
     args = parse_args()
+    extra_raw = _parse_raw_overrides(args.raw)
     ts = time.strftime("%Y%m%d_%H%M%S")
 
     if args.pot is None and args.cif is None:
@@ -270,9 +312,40 @@ def main() -> int:
             nl=args.nl, nktab=args.nktab, dataset=f"{formula}_arpes",
         )
 
+        pts = None
+        if args.pointwise:
+            pts = angle_points(
+                arpes_params.theta_e, arpes_params.nt,
+                hv_eV=arpes_params.hv_eV, work_function_eV=arpes_params.ework_eV,
+                deflector_deg=args.deflector, slit_rot_deg=args.slit,
+                manip_theta_deg=args.manip_theta, manip_azimuth_deg=args.azimuth,
+                manip_tilt_deg=args.tilt, ref_energy_eV=args.ref_energy,
+                phi_offset_deg=args.phi_offset,
+            )
+            for p in pts:
+                print(f"[pt] i={p.index:02d} slit={p.slit_deg:+.2f} Theta={p.theta_e_deg:+.2f} Phi={p.phi_e_deg:+.2f} k_par={p.k_par:.4f} k_slit={p.k_slit:+.4f}")
+            crosses_gamma = any(abs(p.k_par) < 0.01 for p in pts)
+            min_k_par = min(p.k_par for p in pts) if pts else 0.0
+            max_k_par = max(p.k_par for p in pts) if pts else 0.0
+            print(f"[pt] N={len(pts)} min|k_par|={min_k_par:.4f} max|k_par|={max_k_par:.4f} crosses_gamma={crosses_gamma}")
+
         if args.dry_run:
-            arpes_inputs = build_arpes_inputs(pot_path, arpes_params, arpes_workdir)
-            print(f"[arpes] dry-run: wrote {arpes_inputs.inp_path} (no launch)")
+            if args.pointwise:
+                inp_count = 0
+                for p in pts:
+                    sub_params = replace(arpes_params,
+                                        theta_e=(p.theta_e_deg, p.theta_e_deg), nt=1,
+                                        phi_e=(p.phi_e_deg, p.phi_e_deg), np_=1,
+                                        dataset=f"{arpes_params.dataset}_p{p.index:04d}")
+                    sub_workdir = arpes_workdir / f"{arpes_params.dataset}_p{p.index:04d}"
+                    arpes_inputs = build_arpes_inputs(pot_path, sub_params, sub_workdir, extra_raw=extra_raw)
+                    inp_count += 1
+                print(f"[arpes] dry-run: wrote {inp_count} .inp under {arpes_workdir}")
+            else:
+                arpes_inputs = build_arpes_inputs(pot_path, arpes_params, arpes_workdir, extra_raw=extra_raw)
+                print(f"[arpes] dry-run: wrote {arpes_inputs.inp_path} (no launch)")
+            if extra_raw:
+                print(f"[arpes] --raw applied: {extra_raw}")
             print(f"[cost] atoms_per_plane_max={n_max} n_points={arpes_params.n_points}")
             print(f"[dry-run] OK NQ={len(pot_geom.sites)} IQ_AT_SURF={iq_at_surf} hkl_abas={hkl_abas}")
             return 0
@@ -281,6 +354,8 @@ def main() -> int:
         result = run_arpes(
             pot_path, arpes_params, workdir=arpes_workdir, launcher=launcher, nproc=nproc,
             mode=args.mode, progress_cb=make_arpes_progress_cb(), remote_workdir=remote_arpes_workdir,
+            extra_raw=extra_raw,
+            angle_points=pts if args.pointwise else None, deflector_deg=args.deflector,
         )
 
         ds = result.dataset

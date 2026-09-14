@@ -19,6 +19,7 @@ from tensorspec.core.arpes.photon_energy_scan import (
 from tensorspec.core.workspace import global_workspace
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.compute import cluster_paths as cp
+from tensorspec.gui.services.cluster_utils import cluster_display_name
 from tensorspec.core.dft.sprkkr import (
     ArpesParams as SprkkrArpesParams,
     EtaModel as SprkkrEtaModel,
@@ -29,6 +30,7 @@ from tensorspec.core.dft.sprkkr import (
     local_binaries_present as sprkkr_local_binaries_present,
     parse_spc as sprkkr_parse_spc,
     stitch_spc as sprkkr_stitch_spc,
+    spc_paths_to_results as sprkkr_spc_paths_to_results,
 )
 
 
@@ -237,10 +239,18 @@ class ARPESPanel(QWidget):
         self.remote_cores_spin.setValue(40)
         self.remote_cores_spin.setPrefix("Cores: ")
         
+        self.btn_load_local_spc = QPushButton("📂 Load local .spc")
+        self.btn_load_local_spc.setToolTip(
+            "Load an already-fetched SPR-KKR *_ARPES_data.spc from this mac "
+            "(no cluster needed). Multi-select to stitch energy chunks."
+        )
+        self.btn_load_local_spc.clicked.connect(self.load_local_spc)
+
         vault_layout.addWidget(self.vault_combo)
         vault_layout.addWidget(self.remote_cores_spin)
         vault_layout.addWidget(self.btn_vault_refresh)
         vault_layout.addWidget(self.btn_vault_delete)
+        vault_layout.addWidget(self.btn_load_local_spc)
         control_layout.addWidget(self.vault_group)
         self.vault_group.hide()
 
@@ -275,6 +285,33 @@ class ARPESPanel(QWidget):
         self.combo_kkr_mode.addItems(["auto", "mpi", "chunks"])
         sprkkr_form.addRow("Fan-out mode:", self.combo_kkr_mode)
 
+        self.chk_pointwise = QCheckBox("Point-wise deflector cut (1 job per slit angle)")
+        self.chk_pointwise.setChecked(True)
+        self.chk_pointwise.setToolTip(
+            "Off = legacy: deflector goes straight to SPEC_EL PHI -> a cut THROUGH Gamma "
+            "(only correct at deflector 0). On = one kkrspec job per slit angle, each with "
+            "its own (THETA, PHI) -> a cut PARALLEL to the slit, offset from Gamma. "
+            "Costs NT jobs."
+        )
+        sprkkr_form.addRow(self.chk_pointwise)
+
+        self.spin_phi_offset = QDoubleSpinBox(); self.spin_phi_offset.setRange(-180.0, 180.0)
+        self.spin_phi_offset.setValue(0.0); self.spin_phi_offset.setSuffix(" °")
+        self.spin_phi_offset.setToolTip(
+            "UNCALIBRATED. Angle between the analyzer slit (at azimuth 0) and SPR-KKR's own "
+            "in-plane x axis, which ase2sprkkr picks when it slices by MILLER_HKL. The manual "
+            "does not pin it. 0 assumes slit || x (held empirically for the VTe2 PHI=0 run)."
+        )
+        sprkkr_form.addRow("PHI zero offset (UNCALIBRATED):", self.spin_phi_offset)
+
+        self.spin_ref_energy = QDoubleSpinBox(); self.spin_ref_energy.setRange(-20.0, 5.0)
+        self.spin_ref_energy.setValue(0.0); self.spin_ref_energy.setSuffix(" eV")
+        self.spin_ref_energy.setToolTip(
+            "Energy (rel. E_F) at which (THETA_i, PHI_i) are evaluated; held fixed over the "
+            "whole window. Residual drift ~0.13 deg/eV, ~0.7 %/eV in k_par."
+        )
+        sprkkr_form.addRow("Angle reference energy:", self.spin_ref_energy)
+
         self.spin_n_layer = QSpinBox()
         self.spin_n_layer.setRange(5, 200)
         self.spin_n_layer.setValue(50)
@@ -306,12 +343,25 @@ class ARPESPanel(QWidget):
         self.spin_kkr_nl.setValue(3)
         sprkkr_form.addRow("NL:", self.spin_kkr_nl)
 
+        self.combo_hkl_frame = QComboBox()
+        self.combo_hkl_frame.addItem("Auto (CIF if lattice known)", "auto")
+        self.combo_hkl_frame.addItem("CIF (convert → ABAS)", "cif")
+        self.combo_hkl_frame.addItem("ABAS (direct / CRYS_VECS)", "abas")
+        self.combo_hkl_frame.setToolTip(
+            "How Cleavage Plane [h k l] is read for SPR-KKR.\n"
+            "• CIF: Miller index in the structure/CIF cell; converted to pot ABAS "
+            "(needs matching cif_lattice on the vault).\n"
+            "• ABAS: indices already in the .pot A(1..3) frame; emit CRYS_VECS, "
+            "no conversion (use for VTe₂ e.g. −2 0 1 when CIF convert fails).\n"
+            "• Auto: CIF when vault/crystal lattice exists, else ABAS."
+        )
+        sprkkr_form.addRow("HKL frame:", self.combo_hkl_frame)
+
         self.chk_iq_auto = QCheckBox("Auto surface site (top atom)")
         self.chk_iq_auto.setChecked(True)
         self.chk_iq_auto.setToolTip(
-            "hkl is read in the loaded structure's CIF frame and converted to "
-            "SPR-KKR's raw ABAS frame; the surface IQ is auto-picked (topmost "
-            "non-vacancy site) unless you pin one below."
+            "Surface IQ auto-picked (topmost non-vacancy) along the chosen HKL "
+            "normal unless you pin one below. HKL frame is set by the combo above."
         )
         self.spin_iq_surf = QSpinBox()
         self.spin_iq_surf.setRange(1, 999)
@@ -343,6 +393,7 @@ class ARPESPanel(QWidget):
         # 2. Final State & Thermodynamics
         param_group = QGroupBox("2. Final State & Thermodynamics")
         param_layout = QFormLayout(param_group)
+        self.param_layout = param_layout  # kept for label lookup (_set_row_visible)
         
         self.hv_mode_combo = QComboBox()
         self.hv_mode_combo.addItem("Single", "single")
@@ -421,9 +472,11 @@ class ARPESPanel(QWidget):
         # 3. Beam & Manipulator Geometry
         beam_group = QGroupBox("3. Beam & Manipulator Geometry")
         beam_layout = QFormLayout(beam_group)
+        self.beam_layout = beam_layout  # kept for label lookup (_set_row_visible)
         
         self.manip_theta_spin = QDoubleSpinBox(); self.manip_theta_spin.setRange(-180.0, 180.0); self.manip_theta_spin.setSuffix(" °")
         self.manip_azi_spin = QDoubleSpinBox(); self.manip_azi_spin.setRange(-180.0, 180.0); self.manip_azi_spin.setSuffix(" °")
+        self.manip_azi_spin.setToolTip("Sample azimuth (physical manipulator rotation about the surface normal). For SPR-KKR it adds to the PHI zero offset; calibrate that offset at azimuth 0.")
         self.manip_tilt_spin = QDoubleSpinBox(); self.manip_tilt_spin.setRange(-90.0, 90.0); self.manip_tilt_spin.setSuffix(" °")
         self.incidence_angle_spin = QDoubleSpinBox(); self.incidence_angle_spin.setRange(0.0, 90.0); self.incidence_angle_spin.setValue(55.0); self.incidence_angle_spin.setSuffix(" °")
 
@@ -509,7 +562,12 @@ class ARPESPanel(QWidget):
         hkl_layout.addWidget(self.spin_h)
         hkl_layout.addWidget(self.spin_k)
         hkl_layout.addWidget(self.spin_l)
-        
+        for _sp in (self.spin_h, self.spin_k, self.spin_l):
+            _sp.setToolTip(
+                "Cleavage Miller index. For SPR-KKR (B3), interpretation is set by "
+                "'HKL frame' under SPR-KKR settings (CIF convert vs ABAS direct)."
+            )
+
         beam_layout.addRow("Cleavage Plane [h k l]:", hkl_layout)
         # ---------------------------------------------------------------------------------------------
         beam_layout.addRow("Beam Incidence (Lab):", self.incidence_angle_spin)
@@ -585,6 +643,8 @@ class ARPESPanel(QWidget):
         self.spin_kx_steps.valueChanged.connect(self._update_kkr_eta)
         self.spin_ky_steps.valueChanged.connect(self._update_kkr_eta)
         self.spin_kkr_nproc.valueChanged.connect(self._update_kkr_eta)
+        self.chk_pointwise.toggled.connect(self._update_kkr_eta)
+        self.deflector_angle_spin.valueChanged.connect(self._update_kkr_eta)
         self._update_kkr_eta()
 
         res_layout = QFormLayout()
@@ -994,6 +1054,16 @@ class ARPESPanel(QWidget):
                 eta_seconds = eta_model.estimate_seconds(eta_params, nproc)
             except Exception:
                 eta_seconds = 0.0
+            if self.chk_pointwise.isChecked() and kx_steps_eff > 64:
+                reply = QMessageBox.question(
+                    self,
+                    "Point-wise mode: many jobs",
+                    f"Point-wise mode launches {kx_steps_eff} kkrspec jobs at once on {nproc} ranks. Continue?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No,
+                )
+                if reply != QMessageBox.Yes:
+                    return
             if eta_seconds > 900:
                 n_points = e_steps_eff * kx_steps_eff * ky_steps_eff
                 reply = QMessageBox.question(
@@ -1011,6 +1081,25 @@ class ARPESPanel(QWidget):
                 'photon_energy': float(hv_list[0]),
                 'polarization': self.polarization_combo.currentText(),
                 'work_function': self.work_function_spin.value(),
+                # SPEC_PH THETA (light incidence angle): was hardcoded at
+                # ArpesParams' 45.0 default and never read from this widget --
+                # "Beam Incidence (Lab)" looked editable for B3 but had zero
+                # effect on the SPR-KKR .inp. theta_ph passes straight through
+                # _build_arpes_params' generic passthrough (real ArpesParams
+                # field, not in _EXPLICIT_FIELDS).
+                'theta_ph': self.incidence_angle_spin.value(),
+                'pointwise': self.chk_pointwise.isChecked(),
+                'slit_angle': self.slit_angle_spin.value(),
+                # Deflector = the "Φ (Deflect)" range row (ky), same knob every run so far
+                # used (Sep-13 run: ky -10.3..-10.3 -> PHI=-10.3). The analyzer-group
+                # "Deflector Angle" spin only drives the schematic. A ky RANGE (min!=max)
+                # is a Fermi-map ask -> None here, and kkr_wrapper raises in pointwise mode.
+                'deflector_angle': (ky_min if ky_min == ky_max else None),
+                'manip_theta': self.manip_theta_spin.value(),
+                'manip_azimuth': self.manip_azi_spin.value(),
+                'manip_tilt': self.manip_tilt_spin.value(),
+                'phi_offset_deg': self.spin_phi_offset.value(),
+                'ref_energy_eV': self.spin_ref_energy.value(),
                 'k_bounds': {'X': [kx_min, kx_max, kx_steps], 'Y': [ky_min, ky_max, ky_steps]},
                 'e_min': e_min,
                 'e_max': e_max,
@@ -1033,32 +1122,16 @@ class ARPESPanel(QWidget):
                 experiment_kwargs['pol_e'] = axis_map.get(self.combo_spin_axis.currentText(), "PZ")
                 experiment_kwargs['spin_filter'] = comp_map.get(self.combo_spin_comp.currentText(), "up")
 
-            # Surface geometry (design doc §0): hkl above is typed in the loaded
-            # structure's own (CIF) cell frame -- resolve it to SPR-KKR's raw
-            # ABAS frame + CRYS_VECS via the vault's stored cif_lattice, falling
-            # back to a pushed crystal structure. No lattice -> warn + treat hkl
-            # as already-ABAS (old, wrong-but-previous behavior) rather than crash.
-            vault_name = self.vault_combo.currentText()
-            cif_lattice = None
-            vault_entry = global_workspace.get(vault_name) if vault_name else None
-            if vault_entry and vault_entry.get('meta', {}).get('cif_lattice'):
-                cif_lattice = vault_entry['meta']['cif_lattice']
-            else:
-                crystal = global_workspace.pull_crystal_structure(self.ws_combo.currentText())
-                if crystal is not None and hasattr(crystal, 'lattice'):
-                    try:
-                        cif_lattice = crystal.lattice.matrix.tolist()
-                    except Exception:
-                        cif_lattice = None
+            # Surface geometry (design doc §0): HKL frame combo picks CIF vs ABAS.
+            frame_choice = self.combo_hkl_frame.currentData() or "auto"
+            try:
+                hkl_frame, cif_lattice = self._resolve_sprkkr_hkl_frame(frame_choice)
+            except ValueError as exc:
+                QMessageBox.warning(self, "HKL frame", str(exc))
+                return
+            experiment_kwargs["hkl_frame"] = hkl_frame
             if cif_lattice is not None:
-                experiment_kwargs['hkl_frame'] = 'cif'
-                experiment_kwargs['cif_lattice'] = cif_lattice
-            else:
-                QMessageBox.warning(
-                    self, "No CIF lattice",
-                    "No CIF lattice for this vault; treating h k l as cell frame",
-                )
-                experiment_kwargs['hkl_frame'] = 'abas'
+                experiment_kwargs["cif_lattice"] = cif_lattice
             experiment_kwargs['iq_at_surf'] = None if self.chk_iq_auto.isChecked() else self.spin_iq_surf.value()
 
             try:
@@ -1072,15 +1145,69 @@ class ARPESPanel(QWidget):
                         QMessageBox.warning(self, "Error", "No valid SPRKKR Vault selected! Run an SCF job first.")
                         return
 
+                    from tensorspec.gui.components.sprkkr_panels import (
+                        format_pot_summary,
+                        remote_latest_scf_dir,
+                        remote_pot_summary,
+                    )
+
                     if vault_name == "Temporary Scratch Run (sprkkr_gui_run)":
-                        remote_dir = cp.job_dir(cluster, "sprkkr")
+                        scratch = cp.job_dir(cluster, "sprkkr")
+                        # Newest CONVERGED scf_*/scf.pot_new only. No fallback to the
+                        # scratch-root pot: 2026-09-12 that was a stale unconverged Cu
+                        # test pot and a run silently went out on it.
+                        pot_dir = remote_latest_scf_dir(cluster, scratch)
+                        if not pot_dir:
+                            QMessageBox.warning(
+                                self, "Error",
+                                f"No CONVERGED scf_*/scf.pot_new under {scratch} on "
+                                f"{cluster.get('name', 'cluster')}. Run SCF first, or "
+                                "pick a named vault.",
+                            )
+                            return
+                        remote_dir = scratch
+                        experiment_kwargs["pot_path"] = f"{pot_dir}/scf.pot_new"
+                        experiment_kwargs["remote_workdir"] = f"{remote_dir}/arpes_{ts}"
                     else:
                         vault = global_workspace.get(vault_name)
-                        remote_dir = vault.get('remote_path') if vault else cp.job_dir(cluster, "sprkkr")
+                        remote_dir = vault.get('remote_path') if vault else None
+                        if not remote_dir:
+                            QMessageBox.warning(
+                                self, "Error",
+                                f"Vault '{vault_name}' has no remote_path in the workspace. "
+                                "Hit Refresh on the vault list and pick it again.",
+                            )
+                            return
+                        experiment_kwargs['pot_path'] = f"{remote_dir}/scf.pot_new"
+                        experiment_kwargs['remote_workdir'] = f"{remote_dir}/arpes_{ts}"
 
-                    experiment_kwargs['pot_path'] = f"{remote_dir}/scf.pot_new"
+                    # Guard: read the remote pot header and make the user eyeball it.
+                    pot_info = remote_pot_summary(cluster, experiment_kwargs["pot_path"])
+                    if not pot_info["exists"]:
+                        QMessageBox.critical(
+                            self, "Error",
+                            f"Pot not found on cluster:\n{experiment_kwargs['pot_path']}",
+                        )
+                        return
+                    if pot_info["scfstatus"].upper() != "CONVERGED":
+                        QMessageBox.critical(
+                            self, "Refusing to run",
+                            "Selected pot is NOT a converged SCF result:\n\n"
+                            + format_pot_summary(pot_info)
+                            + "\n\nPick a converged vault or rerun SCF.",
+                        )
+                        return
+                    reply = QMessageBox.question(
+                        self, "Confirm SPR-KKR ARPES pot",
+                        "kkrspec will run on this potential:\n\n"
+                        + format_pot_summary(pot_info)
+                        + "\n\nIs this the right material?",
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+                    )
+                    if reply != QMessageBox.Yes:
+                        return
+
                     experiment_kwargs['workdir'] = f"scratch/sprkkr_gui_run/arpes_{ts}"
-                    experiment_kwargs['remote_workdir'] = f"{remote_dir}/arpes_{ts}"
                     experiment_kwargs['launcher'] = SprkkrRemoteLauncher(cluster)
                 else:
                     pot_path = self.sprkkr_pot_edit.text().strip()
@@ -1761,6 +1888,53 @@ cd {remote_dir}
 
 
 
+    @staticmethod
+    def _spc_paths_to_results(local_paths, points_json: Optional[str] = None) -> dict:
+        """Parse (+stitch) SPR-KKR *_ARPES_data.spc files into the GUI results dict.
+        Delegates to the core layer sprkkr_spc_paths_to_results (no Qt here)."""
+        return sprkkr_spc_paths_to_results(local_paths, points_json=points_json)
+
+    def load_local_spc(self):
+        """Load already-synced SPR-KKR .spc file(s) from disk -- no cluster.
+        2026-09-12: Fetch always takes the NEWEST remote arpes_* dir, which can be
+        a wrong/aborted run; this lets Sandy open a known-good local result."""
+        import os
+        start_dir = "scratch/sprkkr_gui_run" if os.path.isdir("scratch/sprkkr_gui_run") else "scratch"
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Load SPR-KKR ARPES .spc", start_dir,
+            "SPR-KKR spectra (*_ARPES_data.spc *.spc);;All files (*)",
+        )
+        if not paths:
+            return
+        empty = [p for p in paths if os.path.getsize(p) == 0]
+        if empty:
+            QMessageBox.warning(
+                self, "Empty .spc",
+                "These files are 0 bytes (run aborted before writing?):\n" + "\n".join(empty),
+            )
+            return
+
+        # Look for pointwise_points.json: files' dir, its parent, its grandparent
+        # (per-point subdir case: <run>/arpes/pot_arpes_pNNNN/*.spc), and any
+        # immediate subdir (sprkkr_e2e copies the .spc flat into <run>/ while the
+        # sidecar stays in <run>/arpes/).
+        import glob as _glob
+        file_dir = os.path.dirname(paths[0])
+        candidates = [
+            os.path.join(file_dir, "pointwise_points.json"),
+            os.path.join(os.path.dirname(file_dir), "pointwise_points.json"),
+            os.path.join(os.path.dirname(os.path.dirname(file_dir)), "pointwise_points.json"),
+        ] + sorted(_glob.glob(os.path.join(file_dir, "*", "pointwise_points.json")))
+        points_json = next((c for c in candidates if os.path.isfile(c)), None)
+
+        try:
+            results = self._spc_paths_to_results(sorted(paths), points_json=points_json)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to parse .spc:\n{e}")
+            return
+        label = os.path.basename(os.path.dirname(paths[0])) or paths[0]
+        self.on_simulation_finished(True, results, f"Loaded local .spc ({label})")
+
     def fetch_remote_results(self):
         """Fetch remote ARPES cube (Chinook or SPR-KKR)."""
         return self.fetch_sprkkr_results()
@@ -1867,21 +2041,20 @@ cd {remote_dir}
                 lp = os.path.join(local_dir, f"{i}_{os.path.basename(rp)}")
                 sftp.get(rp, lp)
                 local_paths.append(lp)
+
+            # Try to fetch pointwise_points.json if it exists
+            points_json_local = None
+            try:
+                points_json_remote = f"{search_dir}/pointwise_points.json"
+                points_json_local = os.path.join(local_dir, "pointwise_points.json")
+                sftp.get(points_json_remote, points_json_local)
+            except IOError:
+                points_json_local = None
+
             sftp.close()
             ssh.close()
 
-            datasets = [sprkkr_parse_spc(lp) for lp in local_paths]
-            merged = sprkkr_stitch_spc(datasets) if len(datasets) > 1 else datasets[0]
-
-            # dataset dims are (energy, theta, phi); GUI layout is (theta, phi, energy)
-            intensity = np.transpose(merged["I_tot"].values, (1, 2, 0))
-            results = {
-                'intensity_broadened': intensity,
-                'energy': merged["energy"].values,
-                'theta': merged["theta"].values,
-                'phi': merged["phi"].values,
-            }
-
+            results = self._spc_paths_to_results(local_paths, points_json=points_json_local)
             self.on_simulation_finished(True, results, "Fetched successfully")
 
         except Exception as e:
@@ -2009,6 +2182,57 @@ cd {remote_dir}
 
         return is_hybrid_mode(self.target_dropdown)
 
+    def _set_row_visible(self, widget, visible: bool):
+        """Hide/show ``widget`` and its QFormLayout label (if any) together.
+
+        Checked against both self.param_layout and self.beam_layout since the
+        Chinook-only knobs this feeds (_sync_sprkkr_irrelevant_knobs) live in
+        either group. A single-widget addRow() (e.g. a bare QCheckBox row)
+        has no separate label -- labelForField returns None, so we just
+        toggle the widget itself.
+        """
+        for layout in (getattr(self, "param_layout", None), getattr(self, "beam_layout", None)):
+            if layout is None:
+                continue
+            label = layout.labelForField(widget)
+            if label is not None:
+                label.setVisible(visible)
+        widget.setVisible(visible)
+
+    def _sync_sprkkr_irrelevant_knobs(self, is_b3: bool):
+        """Hide Chinook-only physics knobs that SPR-KKR (B3) never reads.
+
+        None of these reach kkr_wrapper.py / params.py / workflow.py -- SPR-
+        KKR's one-step method has no Fresnel transmission step, no separate
+        escape-depth (k_z) broadening, no dipole mean-free-path, and encodes
+        sample/surface orientation directly via MILLER_HKL + CRYS_VECS rather
+        than the lab-frame manipulator knobs (which have been moved to pointwise
+        angle points via sample_to_bulk_frame in the core layer). Leaving them
+        visible+editable under B3 implied they mattered when they silently did nothing.
+        Beam Incidence stays visible for B3 -- it's wired to SPEC_PH THETA.
+        Manipulator theta/azimuth/tilt now reach SPR-KKR via pointwise angle points.
+        """
+        chinook_only = [
+            self.inner_potential_spin,
+            self.rad_type_combo,
+            self.mfp_spin,
+            self.fresnel_enabled_chk,
+            self.optical_n_spin,
+            self.optical_k_spin,
+            self.include_photon_momentum_chk,
+            self.kz_halfwidth_spin,
+            self.kz_npoints_spin,
+        ]
+        for widget in chinook_only:
+            self._set_row_visible(widget, not is_b3)
+        if is_b3:
+            self._set_row_visible(self.lin_pol_angle_spin, False)
+        else:
+            # Restore the pre-existing rule: only shown for Arbitrary pol.
+            self._set_row_visible(
+                self.lin_pol_angle_spin, "Arbitrary" in self.polarization_combo.currentText()
+            )
+
     def _sync_remote_ui(self):
         """Show/enable live-monitor + fetch from Physics Model × Compute Target.
 
@@ -2020,6 +2244,7 @@ cd {remote_dir}
         """
         model = self.engine_dropdown.currentData()
         remote = self._is_remote_target()
+        self._sync_sprkkr_irrelevant_knobs(model == "B3")
 
         if model == "B3":
             self.ws_group.hide()
@@ -2144,6 +2369,11 @@ cd {remote_dir}
 
     def on_engine_changed(self):
         self._sync_remote_ui()
+        # Beam Incidence now feeds SPEC_PH THETA for B3 too, and hiding the
+        # Chinook-only manipulator/Fresnel rows changes what's on screen --
+        # redraw so the schematic never shows a stale geometry after a
+        # engine switch.
+        self.update_schematic()
 
     def _update_kkr_bin_status(self):
         """Refresh the 'which SPR-KKR binaries were found' status label."""
@@ -2157,6 +2387,81 @@ cd {remote_dir}
             self.lbl_kkr_bins.setText("found: " + ", ".join(found))
         else:
             self.lbl_kkr_bins.setText("no kkrscf/kkrspec binaries found in this dir")
+
+    def _lattice_matrix_from_obj(self, obj):
+        """Extract 3x3 cartesian lattice matrix (Angstrom) from Structure/Lattice-like."""
+        if obj is None:
+            return None
+        lattice = getattr(obj, "lattice", obj)
+        matrix = getattr(lattice, "matrix", None)
+        if matrix is None:
+            return None
+        try:
+            return [list(map(float, row)) for row in matrix]
+        except Exception:
+            return None
+
+    def _lookup_cif_lattice(self):
+        """Vault meta cif_lattice, else any crystal_structure in workspace.
+
+        NOTE: do NOT use ``ws_combo`` here — that lists band structures, not CIFs.
+        """
+        vault_name = self.vault_combo.currentText()
+        vault_entry = global_workspace.get(vault_name) if vault_name else None
+        if vault_entry and vault_entry.get("meta", {}).get("cif_lattice"):
+            return vault_entry["meta"]["cif_lattice"]
+
+        # Crystal Suite pushes pymatgen Structure under type=crystal_structure.
+        for name in global_workspace.list_crystal_structures():
+            crystal = global_workspace.pull_crystal_structure(name)
+            lat = self._lattice_matrix_from_obj(crystal)
+            if lat is not None:
+                return lat
+
+        # Band push sometimes embeds a structure — last resort only.
+        band_name = self.ws_combo.currentText()
+        band = global_workspace.pull_band_structure(band_name) if band_name else None
+        if isinstance(band, dict):
+            for key in ("structure", "crystal", "pymatgen_structure"):
+                lat = self._lattice_matrix_from_obj(band.get(key))
+                if lat is not None:
+                    return lat
+        return None
+
+    def _resolve_sprkkr_hkl_frame(self, frame_choice: str):
+        """Return (hkl_frame, cif_lattice|None) for B3 kwargs.
+
+        frame_choice: 'auto' | 'cif' | 'abas'
+        Raises ValueError when CIF is required but no lattice is available.
+        """
+        choice = (frame_choice or "auto").lower()
+        if choice == "abas":
+            return "abas", None
+
+        cif_lattice = self._lookup_cif_lattice()
+        if choice == "cif":
+            if cif_lattice is None:
+                crystals = global_workspace.list_crystal_structures()
+                raise ValueError(
+                    "HKL frame is CIF, but no cif_lattice on this vault "
+                    "and no usable crystal Structure in workspace "
+                    f"(crystal entries: {crystals or 'none'}). "
+                    "Load a CIF in Crystal Suite, or switch HKL frame to ABAS "
+                    "and type the pot-frame Miller index (for this VTe₂ pot, "
+                    "CIF (−2,0,1) ≡ ABAS (0,1,−1))."
+                )
+            return "cif", cif_lattice
+
+        # auto
+        if cif_lattice is not None:
+            return "cif", cif_lattice
+        QMessageBox.warning(
+            self,
+            "No CIF lattice",
+            "No CIF lattice for this vault; treating h k l as ABAS (pot) frame.\n"
+            "Or set HKL frame to ABAS explicitly to skip this warning.",
+        )
+        return "abas", None
 
     def _browse_sprkkr_pot(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -2254,7 +2559,31 @@ cd {remote_dir}
             self.ws_combo.addItems(bands)
         self.ws_combo.blockSignals(False)
         self._update_band_energy_meta_label()
-            
+
+        # Pull SPR-KKR vault dirs from the remote cluster into workspace memory
+        # so Refresh shows VTe2_* even after a GUI restart.
+        if self._is_remote_target():
+            try:
+                from tensorspec.gui.components.sprkkr_panels import (
+                    discover_remote_vault_dirs,
+                )
+
+                cluster = self.get_selected_cluster()
+                if cluster:
+                    for name, path in discover_remote_vault_dirs(cluster):
+                        existing = global_workspace.get(name)
+                        if existing and existing.get("type") == "remote_run":
+                            continue
+                        global_workspace.push_remote_run(
+                            name=name,
+                            cluster_name=cluster_display_name(cluster),
+                            engine="SPRKKR",
+                            remote_path=path,
+                            meta={},
+                        )
+            except Exception as exc:
+                print(f"[ARPES] remote vault discover failed: {exc}", flush=True)
+
         vaults = global_workspace.list_remote_runs(engine="SPRKKR")
         self.vault_combo.clear()
         

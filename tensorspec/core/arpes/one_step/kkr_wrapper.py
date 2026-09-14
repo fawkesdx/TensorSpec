@@ -8,6 +8,13 @@ Chinook, which works in k-space kx/ky): ``k_bounds['X']``/``['Y']`` here are
 detector ANGLES in degrees -- theta (slit) and phi (deflection) -- because
 that is what SPR-KKR's SPEC_EL THETA/PHI grid wants. ``photon_energy`` is
 still eV, ``work_function`` still eV.
+
+In pointwise mode (pointwise=True), ``k_bounds['X']`` is the lab SLIT angle
+sweep and ``k_bounds['Y']`` is ignored in favor of ``deflector_angle`` (which
+falls back to ``k_bounds['Y'][0]`` if not set). Each lab slit angle becomes
+its own SPR-KKR job with unique (THETA_i, PHI_i) per point. The result theta
+axis is lab slit angles, phi axis is the deflector value. SPEC_EL PHI is then
+per-point, never the raw deflector.
 """
 from __future__ import annotations
 
@@ -107,6 +114,34 @@ def _map_energy(kwargs: Dict[str, Any], defaults: ArpesParams):
     return e_min, e_max, ne
 
 
+def _map_deflector(kwargs: Dict[str, Any], params: ArpesParams) -> float:
+    """Map GUI deflector angle, falling back to phi_e[0] for back-compat."""
+    deflector = kwargs.get("deflector_angle")
+    if deflector is not None:
+        return float(deflector)
+    return params.phi_e[0]
+
+
+def _build_angle_points(kwargs: Dict[str, Any], params: ArpesParams):
+    """Build AnglePoint list when pointwise mode is on, else return []."""
+    from tensorspec.core.dft.sprkkr.pointwise import angle_points as build_angle_points
+
+    if not kwargs.get("pointwise"):
+        return []
+
+    return build_angle_points(
+        params.theta_e, params.nt,
+        hv_eV=params.hv_eV, work_function_eV=params.ework_eV,
+        deflector_deg=_map_deflector(kwargs, params),
+        slit_rot_deg=float(kwargs.get("slit_angle", 0.0)),
+        manip_theta_deg=float(kwargs.get("manip_theta", 0.0)),
+        manip_azimuth_deg=float(kwargs.get("manip_azimuth", 0.0)),
+        manip_tilt_deg=float(kwargs.get("manip_tilt", 0.0)),
+        ref_energy_eV=float(kwargs.get("ref_energy_eV", 0.0)),
+        phi_offset_deg=float(kwargs.get("phi_offset_deg", 0.0)),
+    )
+
+
 def _build_arpes_params(kwargs: Dict[str, Any]) -> ArpesParams:
     """Map GUI ``experiment_kwargs`` -> ``ArpesParams``. Every key optional."""
     defaults = ArpesParams()
@@ -166,6 +201,10 @@ class KKRWrapper:
         params = _build_arpes_params(kwargs)
         params.validate()
 
+        points = _build_angle_points(kwargs, params)
+        if points and params.np_ != 1:
+            raise ValueError("pointwise mode needs nt >= 1 and np_ == 1")
+
         workdir = kwargs.get("workdir")
         if workdir is None:
             workdir = tempfile.mkdtemp(prefix="kkr_arpes_")
@@ -195,6 +234,8 @@ class KKRWrapper:
             wait=wait,
             remote_workdir=remote_workdir,
             cif_lattice=cif_lattice,
+            angle_points=points or None,
+            deflector_deg=_map_deflector(kwargs, params) if points else 0.0,
         )
 
         if not wait:
@@ -235,4 +276,5 @@ class KKRWrapper:
             "params": result.params,
             "result": result,
             "geometry": result.geometry,
+            "angle_points": points,
         }

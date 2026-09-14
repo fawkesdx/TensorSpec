@@ -7,6 +7,7 @@ Modules
 - params    dataclasses ScfParams / ArpesParams (real SPR-KKR keywords)
 - inputs    build .inp/.pot via ase2sprkkr (lazy import; no run)
 - outputs   parse *_data.spc -> xarray / TensorData / DataTree; SCF log parse
+- pointwise  lab detector angles -> SPR-KKR (Theta,Phi) single-point jobs
 - jobs      JobSpec + LocalLauncher / RemoteLauncher (we launch binaries ourselves)
 - progress  fraction done, SCF status, ETA model
 - fanout    energy-chunk / hv-list fan-out plans + full energy axis
@@ -27,6 +28,16 @@ from .outputs import (
     spc_to_datatree,
     spc_to_tensor,
     stitch_spc,
+    read_points_json,
+    stitch_points,
+    write_points_json,
+)
+from .spc_results import spc_paths_to_results
+from .pointwise import (
+    AnglePoint,
+    angle_points,
+    k_vacuum,
+    sprkkr_angles_to_lab_k,
 )
 from .jobs import (
     JobSpec,
@@ -62,6 +73,9 @@ __all__ = [
     "build_scf_inputs", "build_arpes_inputs", "read_inp_keywords",
     # outputs
     "ScfStatus", "parse_scf_log", "parse_spc", "spc_to_datatree", "spc_to_tensor", "stitch_spc",
+    "read_points_json", "stitch_points", "write_points_json", "spc_paths_to_results",
+    # pointwise
+    "AnglePoint", "angle_points", "k_vacuum", "sprkkr_angles_to_lab_k",
     # jobs
     "JobSpec", "LocalLauncher", "LocalHandle", "RemoteLauncher", "RemoteHandle", "resolve_binary",
     # progress

@@ -121,10 +121,19 @@ def build_scf_inputs(structure, params: ScfParams, out_dir: PathLike) -> ScfInpu
     )
 
 
-def build_arpes_inputs(pot_path: PathLike, params: ArpesParams, out_dir: PathLike) -> ArpesInputs:
+def build_arpes_inputs(
+    pot_path: PathLike, params: ArpesParams, out_dir: PathLike, extra_raw: dict = None
+) -> ArpesInputs:
     """pot_path: converged (or starting) potential file. Writes <dataset>.inp.
 
     Uses SPRKKR(potential=pot_path), NOT atoms= (design doc §0 gotcha).
+
+    ``extra_raw``: optional {SECTION: {KEY: value}} applied via the same
+    ``_apply_dict`` path AFTER params' own dict, for keys with no ArpesParams
+    field yet (e.g. SPEC_EL.TYP/BETA1/BETA2/ROTAXIS -- 2026-09-12 design-doc
+    probe, see docs/superpowers/specs/2026-09-11-sprkkr-full-geometry-design.md
+    §7). Diagnostic escape hatch, not a stable API -- values here still go
+    through ase2sprkkr's own validation/grammar like any other field.
     """
     from ase2sprkkr.input_parameters.input_parameters import InputParameters
     from ase2sprkkr.sprkkr.calculator import SPRKKR
@@ -141,6 +150,8 @@ def build_arpes_inputs(pot_path: PathLike, params: ArpesParams, out_dir: PathLik
     calc = SPRKKR(potential=str(pot_path))
     ip = InputParameters.create_input_parameters("ARPES")
     rejected = _apply_dict(ip, params.to_ase2sprkkr_dict())
+    if extra_raw:
+        rejected = list(rejected) + _apply_dict(ip, extra_raw)
 
     input_file = f"{params.dataset}.inp"
     calc.save_input(

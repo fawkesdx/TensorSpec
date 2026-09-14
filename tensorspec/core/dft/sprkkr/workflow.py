@@ -41,7 +41,8 @@ from .geometry import (
 )
 from .inputs import build_arpes_inputs, build_scf_inputs
 from .jobs import JobSpec, LocalLauncher, RemoteLauncher, resolve_binary
-from .outputs import ScfStatus, parse_spc, spc_to_datatree, spc_to_tensor, stitch_spc
+from .outputs import ScfStatus, parse_spc, spc_to_datatree, spc_to_tensor, stitch_spc, stitch_points, write_points_json
+from .pointwise import AnglePoint
 from .params import ArpesParams, ScfParams
 from .progress import arpes_rows_done, scf_progress
 
@@ -330,6 +331,8 @@ class ArpesRunHandle:
         start_time: float,
         progress_cb: Optional[Callable[[float], None]] = None,
         geometry: Optional[SurfaceGeometry] = None,
+        points: Optional[List[AnglePoint]] = None,
+        deflector_deg: float = 0.0,
     ):
         self.handles = subjobs
         self.params = params
@@ -337,6 +340,8 @@ class ArpesRunHandle:
         self._start_time = start_time
         self._progress_cb = progress_cb
         self._geometry = geometry
+        self._points = points
+        self._deflector_deg = deflector_deg
 
     def fraction_done(self) -> float:
         expected = sum(sj.sub_params.n_points for sj in self.handles)
@@ -393,7 +398,10 @@ class ArpesRunHandle:
                 if inp_path.exists():
                     inputs_text = inp_path.read_text()
 
-        merged = stitch_spc(datasets) if len(datasets) > 1 else datasets[0]
+        if self._points:
+            merged = stitch_points(datasets, self._points, self._deflector_deg)
+        else:
+            merged = stitch_spc(datasets) if len(datasets) > 1 else datasets[0]
 
         host = getattr(self._launcher, "cluster", {}).get("host", "local") if remote else "local"
         meta = {
@@ -406,6 +414,8 @@ class ArpesRunHandle:
             "host": host,
             "wall_s": wall_s,
             "inputs_text": inputs_text,
+            "pointwise": bool(self._points),
+            "deflector_deg": self._deflector_deg,
         }
 
         tensor = spc_to_tensor(merged, meta)
@@ -434,6 +444,9 @@ def run_arpes(
     progress_cb: Optional[Callable[[float], None]] = None,
     remote_workdir: Optional[str] = None,
     cif_lattice: Any = None,
+    extra_raw: Optional[dict] = None,
+    angle_points: Optional[List[AnglePoint]] = None,
+    deflector_deg: float = 0.0,
 ):
     """Fan out (mpi | energy-chunks), launch every job, then parse+stitch.
 
@@ -454,6 +467,12 @@ def run_arpes(
     exactly as loaded, before any primitive reduction) and is converted here
     to the raw ABAS frame + CRYS_VECS via ``resolve_surface_geometry``;
     ``params.iq_at_surf`` (None/0 -> auto-pick) is resolved the same way.
+
+    ``angle_points``: when set, overrides ``mode`` and energy-chunking logic.
+    Launches N independent jobs (one per point), each at all energies, with
+    ``(Theta_i, Phi_i)`` set per point. Each job has ``nproc=1``; the N jobs
+    themselves are the parallelism. One job per (Theta, Phi) at all energies
+    is incompatible with energy-chunk fan-out.
     """
     workdir = Path(workdir)
     remote = _is_remote(launcher)
@@ -485,12 +504,49 @@ def run_arpes(
             f"atoms_per_plane_max={geometry.atoms_per_plane_max}"
         )
 
-    plan = plan_jobs(params, nproc, mode=mode, mpi_available=mpi_available)
+    if angle_points:
+        job_list = [
+            (
+                replace(params,
+                        theta_e=(p.theta_e_deg, p.theta_e_deg), nt=1,
+                        phi_e=(p.phi_e_deg, p.phi_e_deg), np_=1,
+                        dataset=f"{params.dataset}_p{p.index:04d}"),
+                f"{params.dataset}_p{p.index:04d}",
+                1,
+            )
+            for p in angle_points
+        ]
+    else:
+        job_list = list(plan_jobs(params, nproc, mode=mode, mpi_available=mpi_available).jobs)
+
+    workdir.mkdir(parents=True, exist_ok=True)
+    if angle_points:
+        write_points_json(
+            workdir / "pointwise_points.json", angle_points,
+            meta={
+                "deflector_deg": deflector_deg,
+                "hv_eV": params.hv_eV,
+                "ework_eV": params.ework_eV,
+                "dataset": params.dataset,
+                "nt": params.nt,
+            }
+        )
+        min_k_par = min(p.k_par for p in angle_points)
+        max_k_par = max(p.k_par for p in angle_points)
+        min_theta = min(p.theta_e_deg for p in angle_points)
+        max_theta = max(p.theta_e_deg for p in angle_points)
+        min_phi = min(p.phi_e_deg for p in angle_points)
+        max_phi = max(p.phi_e_deg for p in angle_points)
+        print(f"[pointwise] N={len(angle_points)} Theta=[{min_theta:.2f},{max_theta:.2f}] Phi=[{min_phi:.2f},{max_phi:.2f}] min|k_par|={min_k_par:.4f}")
+        if remote:
+            # Sidecar must live next to the arpes_<ts>/ subdirs on the cluster too,
+            # so GUI Fetch (arpes_panel.fetch_sprkkr_results) can rebuild lab axes.
+            launcher.upload([workdir / "pointwise_points.json"], remote_workdir)
 
     subjobs: List[_SubJob] = []
-    for sub_params, subdir_name, nproc_i in plan.jobs:
+    for sub_params, subdir_name, nproc_i in job_list:
         subdir = workdir / subdir_name
-        arpes_inputs = build_arpes_inputs(local_pot_path, sub_params, subdir)
+        arpes_inputs = build_arpes_inputs(local_pot_path, sub_params, subdir, extra_raw=extra_raw)
         binary = _resolve_job_binary("arpes", nproc_i, launcher, bin_dir=None)
         job_workdir = f"{remote_workdir}/{subdir_name}" if remote else str(subdir)
         job = JobSpec(
@@ -519,7 +575,8 @@ def run_arpes(
         )
 
     run_handle = ArpesRunHandle(
-        subjobs, params, launcher, start_time=start_time, progress_cb=progress_cb, geometry=geometry
+        subjobs, params, launcher, start_time=start_time, progress_cb=progress_cb, geometry=geometry,
+        points=angle_points, deflector_deg=deflector_deg
     )
 
     if not wait:

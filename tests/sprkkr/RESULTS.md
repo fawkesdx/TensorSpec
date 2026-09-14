@@ -1,6 +1,7 @@
 # tests/sprkkr RESULTS
 
-- when: 2026-09-09T14:09Z (sandbox, python3, ase2sprkkr 3.4.2, PySide6 offscreen)
-- suite: tests/sprkkr — 124 passed, 2 skipped (real-binary smoke)
-- Gate D real: Einstein Cu(001) 71x21 in 182 s / 32 ranks, bit-identical to sandbox. Gate E: VTe2 CDW SCF converged on Einstein (29 iter, EF 0.6394 Ry, M=0); surface geometry (cif frame -> abas + auto Te site) shared by GUI + CLI.
+- when: 2026-09-13T23:50Z (cloud sandbox, python3.11, ase2sprkkr 3.4.2, no Qt -> test_arpes_panel_b3 + test_sprkkr_panels not run here)
+- suite: tests/sprkkr — 151 passed, 3 skipped (real-binary smoke + sandbox-only Cu bench pot)
+- new this run: point-wise deflector cut (plan 2026-09-13): test_pointwise (14), test_pointwise_stitch (7), TestPointwiseFanout (5), TestPointwiseKwargs (4), test_e2e_pointwise_dryrun (4), test_spc_results_helper (2)
+- fixed: 3 red since 2026-09-10 (TestKKRWrapper x2, test_kkr_wrapper_fermi) — kkr_wrapper iq_at_surf default
 - failed: none

@@ -1,6 +1,7 @@
 """Gate: geometry.py. No binary, no Qt."""
 from pathlib import Path
 
+import os
 import numpy as np
 import pytest
 
@@ -92,8 +93,12 @@ def test_parse_pot_geometry_vte2_prim():
     np.testing.assert_allclose(xyz1, [-0.55271757386827, -0.5, -1.11020961598163], atol=1e-8)
 
 
+_CU_BENCH_POT = "/home/claude/sprkkr_bench/cu_run/scf/Cu.pot_new"
+
+
+@pytest.mark.skipif(not os.path.isfile(_CU_BENCH_POT), reason="sandbox-only Cu bench pot")
 def test_parse_pot_geometry_cu():
-    pg = parse_pot_geometry("/home/claude/sprkkr_bench/cu_run/scf/Cu.pot_new")
+    pg = parse_pot_geometry(_CU_BENCH_POT)
     assert len(pg.sites) == 1
     iq, xyz, txt = pg.sites[0]
     assert (iq, txt) == (1, "Cu")
