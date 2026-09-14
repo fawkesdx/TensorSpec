@@ -261,14 +261,17 @@ class QEGeneratorPanel(QWidget):
         self.chk_mpi.setChecked(True)
         self.spin_pw_cores = QSpinBox()
         self.spin_pw_cores.setRange(1, 256)
-        self.spin_pw_cores.setValue(128)
-        self.spin_pw_cores.setToolTip("MPI ranks for pw.x (scf + nscf). HPC CPU nodes: often up to 128 ranks.")
+        self.spin_pw_cores.setValue(8)
+        self.spin_pw_cores.setToolTip(
+            "MPI ranks for pw.x (scf + nscf). Einstein/Daemon: start ~8. "
+            "NERSC CPU nodes: often up to 128 (auto when Compute Target=SLURM)."
+        )
         self.spin_wannier_cores = QSpinBox()
         self.spin_wannier_cores.setRange(1, 256)
-        self.spin_wannier_cores.setValue(36)
+        self.spin_wannier_cores.setValue(8)
         self.spin_wannier_cores.setToolTip(
-            "MPI ranks for pw2wannier90.x only. Must not exceed smallest FFT dimension "
-            "(often ≤36 for this cell). wannier90.x stays serial."
+            "MPI ranks for pw2wannier90.x only. Must not exceed smallest FFT dimension. "
+            "Einstein: keep ≤8–16. NERSC often ≤36. wannier90.x stays serial."
         )
         parallel_layout.addWidget(self.chk_mpi)
         parallel_layout.addWidget(QLabel("pw.x"))
@@ -384,7 +387,22 @@ class QEGeneratorPanel(QWidget):
         self._adapt_script_to_cluster()
         cluster = self.get_selected_cluster()
         self.btn_nersc_login.setVisible(cp.uses_sshproxy(cluster))
-
+        # Einstein / Mac daemon: NERSC-ish 128/36 ranks break FFT (nnr) and OOM.
+        # Auto-suggest small ranks when switching to non-SLURM (user can still edit).
+        if cluster is None or not cp.is_slurm(cluster):
+            if self.spin_pw_cores.value() >= 64:
+                self.spin_pw_cores.setValue(8)
+            if self.spin_wannier_cores.value() >= 32:
+                self.spin_wannier_cores.setValue(8)
+            # Einstein pw.x is CPU conda build — leave GPU mode off when leaving NERSC.
+            if self.combo_pw_backend.currentData() == "gpu":
+                self.combo_pw_backend.setCurrentIndex(0)
+        else:
+            if self.spin_pw_cores.value() <= 16:
+                self.spin_pw_cores.setValue(128)
+            if self.spin_wannier_cores.value() <= 16:
+                self.spin_wannier_cores.setValue(36)
+        self._adapt_script_to_cluster()
     def refresh_nersc_login(self):
         cluster = self.get_selected_cluster()
         if not cluster:

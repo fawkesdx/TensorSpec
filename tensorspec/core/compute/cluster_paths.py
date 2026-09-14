@@ -329,7 +329,10 @@ def mpi_launch_prefix(
         return ""
     if is_slurm(cluster):
         return f"srun -n {ranks} --cpu-bind=cores "
-    return f"mpirun --use-hwthread-cpus --oversubscribe -np {ranks} "
+    # Daemon / local: plain Open MPI. Do NOT use --use-hwthread-cpus or
+    # --oversubscribe — those break QE FFT task groups (inconsistent desc%nnr)
+    # on Einstein / Mac Studio Homebrew+OpenMPI builds.
+    return f"mpirun -np {ranks} "
 
 
 def adapt_pipeline_mpi_launcher(
@@ -339,7 +342,7 @@ def adapt_pipeline_mpi_launcher(
     """Rewrite MPI launch prefixes to match the selected compute target.
 
     SLURM (HPC) → ``srun -n N --cpu-bind=cores``
-    Daemon / local → ``mpirun --use-hwthread-cpus --oversubscribe -np N``
+    Daemon / local → ``mpirun -np N`` (no hwthread/oversubscribe)
 
     Rank counts are preserved. Safe to call at Generate and again at Run so
     switching Compute Target after Generate still uploads the right launcher.
@@ -353,7 +356,7 @@ def adapt_pipeline_mpi_launcher(
         r"(?:"
         r"srun\s+-n\s+(\d+)(?:\s+--cpu-bind=cores)?\s+"
         r"|"
-        r"mpirun(?:\s+--use-hwthread-cpus\s+--oversubscribe)?\s+-np\s+(\d+)\s+"
+        r"mpirun(?:\s+--use-hwthread-cpus)?(?:\s+--oversubscribe)?\s+-np\s+(\d+)\s+"
         r")"
     )
 
@@ -361,7 +364,7 @@ def adapt_pipeline_mpi_launcher(
         ranks = match.group(1) or match.group(2)
         if want_srun:
             return f"srun -n {ranks} --cpu-bind=cores "
-        return f"mpirun --use-hwthread-cpus --oversubscribe -np {ranks} "
+        return f"mpirun -np {ranks} "
 
     return re.sub(pattern, _replace, script)
 
