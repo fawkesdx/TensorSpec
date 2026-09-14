@@ -530,24 +530,43 @@ class CrystalEngine:
         return species, carts, tags
 
     @staticmethod
-    def _tile_into_cell(ab_2x2, species, carts, tags, n_max: int = 40) -> tuple[list, list, list]:
-        """Replicate atoms by integer combos of ab until cell is covered; fold into [0,1)."""
-        ab_inv_t = np.linalg.inv(ab_2x2.T)
+    def _tile_into_cell(moire_ab, layer_ab, species, carts, tags) -> tuple[list, list, list]:
+        """Replicate by layer in-plane lattice, keep images inside moiré cell, fold to [0,1)."""
+        moire_ab = np.asarray(moire_ab, dtype=float)
+        layer_ab = np.asarray(layer_ab, dtype=float)
+        moire_inv_t = np.linalg.inv(moire_ab.T)
+        layer_inv_t = np.linalg.inv(layer_ab.T)
+
+        # Span layer translates that can land inside the moiré parallelogram.
+        corners = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+        corner_xy = corners @ moire_ab.T
+        corner_frac = corner_xy @ layer_inv_t
+        atom_xy = np.array([np.asarray(c[:2], dtype=float) for c in carts]) if carts else np.zeros((0, 2))
+        if len(atom_xy):
+            atom_frac = atom_xy @ layer_inv_t
+            a_lo, a_hi = atom_frac.min(axis=0), atom_frac.max(axis=0)
+        else:
+            a_lo, a_hi = np.zeros(2), np.zeros(2)
+        pad = 2
+        n1_lo = int(np.floor(corner_frac[:, 0].min() - a_hi[0])) - pad
+        n1_hi = int(np.ceil(corner_frac[:, 0].max() - a_lo[0])) + pad
+        n2_lo = int(np.floor(corner_frac[:, 1].min() - a_hi[1])) - pad
+        n2_hi = int(np.ceil(corner_frac[:, 1].max() - a_lo[1])) + pad
+
         out_s, out_c, out_t = [], [], []
-        # n_max along each lattice vector is enough for small moiré n_cells
-        for n1 in range(-n_max, n_max + 1):
-            for n2 in range(-n_max, n_max + 1):
-                shift = n1 * ab_2x2[0] + n2 * ab_2x2[1]
+        for n1 in range(n1_lo, n1_hi + 1):
+            for n2 in range(n2_lo, n2_hi + 1):
+                shift = n1 * layer_ab[0] + n2 * layer_ab[1]
                 for s, c, t in zip(species, carts, tags):
-                    xy = np.asarray(c[:2]) + shift
-                    frac = xy @ ab_inv_t
+                    xy = np.asarray(c[:2], dtype=float) + shift
+                    frac = xy @ moire_inv_t
                     if np.all(frac >= -1e-8) and np.all(frac < 1.0 - 1e-8):
                         frac = frac - np.floor(frac + 1e-12)
-                        xy_f = frac @ ab_2x2.T
+                        xy_f = frac @ moire_ab.T
                         out_s.append(s)
-                        out_c.append([xy_f[0], xy_f[1], c[2]])
+                        out_c.append([float(xy_f[0]), float(xy_f[1]), float(c[2])])
                         out_t.append(t)
-        # Deduplicate near-identical sites
+        # Deduplicate near-identical sites (same layer images on boundary)
         keep = []
         seen = []
         for i, c in enumerate(out_c):
@@ -574,20 +593,32 @@ class CrystalEngine:
         if status == "perfect_alignment":
             return CrystalEngine.build_dft_aligned_stack(layers, vacuum_ang, ref_idx), info
 
-        species, carts, tags = [], [], []
-        for idx, layer in enumerate(layers):
-            s, c, t = CrystalEngine._place_layer_atoms(layer, idx, apply_twist=True)
-            species.extend(s); carts.extend(c); tags.extend(t)
-
         if status == "commensurate":
             ab = np.asarray(moire["matrix"], dtype=float)
-            n_cells = int(moire.get("n_cells", 5))
-            n_max = max(n_cells + 2, 6)
-            species, carts, tags = CrystalEngine._tile_into_cell(ab, species, carts, tags, n_max=n_max)
+            species, carts, tags = [], [], []
+            for idx, layer in enumerate(layers):
+                s, c, t = CrystalEngine._place_layer_atoms(layer, idx, apply_twist=True)
+                layer_ab = CrystalEngine._inplane_2x2(
+                    layer["struct"], layer["sc_x"], layer["sc_y"]
+                )
+                # Rotate layer lattice with the same absolute twist applied to atoms
+                theta = np.radians(float(layer["twist"]))
+                R = np.array([[np.cos(theta), -np.sin(theta)],
+                              [np.sin(theta),  np.cos(theta)]])
+                layer_ab_rot = layer_ab @ R.T
+                s, c, t = CrystalEngine._tile_into_cell(ab, layer_ab_rot, s, c, t)
+                species.extend(s)
+                carts.extend(c)
+                tags.extend(t)
             if len(species) == 0:
                 raise ValueError("Commensurate tiling produced no atoms — check moiré matrix.")
             struct = CrystalEngine._finalize_slab_structure(ab, species, carts, tags, vacuum_ang)
             return struct, info
+
+        species, carts, tags = [], [], []
+        for idx, layer in enumerate(layers):
+            s, c, t = CrystalEngine._place_layer_atoms(layer, idx, apply_twist=True)
+            species.extend(s); carts.extend(c); tags.extend(t)
 
         # incommensurate: forced strain into ref_idx ab (no extra tiling beyond SC)
         ab = CrystalEngine._inplane_2x2(
