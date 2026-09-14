@@ -1,7 +1,7 @@
 # Stack → DFT cell rebuild (Tab 3 Push)
 
 **Date:** 2026-09-13  
-**Status:** draft — awaiting user review  
+**Status:** approved — implemented on TensorSpec_GUI  
 **Branch:** `TensorSpec_GUI`
 
 ## Problem
