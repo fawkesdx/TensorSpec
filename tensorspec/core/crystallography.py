@@ -580,6 +580,15 @@ class CrystalEngine:
     def build_dft_twist_stack(layers: list[dict], vacuum_ang: float, ref_idx: int) -> tuple[Structure, dict]:
         if len(layers) != 2:
             raise ValueError("Twist DFT rebuild requires exactly 2 layers.")
+        for i, layer in enumerate(layers):
+            sc_x, sc_y = int(layer["sc_x"]), int(layer["sc_y"])
+            if sc_x != 1 or sc_y != 1:
+                raise ValueError(
+                    f"Twisted DFT cells require SC = 1×1 on every layer "
+                    f"(layer {i + 1} has {sc_x}×{sc_y}). "
+                    "Set supercell to 1×1 before Push; moiré tiling already expands the cell. "
+                    "Aligned (zero-twist) N-layer stacks may still use SC ≠ 1."
+                )
         suggested, strains = CrystalEngine.suggest_reference_layer(layers)
         l0, l1 = layers[0], layers[1]
         moire = CrystalEngine.calculate_moire_superlattice(
