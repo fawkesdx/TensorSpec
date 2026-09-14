@@ -371,6 +371,36 @@ def main() -> int:
         )
         print(f"[out] saved {npz_path}")
 
+        # Data-Viewer-loadable twin: intensity(kx,ky,E) + kx/ky/E/metadata
+        # (SimulatedARPESLoader contract). Pointwise -> exact lab k from the sidecar.
+        try:
+            from tensorspec.core.dft.sprkkr.viewer_export import arrays_to_viewer_npz
+            viewer_path = out_dir / f"{formula}_arpes_viewer.npz"
+            sidecar = arpes_workdir / "pointwise_points.json"
+            k_par_e0 = None
+            if not (args.pointwise and sidecar.is_file()):
+                ie = int(np.argmin(np.abs(ds["energy"].values)))
+                k_par_e0 = np.abs(ds["k_par"].isel(energy=ie, phi=0).values)
+            arrays_to_viewer_npz(
+                ds["I_tot"].values, ds["energy"].values, ds["theta"].values, ds["phi"].values,
+                str(viewer_path),
+                points_json=str(sidecar) if (args.pointwise and sidecar.is_file()) else None,
+                k_par_e0=k_par_e0,
+                metadata={
+                    "hv_eV": arpes_params.hv_eV, "pol": arpes_params.pol_p,
+                    "theta_ph_deg": arpes_params.theta_ph, "ework_eV": arpes_params.ework_eV,
+                    "hkl": list(arpes_params.hkl), "iq_at_surf": arpes_params.iq_at_surf,
+                    "slit_deg": args.slit, "deflector_deg": args.deflector,
+                    "manip_theta_deg": args.manip_theta, "manip_tilt_deg": args.tilt,
+                    "manip_azimuth_deg": args.azimuth, "phi_offset_deg": args.phi_offset,
+                    "pointwise": bool(args.pointwise), "pot": str(pot_path),
+                    "fermi_edge_applied": False,
+                },
+            )
+            print(f"[out] viewer npz -> {viewer_path}  (ARPES suite: Load ARPES Data)")
+        except Exception as exc:  # never lose the run over an export nicety
+            print(f"[out] viewer npz export failed: {exc}")
+
         for spc in result.spc_paths:
             dest = out_dir / Path(spc).name
             if str(Path(spc).resolve()) != str(dest.resolve()):
