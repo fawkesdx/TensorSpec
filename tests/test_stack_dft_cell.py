@@ -89,3 +89,42 @@ def test_twist_requires_two_layers():
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+def test_twist_commensurate_fills_moire_cell():
+    """Identical lattices + twist marked commensurate must fill moiré area, not one SC."""
+    g = _mono(2.46)
+    twist = 21.5  # calculate_moire_superlattice marks this commensurate (n_cells≈3)
+    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, twist)]
+    moire = CrystalEngine.calculate_moire_superlattice(g, g, 0.0, twist)
+    assert moire["status"] == "commensurate"
+    n_cells = int(moire["n_cells"])
+    assert n_cells >= 2
+
+    struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=0)
+    assert info["status"] == "commensurate"
+
+    ab = np.asarray(moire["matrix"], dtype=float)
+    area_m = abs(np.linalg.det(ab))
+    area_l = abs(np.linalg.det(CrystalEngine._inplane_2x2(g)))
+    # 2 atoms/cell × 2 layers × area ratio
+    expected = 2 * 2 * (area_m / area_l)
+    # Must be far above a single primitive bilayer (4); allow boundary/dedup slack
+    assert len(struct) > 4 * n_cells
+    assert abs(len(struct) - expected) / expected < 0.35
+
+
+def test_twist_commensurate_empty_tile_raises(monkeypatch):
+    """Keep hard fail if tiling yields no atoms."""
+    g = _mono(2.46)
+    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, 21.5)]
+
+    def _empty(*args, **kwargs):
+        return [], [], []
+
+    monkeypatch.setattr(CrystalEngine, "_tile_into_cell", staticmethod(_empty))
+    try:
+        CrystalEngine.build_dft_twist_stack(layers, 20.0, 0)
+        assert False, "expected ValueError"
+    except ValueError as e:
+        assert "no atoms" in str(e).lower() or "tiling" in str(e).lower()
+
