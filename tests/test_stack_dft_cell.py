@@ -90,6 +90,23 @@ def test_twist_requires_two_layers():
     except ValueError:
         pass
 
+
+def test_twist_rejects_sc_not_1x1():
+    """Twist rebuild must not SC-expand layers; moiré tiling already fills the cell."""
+    g = _mono(2.46)
+    layers = [
+        _layer(g, 0.0, 0.0, sc_x=2, sc_y=1),
+        _layer(g, 3.4, 21.5, sc_x=1, sc_y=1),
+    ]
+    try:
+        CrystalEngine.build_dft_twist_stack(layers, 20.0, 0)
+        assert False, "expected ValueError"
+    except ValueError as e:
+        msg = str(e).lower()
+        assert "1×1" in str(e) or "1x1" in msg
+        assert "sc" in msg or "supercell" in msg
+
+
 def test_twist_commensurate_fills_moire_cell():
     """Identical lattices + twist marked commensurate must fill moiré area, not one SC."""
     g = _mono(2.46)
