@@ -49,3 +49,24 @@ def test_suggest_ref_prefers_closer_lattice():
     assert len(strains) == 2
     assert idx in (0, 1)
     assert strains[idx] == min(strains)
+
+
+def test_aligned_bilayer_not_dummy_and_vacuum():
+    g = _mono(2.46)
+    layers = [_layer(g, 0.0), _layer(g, 3.4)]
+    vacuum = 20.0
+    s = CrystalEngine.build_dft_aligned_stack(layers, vacuum_ang=vacuum, ref_idx=0)
+    assert s.lattice.a < 100.0
+    assert s.lattice.a != 500.0
+    thickness = 3.4  # |z1-z0| from spinboxes (same placement)
+    # c must be roughly thickness + vacuum (allow builder offset conventions ±2 Å)
+    assert abs(s.lattice.c - (thickness + vacuum)) < 2.5
+    assert "layer_tag" in s.site_properties
+    assert len(s) == 4
+
+
+def test_aligned_mismatch_flag():
+    layers = [_layer(_mono(2.46), 0.0), _layer(_mono(2.50), 3.4)]
+    assert CrystalEngine.aligned_needs_strain_dialog(layers, ref_idx=0) is True
+    same = [_layer(_mono(2.46), 0.0), _layer(_mono(2.46), 3.4)]
+    assert CrystalEngine.aligned_needs_strain_dialog(same, ref_idx=0) is False

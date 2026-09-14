@@ -448,3 +448,62 @@ class CrystalEngine:
         else:
             best = ties[0]
         return best, strains
+
+    @staticmethod
+    def aligned_needs_strain_dialog(layers: list[dict], ref_idx: int, tol_percent: float = 1.0) -> bool:
+        ref = CrystalEngine._inplane_2x2(layers[ref_idx]["struct"], layers[ref_idx]["sc_x"], layers[ref_idx]["sc_y"])
+        for j, layer in enumerate(layers):
+            if j == ref_idx:
+                continue
+            other = CrystalEngine._inplane_2x2(layer["struct"], layer["sc_x"], layer["sc_y"])
+            if CrystalEngine.inplane_strain_percent(ref, other) > tol_percent:
+                return True
+        return False
+
+    @staticmethod
+    def _finalize_slab_structure(ab_2x2, species, carts_xyz, tags, vacuum_ang: float) -> Structure:
+        """Build lattice from in-plane 2x2 + vacuum along c; center slab in c."""
+        carts = np.asarray(carts_xyz, dtype=float)
+        zmin, zmax = float(carts[:, 2].min()), float(carts[:, 2].max())
+        zspan = max(zmax - zmin, 0.0)
+        c = zspan + float(vacuum_ang)
+        z_center = 0.5 * (zmin + zmax)
+        carts[:, 2] = carts[:, 2] - z_center + 0.5 * c
+        matrix = np.zeros((3, 3), dtype=float)
+        matrix[:2, :2] = ab_2x2
+        matrix[2, 2] = c
+        lat = Lattice(matrix)
+        if lat.a >= 499.0:
+            raise ValueError(f"In-plane lattice too large for DFT cell: a={lat.a:.1f} Å")
+        return Structure(
+            lat, species, carts, coords_are_cartesian=True,
+            site_properties={"layer_tag": tags},
+        )
+
+    @staticmethod
+    def build_dft_aligned_stack(layers: list[dict], vacuum_ang: float, ref_idx: int = 0) -> Structure:
+        if not layers:
+            raise ValueError("No layers to build DFT stack.")
+        if ref_idx < 0 or ref_idx >= len(layers):
+            raise ValueError("ref_idx out of range.")
+        ab = CrystalEngine._inplane_2x2(
+            layers[ref_idx]["struct"], layers[ref_idx]["sc_x"], layers[ref_idx]["sc_y"]
+        )
+        ab_inv_t = np.linalg.inv(ab.T)
+        species, carts, tags = [], [], []
+        for idx, l in enumerate(layers):
+            supercell = l["struct"] * (l["sc_x"], l["sc_y"], 1)
+            coords = supercell.cart_coords.copy()
+            center_xy = np.mean(coords[:, :2], axis=0)
+            coords[:, :2] -= center_xy
+            # aligned: no twist; z placement matches build_heterostructure_stack
+            coords[:, 2] = coords[:, 2] - np.mean(coords[:, 2]) + (float(l["z_shift"]) - 12.5)
+            for i, site in enumerate(supercell):
+                xy = coords[i, :2]
+                frac_xy = xy @ ab_inv_t
+                frac_xy = frac_xy - np.floor(frac_xy)
+                xy_in_ref = frac_xy @ ab.T
+                species.append(site.specie.symbol)
+                carts.append([xy_in_ref[0], xy_in_ref[1], coords[i, 2]])
+                tags.append(f"{site.specie.symbol}_L{idx + 1}")
+        return CrystalEngine._finalize_slab_structure(ab, species, carts, tags, vacuum_ang)
