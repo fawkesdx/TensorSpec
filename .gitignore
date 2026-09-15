@@ -69,3 +69,7 @@ tensorspec_clusters.json
 graphify-out/
 .graphifyignore
 OSKI/
+
+# OSKI docs + build tarballs — OSKI is its own repo (fawkesdx/oski), keep out of TensorSpec
+docs/OSKI_*
+oski_*.tar.gz
