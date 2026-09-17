@@ -193,7 +193,7 @@ def uses_sshproxy(cluster: Optional[Mapping[str, Any]]) -> bool:
 
 # Flat files useful for local ARPES / Chinook / Grizzly after a QE+Wannier run.
 # Skips wavefunctions and large Wannier intermediates (.mmn/.amn/.eig/.chk).
-_ARPES_FETCH_EXACT = frozenset({"sys.out.full"})
+_ARPES_FETCH_EXACT = frozenset({"sys.out.full", "fermi_energy.txt"})
 _ARPES_FETCH_SUFFIXES = (
     "_hr.dat",
     ".out",

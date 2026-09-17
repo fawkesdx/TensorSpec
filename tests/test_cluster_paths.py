@@ -143,6 +143,7 @@ def test_uses_sshproxy_and_arpes_fetch_filter():
     assert is_arpes_fetch_candidate("scf.out")
     assert is_arpes_fetch_candidate("sys.out.full")
     assert is_arpes_fetch_candidate("scf.in")
+    assert is_arpes_fetch_candidate("FERMI_ENERGY.txt")
     assert not is_arpes_fetch_candidate("wannier90.mmn")
     assert not is_arpes_fetch_candidate("wannier90.amn")
     assert not is_arpes_fetch_candidate("wannier90.eig")
