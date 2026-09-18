@@ -141,6 +141,10 @@ def test_uses_sshproxy_and_arpes_fetch_filter():
 
     assert is_arpes_fetch_candidate("wannier90_hr.dat")
     assert is_arpes_fetch_candidate("scf.out")
+    assert is_arpes_fetch_candidate("relax.out")
+    assert is_arpes_fetch_candidate("relaxed_structure.cif")
+    assert is_arpes_fetch_candidate("structure_template.cif")
+    assert is_arpes_fetch_candidate("tensorspec_relax_meta.json")
     assert is_arpes_fetch_candidate("sys.out.full")
     assert is_arpes_fetch_candidate("scf.in")
     assert is_arpes_fetch_candidate("FERMI_ENERGY.txt")

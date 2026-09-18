@@ -8,9 +8,14 @@ from PySide6.QtWidgets import (QWidget, QFormLayout, QGroupBox, QComboBox,
                                QMessageBox, QPlainTextEdit, QVBoxLayout, QCheckBox, QLabel,
                                QProgressDialog, QApplication)
 
+from pymatgen.core import Structure
+
 from tensorspec.core.dft.qe_generator import QEInputGenerator
 from tensorspec.core.compute import cluster_paths as cp
+from tensorspec.core.workspace import global_workspace
 from tensorspec.gui.services.nersc_auth import refresh_sshproxy_login
+
+RELAXED_CIF = "relaxed_structure.cif"
 
 
 class QEFetchThread(QThread):
@@ -370,6 +375,14 @@ class QEGeneratorPanel(QWidget):
         fetch_row.addWidget(self.btn_fetch_wan)
         qe_form.addRow(fetch_row)
 
+        self.btn_push_relaxed = QPushButton("Push relaxed structure to workspace")
+        self.btn_push_relaxed.setEnabled(False)
+        self.btn_push_relaxed.setToolTip(
+            "Load relaxed_structure.cif from the output directory into Global Workspace."
+        )
+        self.btn_push_relaxed.clicked.connect(self.push_relaxed_to_workspace)
+        qe_form.addRow(self.btn_push_relaxed)
+
         self.main_layout.addWidget(qe_group)
 
         # Live Console Elements
@@ -391,8 +404,10 @@ class QEGeneratorPanel(QWidget):
         self.btn_run_qe.clicked.connect(self.run_qe_script)
         self.chk_mpi.stateChanged.connect(self._sync_mpi_spinboxes)
         self.combo_cluster.currentIndexChanged.connect(self._on_cluster_changed)
+        self.line_outdir.textChanged.connect(self._update_push_relaxed_button)
         self._sync_mpi_spinboxes()
         self._on_cluster_changed()
+        self._update_push_relaxed_button()
 
     def _on_cluster_changed(self, _index=None):
         self._adapt_script_to_cluster()
@@ -556,9 +571,49 @@ class QEGeneratorPanel(QWidget):
             self._fetch_progress.close()
             self._fetch_progress = None
         if success:
+            self._update_push_relaxed_button()
             QMessageBox.information(self, "Success", message)
         else:
             QMessageBox.critical(self, "Fetch Failed", message)
+
+    def _relaxed_cif_path(self) -> str:
+        out_dir = self.line_outdir.text().strip() or "./qe_workspace"
+        return os.path.join(out_dir, RELAXED_CIF)
+
+    def _update_push_relaxed_button(self, *_args) -> None:
+        self.btn_push_relaxed.setEnabled(os.path.isfile(self._relaxed_cif_path()))
+
+    def push_relaxed_to_workspace(self) -> None:
+        cif_path = self._relaxed_cif_path()
+        if not os.path.isfile(cif_path):
+            QMessageBox.warning(
+                self,
+                "Missing relaxed structure",
+                f"No {RELAXED_CIF} in the output directory.\n\n"
+                "Run relax + sync on the cluster, then Fetch ARPES Package.",
+            )
+            self._update_push_relaxed_button()
+            return
+        try:
+            struct = Structure.from_file(cif_path)
+            out_dir = self.line_outdir.text().strip() or "./qe_workspace"
+            basename = os.path.basename(os.path.normpath(out_dir)) or "qe_workspace"
+            name = f"qe_relaxed_{basename}"
+            global_workspace.push_crystal_structure(name, struct)
+            a, b, c = struct.lattice.a, struct.lattice.b, struct.lattice.c
+            QMessageBox.information(
+                self,
+                "Success",
+                f"Pushed '{name}' to Global Workspace.\n"
+                f"Cell a={a:.3f} Å, b={b:.3f} Å, c={c:.3f} Å.\n"
+                "Load it from the Crystal or DFT suite browser.",
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Push failed",
+                f"Could not load or push {RELAXED_CIF}:\n{exc}",
+            )
     def _write_relax_sidecar_files(
         self,
         out_dir: str,
@@ -868,6 +923,7 @@ class QEGeneratorPanel(QWidget):
     def calculation_finished(self, success, message):
         self.btn_run_qe.setEnabled(True)
         if success:
+            self._update_push_relaxed_button()
             self.log_display.appendPlainText(f"\n--- SUCCESS: {message} ---")
         else:
             self.log_display.appendPlainText(f"\n--- ERROR: {message} ---")
