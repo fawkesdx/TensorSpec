@@ -158,6 +158,57 @@ def test_twist_commensurate_fills_moire_cell():
     assert n_l1 * 2 == len(struct)
 
 
+def test_commensurate_lattice_is_moire_matrix():
+    """Commensurate rebuild must use moiré ab, not reference layer ab."""
+    g = _mono(2.46)
+    twist = 21.5
+    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, twist)]
+    moire = CrystalEngine.calculate_moire_superlattice(g, g, 0.0, twist)
+    assert moire["status"] == "commensurate"
+    ab_moire = np.asarray(moire["matrix"], dtype=float)
+    struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=1)
+    assert info["status"] == "commensurate"
+    assert abs(struct.lattice.a - float(np.linalg.norm(ab_moire[0]))) < 0.02
+
+
+def test_commensurate_build_matches_expected_atom_count():
+    g = _mono(2.46)
+    twist = 21.5
+    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, twist)]
+    moire = CrystalEngine.calculate_moire_superlattice(g, g, 0.0, twist)
+    expected = CrystalEngine.expected_commensurate_atom_count(moire, layers)
+    struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=0)
+    assert info["status"] == "commensurate"
+    assert abs(len(struct) - expected) / expected < 0.35
+
+
+def test_incommensurate_uses_ref_lattice():
+    """Incommensurate path strains onto ref_idx in-plane cell."""
+    g = _mono(2.46)
+    bn = _mono(2.50, ("B", "N"))
+    layers = [_layer(g, 0.0, 0.0), _layer(bn, 3.4, 30.0)]
+    moire = CrystalEngine.calculate_moire_superlattice(g, bn, 0.0, 30.0)
+    assert moire["status"] == "incommensurate"
+    struct0, info0 = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=0)
+    struct1, info1 = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=1)
+    assert info0["status"] == "incommensurate"
+    assert info1["status"] == "incommensurate"
+    assert abs(struct0.lattice.a - 2.46) < 0.02
+    assert abs(struct1.lattice.a - 2.50) < 0.02
+
+
+def test_gr_hbn_30deg_isotropic_not_frobenius_stretch():
+    """Gr/hBN 30°: isotropic stretch ~1.6%, Frobenius+twist score ~50% — not the same."""
+    g = _mono(2.46)
+    bn = _mono(2.50, ("B", "N"))
+    layers = [_layer(g, 0.0, 0.0), _layer(bn, 3.4, 30.0)]
+    _, strains = CrystalEngine.suggest_reference_layer(layers)
+    iso = CrystalEngine.isotropic_match_strain_percent(2.46, 2.50)
+    assert abs(iso - 1.626) < 0.02
+    assert min(strains) > 40.0
+    assert iso < 5.0
+
+
 def test_twist_commensurate_empty_tile_raises(monkeypatch):
     """Keep hard fail if tiling yields no atoms."""
     g = _mono(2.46)
