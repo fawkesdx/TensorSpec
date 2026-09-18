@@ -494,12 +494,32 @@ class CrystalViewerSuite(QWidget):
             lay = QVBoxLayout(dlg)
             sug_name = names[suggested]
             sug_pct = strains[suggested]
-            lay.addWidget(QLabel(
+            a_ref = float(layers[suggested]["struct"].lattice.a)
+            iso_lines = []
+            for i, (name_i, layer) in enumerate(zip(names, layers)):
+                if i == suggested:
+                    continue
+                a_native = float(layer["struct"].lattice.a)
+                iso = CrystalEngine.isotropic_match_strain_percent(a_native, a_ref)
+                iso_lines.append(f"Isotropic lattice strain on {name_i}: {iso:+.2f}%")
+            if kind == "twist":
+                suggest_line = (
+                    f"Suggestion score (includes twist): {sug_pct:.2f}% ({sug_name})."
+                )
+            else:
+                suggest_line = (
+                    f"Suggested reference (smallest total strain): {sug_name} (~{sug_pct:.2f}%)."
+                )
+            dialog_text = (
                 f"Status: {dialog_status}.\n\n"
                 "To run DFT, non-reference layer(s) will be stretched/compressed to match the "
                 "reference layer's in-plane cell. Band structures will reflect that forced strain.\n\n"
-                f"Suggested reference (smallest total strain): {sug_name} (~{sug_pct:.2f}%)."
-            ))
+                + "\n".join(iso_lines)
+                + ("\n\n" if iso_lines else "\n")
+                + suggest_line
+                + "\n\nRun QE Relax ions + vdW after Push for better interlayer geometry."
+            )
+            lay.addWidget(QLabel(dialog_text))
             lay.addWidget(QLabel("Reference layer:"))
             combo = QComboBox()
             for i, name_i in enumerate(names):
