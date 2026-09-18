@@ -1,7 +1,9 @@
 import json
 import os
 import subprocess
+import sys
 import stat as statmod
+from pathlib import Path
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (QWidget, QFormLayout, QGroupBox, QComboBox, 
                                QSpinBox, QHBoxLayout, QLineEdit, QPushButton, 
@@ -16,6 +18,30 @@ from tensorspec.core.workspace import global_workspace
 from tensorspec.gui.services.nersc_auth import refresh_sshproxy_login
 
 RELAXED_CIF = "relaxed_structure.cif"
+_LOCAL_REPO_ROOT = str(Path(__file__).resolve().parents[3])
+
+
+def pipeline_python_env(cluster=None) -> tuple[str, str]:
+    """Return (bash_exports, powershell_assigns) for PYTHON + PYTHONPATH.
+
+    Remote: cluster ``python`` / ``repo_root``. Local: this interpreter + checkout.
+    Needed so ``"$PYTHON" -m tensorspec.core.dft.sync_after_relax`` works in pipelines.
+    """
+    if cluster:
+        py = cp.python_bin(cluster)
+        root = cp.repo_root(cluster)
+    else:
+        py = sys.executable
+        root = _LOCAL_REPO_ROOT
+    bash = (
+        f'export PYTHON="{py}"\n'
+        f'export PYTHONPATH="{root}:${{PYTHONPATH}}"\n'
+    )
+    ps = (
+        f"$env:PYTHON='{py}'\n"
+        f"$env:PYTHONPATH='{root};' + $env:PYTHONPATH\n"
+    )
+    return bash, ps
 
 
 class QEFetchThread(QThread):
@@ -262,15 +288,21 @@ class QEGeneratorPanel(QWidget):
         self.combo_geometry.addItem("Relax ions (fixed cell)", "relax_ions")
         self.combo_geometry.addItem("SCF only (no relax)", "scf_only")
         self.combo_geometry.addItem("vc-relax (advanced)", "vc_relax")
+        self.combo_geometry.setToolTip(
+            "Relax ions: fixed cell (default for 2D stacks).\n"
+            "vc-relax: also relaxes cell vectors — sync_after_relax currently\n"
+            "updates ionic positions only (cell from template until CELL parse lands)."
+        )
         qe_form.addRow("Geometry:", self.combo_geometry)
 
         self.combo_selective = QComboBox()
         self.combo_selective.addItem("None", "none")
-        self.combo_selective.addItem("Fix reference layer", "fix_reference")
-        self.combo_selective.addItem("Fix bottom layer", "fix_bottom")
+        self.combo_selective.addItem("Fix stack layer 1 (_L1)", "fix_reference")
+        self.combo_selective.addItem("Fix bottom layer (min z)", "fix_bottom")
         self.combo_selective.setToolTip(
             "Hold selected atoms fixed during ionic relax (QE if_pos).\n"
-            "Reference layer: sites tagged _L1 (from Crystal Push stack rebuild).\n"
+            "Stack layer 1: sites tagged _L1 (first layer in Push stack order,\n"
+            "not necessarily the Push dialog reference lattice).\n"
             "Bottom layer: all sites at minimum fractional z."
         )
         qe_form.addRow("Fix atoms during relax:", self.combo_selective)
@@ -504,14 +536,13 @@ class QEGeneratorPanel(QWidget):
         gpu_ranks = dev.count(",") + 1
         return True, dev, gpu_ranks, gpu_ranks, gpu_ranks
 
-    def _pipeline_env_header(self, use_gpu: bool, cuda_devices: str) -> str:
-        if not use_gpu:
-            return "export OMP_NUM_THREADS=1\n\n"
-        return (
-            "export OMP_NUM_THREADS=1\n"
-            f"export CUDA_VISIBLE_DEVICES={cuda_devices}\n"
-            "# QE GPU: pw.x must be CUDA build; MPI ranks ≈ number of GPUs\n\n"
-        )
+    def _pipeline_env_header(self, use_gpu: bool, cuda_devices: str, cluster=None) -> str:
+        py_bash, _ = pipeline_python_env(cluster)
+        lines = ["export OMP_NUM_THREADS=1", py_bash.rstrip()]
+        if use_gpu:
+            lines.append(f"export CUDA_VISIBLE_DEVICES={cuda_devices}")
+            lines.append("# QE GPU: pw.x must be CUDA build; MPI ranks ≈ number of GPUs")
+        return "\n".join(lines) + "\n\n"
 
     def _adapt_script_to_cluster(self, _index=None):
         """Rewrite MPI launcher in Pipeline Script for current Compute Target."""
@@ -712,6 +743,7 @@ class QEGeneratorPanel(QWidget):
                 "--out-dir . --template-cif structure_template.cif"
             )
         if os.name == "nt":
+            _, py_ps = pipeline_python_env(None)
             hse_block = (
                 "# ==================================================================\n"
                 "# ADVANCED: HSE HYBRID FUNCTIONAL SWITCH\n"
@@ -734,6 +766,7 @@ class QEGeneratorPanel(QWidget):
                 )
             return (
                 "$env:OMP_NUM_THREADS=1\n"
+                + py_ps
                 + gpu_line
                 + "\n"
                 + hse_block
@@ -884,7 +917,7 @@ class QEGeneratorPanel(QWidget):
                 wan_ranks,
                 use_mpi=self.chk_mpi.isChecked(),
             )
-            env_header = self._pipeline_env_header(use_gpu, cuda_devices)
+            env_header = self._pipeline_env_header(use_gpu, cuda_devices, cluster)
 
             script_text = self._build_pipeline_script(
                 kmesh=kmesh,
