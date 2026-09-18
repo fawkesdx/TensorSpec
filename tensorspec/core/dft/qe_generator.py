@@ -200,12 +200,14 @@ K_POINTS {{automatic}}
 /
 """
 
+        # forc_conv_thr lives in &CONTROL (QE INPUT_PW), not &IONS.
         relax_content = f"""&CONTROL
   calculation = '{calculation}'
   prefix = '{self.prefix}'
   outdir = './out/'
   pseudo_dir = './pseudo/'
   wf_collect = .true.
+  forc_conv_thr = 1.0d-3
 /
 &SYSTEM
   ibrav = {ibrav}
@@ -223,7 +225,6 @@ K_POINTS {{automatic}}
 /
 &IONS
   ion_dynamics = 'bfgs'
-  forc_conv_thr = 1.0d-3
 /
 {cell_block}ATOMIC_SPECIES
 {atomic_species_str}
