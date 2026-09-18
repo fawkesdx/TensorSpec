@@ -21,6 +21,10 @@ def _layer(struct, z=0.0, twist=0.0, sc_x=1, sc_y=1):
     }
 
 
+def test_isotropic_gr_on_hbn():
+    assert abs(CrystalEngine.isotropic_match_strain_percent(2.46, 2.5) - 1.62601626) < 1e-3
+
+
 def test_classify_empty():
     assert CrystalEngine.classify_stack_for_dft([]) == "empty"
 

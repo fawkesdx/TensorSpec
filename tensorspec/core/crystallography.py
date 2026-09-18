@@ -401,6 +401,13 @@ class CrystalEngine:
         return "aligned"
 
     @staticmethod
+    def isotropic_match_strain_percent(a_native: float, a_ref: float) -> float:
+        """Percent stretch of native a to match reference: (a_ref - a_native) / a_native * 100."""
+        if abs(a_native) < 1e-12:
+            raise ValueError("Degenerate native lattice parameter.")
+        return float((a_ref - a_native) / a_native * 100.0)
+
+    @staticmethod
     def inplane_strain_percent(ref_2x2: np.ndarray, other_2x2: np.ndarray) -> float:
         ref = np.asarray(ref_2x2, dtype=float)
         other = np.asarray(other_2x2, dtype=float)
