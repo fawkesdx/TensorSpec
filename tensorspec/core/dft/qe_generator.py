@@ -11,8 +11,12 @@ class QEInputGenerator:
     def __init__(self, structure: Structure):
         self.structure = structure
         self.prefix = "tensorspec_run"
-        self.app_pseudo_dir = "./pseudo" 
-        
+        self.app_pseudo_dir = "./pseudo"
+
+    def apply_structure(self, structure: Structure) -> None:
+        """Replace the working structure (e.g. after ionic relaxation)."""
+        self.structure = structure
+
     def _generate_atomic_species(self, out_dir: str, use_soc: bool = False) -> str:
         """Extracts unique elements, finds their UPF files based on SOC toggle, and copies them to the run directory."""
         species = []
