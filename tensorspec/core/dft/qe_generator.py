@@ -69,7 +69,11 @@ class QEInputGenerator:
                     kpts.append(f"  {x/kmesh[0]:.10f}  {y/kmesh[1]:.10f}  {z/kmesh[2]:.10f}")
         return kpts
 
-    def write_scf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), use_soc: bool = False, use_gpu: bool = False):
+    def _vdw_system_flag(self, vdw_dft_d3: bool) -> str:
+        """Optional DFT-D3 correction for layered vdW systems."""
+        return "\n  vdw_corr = 'dft-d3'" if vdw_dft_d3 else ""
+
+    def write_scf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), use_soc: bool = False, use_gpu: bool = False, vdw_dft_d3: bool = False):
         """Generates the main self-consistent field (SCF) input file."""
         os.makedirs(out_dir, exist_ok=True)
         scf_path = os.path.join(out_dir, "scf.in")
@@ -84,6 +88,7 @@ class QEInputGenerator:
         # Use the UI toggle to inject SOC / optional QE CUDA offload
         soc_flags = "\n  noncolin = .true.\n  lspinorb = .true." if use_soc else ""
         gpu_flags = "\n  use_gpu = .true." if use_gpu else ""
+        vdw_flags = self._vdw_system_flag(vdw_dft_d3)
 
         scf_content = f"""&CONTROL
   calculation = 'scf'
@@ -100,7 +105,7 @@ class QEInputGenerator:
   ecutrho = {ecutrho}
   occupations = 'smearing'
   smearing = 'marzari-vanderbilt'
-  degauss = 0.01{soc_flags}{gpu_flags}
+  degauss = 0.01{soc_flags}{gpu_flags}{vdw_flags}
 /
 &ELECTRONS
   conv_thr = 1.0d-8
@@ -120,7 +125,81 @@ K_POINTS {{automatic}}
             f.write(scf_content)
         return scf_path
 
-    def write_nscf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), nbnd: int = 12, use_soc: bool = False, use_gpu: bool = False):
+    def write_relax_input(
+        self,
+        out_dir: str,
+        *,
+        ecutwfc: float = 60.0,
+        ecutrho: float = 240.0,
+        kmesh: tuple = (6, 6, 6),
+        use_soc: bool = False,
+        use_gpu: bool = False,
+        vdw_dft_d3: bool = False,
+        calculation: str = "relax",
+        if_pos=None,
+    ) -> str:
+        """Generates ionic or variable-cell relaxation input (relax.in)."""
+        os.makedirs(out_dir, exist_ok=True)
+        relax_path = os.path.join(out_dir, "relax.in")
+
+        ibrav = 0
+        nat = len(self.structure)
+        ntyp = len(self.structure.composition.elements)
+
+        atomic_species_str = self._generate_atomic_species(out_dir, use_soc)
+
+        soc_flags = "\n  noncolin = .true.\n  lspinorb = .true." if use_soc else ""
+        gpu_flags = "\n  use_gpu = .true." if use_gpu else ""
+        vdw_flags = self._vdw_system_flag(vdw_dft_d3)
+
+        cell_block = ""
+        if calculation == "vc-relax":
+            cell_block = """&CELL
+  cell_dynamics = 'bfgs'
+  press = 0.0
+/
+"""
+
+        relax_content = f"""&CONTROL
+  calculation = '{calculation}'
+  prefix = '{self.prefix}'
+  outdir = './out/'
+  pseudo_dir = './pseudo/'
+  wf_collect = .true.
+/
+&SYSTEM
+  ibrav = {ibrav}
+  nat = {nat}
+  ntyp = {ntyp}
+  ecutwfc = {ecutwfc}
+  ecutrho = {ecutrho}
+  occupations = 'smearing'
+  smearing = 'marzari-vanderbilt'
+  degauss = 0.01{soc_flags}{gpu_flags}{vdw_flags}
+/
+&ELECTRONS
+  conv_thr = 1.0d-8
+  mixing_beta = 0.7
+/
+&IONS
+  ion_dynamics = 'bfgs'
+  forc_conv_thr = 1.0d-3
+/
+{cell_block}ATOMIC_SPECIES
+{atomic_species_str}
+
+{self._generate_cell_parameters()}
+
+{self._generate_atomic_positions(if_pos=if_pos)}
+
+K_POINTS {{automatic}}
+  {kmesh[0]} {kmesh[1]} {kmesh[2]}  0 0 0
+"""
+        with open(relax_path, "w") as f:
+            f.write(relax_content)
+        return relax_path
+
+    def write_nscf_input(self, out_dir: str, ecutwfc: float = 60.0, ecutrho: float = 240.0, kmesh: tuple = (6, 6, 6), nbnd: int = 12, use_soc: bool = False, use_gpu: bool = False, vdw_dft_d3: bool = False):
         """Generates the non-self-consistent field (NSCF) input file with explicit k-points."""
         nscf_path = os.path.join(out_dir, "nscf.in")
         abs_out = os.path.abspath(os.path.join(out_dir, "out")) + "/"
@@ -137,6 +216,7 @@ K_POINTS {{automatic}}
         # Use the UI toggle to inject SOC / optional QE CUDA offload
         soc_flags = "\n  noncolin = .true.\n  lspinorb = .true." if use_soc else ""
         gpu_flags = "\n  use_gpu = .true." if use_gpu else ""
+        vdw_flags = self._vdw_system_flag(vdw_dft_d3)
 
         nscf_content = f"""&CONTROL
   calculation = 'nscf'
@@ -156,7 +236,7 @@ K_POINTS {{automatic}}
   ecutrho = {ecutrho}
   occupations = 'smearing'
   smearing = 'marzari-vanderbilt'
-  degauss = 0.01{soc_flags}{gpu_flags}
+  degauss = 0.01{soc_flags}{gpu_flags}{vdw_flags}
 /
 &ELECTRONS
   conv_thr = 1.0d-8
@@ -276,13 +356,17 @@ end kpoints
             params.append("  " + "  ".join([f"{v:.6f}" for v in row]))
         return "\n".join(params)
 
-    def _generate_atomic_positions(self) -> str:
+    def _generate_atomic_positions(self, if_pos=None) -> str:
         """Converts PyMatgen fractional coordinates to QE format."""
         positions = ["ATOMIC_POSITIONS {crystal}"]
-        for site in self.structure:
+        for i, site in enumerate(self.structure):
             coords = "  ".join([f"{c:.6f}" for c in site.frac_coords])
             # Use pure element symbol (e.g. 'Te') instead of string with oxidation state (e.g. 'Te2-')
-            positions.append(f" {site.specie.symbol}  {coords}")
+            line = f" {site.specie.symbol}  {coords}"
+            if if_pos is not None:
+                flags = if_pos[i]
+                line += f"  {flags[0]}  {flags[1]}  {flags[2]}"
+            positions.append(line)
         return "\n".join(positions)
     
     def _detect_soc(self) -> bool:
