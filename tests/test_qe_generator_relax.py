@@ -80,3 +80,61 @@ def test_scf_nscf_vdw_flag(tmp_path, monkeypatch):
     nscf_path = gen.write_nscf_input(str(tmp_path), vdw_dft_d3=True)
     assert "vdw_corr = 'dft-d3'" in open(scf_path).read()
     assert "vdw_corr = 'dft-d3'" in open(nscf_path).read()
+
+
+def _hex_carbon_gen(monkeypatch):
+    lat = Lattice.hexagonal(2.5, 23.4)
+    s = Structure(lat, ["C", "C"], [[1 / 3, 2 / 3, 0.4], [2 / 3, 1 / 3, 0.4]])
+    gen = QEInputGenerator(s)
+    monkeypatch.setattr(
+        gen,
+        "_generate_atomic_species",
+        lambda out_dir, use_soc=False: " C  12.01  C.upf",
+    )
+    return gen, s
+
+
+def test_rewrite_scf_uses_new_coords(tmp_path, monkeypatch):
+    gen, s = _hex_carbon_gen(monkeypatch)
+    gen.write_scf_input(str(tmp_path), ecutwfc=40, kmesh=(4, 4, 1))
+    assert "0.400000" in open(tmp_path / "scf.in").read()
+    assert "0.450000" not in open(tmp_path / "scf.in").read()
+
+    s2 = s.copy()
+    s2.translate_sites(list(range(len(s2))), [0, 0, 0.05], frac_coords=True)
+    gen.apply_structure(s2)
+    gen.write_scf_input(str(tmp_path), ecutwfc=40, kmesh=(4, 4, 1))
+
+    text = open(tmp_path / "scf.in").read()
+    assert "0.450000" in text
+    assert "0.400000" not in text
+
+
+def test_rewrite_nscf_uses_new_coords(tmp_path, monkeypatch):
+    gen, s = _hex_carbon_gen(monkeypatch)
+    gen.write_nscf_input(str(tmp_path), ecutwfc=40, kmesh=(4, 4, 1))
+    assert "0.400000" in open(tmp_path / "nscf.in").read()
+
+    s2 = s.copy()
+    s2.translate_sites(list(range(len(s2))), [0, 0, 0.05], frac_coords=True)
+    gen.apply_structure(s2)
+    gen.write_nscf_input(str(tmp_path), ecutwfc=40, kmesh=(4, 4, 1))
+
+    text = open(tmp_path / "nscf.in").read()
+    assert "0.450000" in text
+    assert "0.400000" not in text
+
+
+def test_rewrite_wannier_uses_new_coords(tmp_path, monkeypatch):
+    gen, s = _hex_carbon_gen(monkeypatch)
+    gen.write_wannier90_input(str(tmp_path), kmesh=(4, 4, 1))
+    assert "0.400000" in open(tmp_path / "wannier90.win").read()
+
+    s2 = s.copy()
+    s2.translate_sites(list(range(len(s2))), [0, 0, 0.05], frac_coords=True)
+    gen.apply_structure(s2)
+    gen.write_wannier90_input(str(tmp_path), kmesh=(4, 4, 1))
+
+    text = open(tmp_path / "wannier90.win").read()
+    assert "0.450000" in text
+    assert "0.400000" not in text
