@@ -408,6 +408,23 @@ class CrystalEngine:
         return float((a_ref - a_native) / a_native * 100.0)
 
     @staticmethod
+    def expected_commensurate_atom_count(moire: dict, layers: list[dict]) -> float:
+        """Expected atom count when tiling each layer into a commensurate moiré cell."""
+        ab = np.asarray(moire["matrix"], dtype=float)
+        area_m = abs(float(np.linalg.det(ab)))
+        total = 0.0
+        for layer in layers:
+            layer_ab = CrystalEngine._inplane_2x2(
+                layer["struct"], layer["sc_x"], layer["sc_y"]
+            )
+            area_l = abs(float(np.linalg.det(layer_ab)))
+            if area_l < 1e-12:
+                raise ValueError("Degenerate layer in-plane lattice for commensurate tiling.")
+            n_atoms = len(layer["struct"]) * int(layer["sc_x"]) * int(layer["sc_y"])
+            total += n_atoms * (area_m / area_l)
+        return total
+
+    @staticmethod
     def inplane_strain_percent(ref_2x2: np.ndarray, other_2x2: np.ndarray) -> float:
         ref = np.asarray(ref_2x2, dtype=float)
         other = np.asarray(other_2x2, dtype=float)
@@ -607,6 +624,7 @@ class CrystalEngine:
             return CrystalEngine.build_dft_aligned_stack(layers, vacuum_ang, ref_idx), info
 
         if status == "commensurate":
+            # Moiré supercell tiling only — ref_idx is ignored (no forced strain onto ref ab).
             ab = np.asarray(moire["matrix"], dtype=float)
             species, carts, tags = [], [], []
             for idx, layer in enumerate(layers):
@@ -625,6 +643,12 @@ class CrystalEngine:
                 tags.extend(t)
             if len(species) == 0:
                 raise ValueError("Commensurate tiling produced no atoms — check moiré matrix.")
+            expected = CrystalEngine.expected_commensurate_atom_count(moire, layers)
+            if expected < 1.0 or abs(len(species) - expected) / expected > 0.35:
+                raise ValueError(
+                    f"Commensurate tiling atom count {len(species)} "
+                    f"does not match moiré expectation ~{expected:.0f}."
+                )
             struct = CrystalEngine._finalize_slab_structure(ab, species, carts, tags, vacuum_ang)
             return struct, info
 

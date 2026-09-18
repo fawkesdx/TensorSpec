@@ -504,7 +504,9 @@ class CrystalViewerSuite(QWidget):
                 iso_lines.append(f"Isotropic lattice strain on {name_i}: {iso:+.2f}%")
             if kind == "twist":
                 suggest_line = (
-                    f"Suggestion score (includes twist): {sug_pct:.2f}% ({sug_name})."
+                    f"Suggested reference layer: {sug_name} "
+                    "(ranking score includes twist geometry; "
+                    "actual in-plane stretch is the isotropic % above)."
                 )
             else:
                 suggest_line = (
