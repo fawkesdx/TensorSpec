@@ -21,7 +21,13 @@ def test_write_relax_ions_fixed_cell(tmp_path, monkeypatch):
     assert "CELL_PARAMETERS" in text
     assert "ATOMIC_POSITIONS" in text
     assert "&IONS" in text
+    assert "ion_dynamics = 'bfgs'" in text
     assert "forc_conv_thr = 1.0d-3" in text
+    # Must be in &CONTROL, not &IONS (QE 7.x namelist check)
+    control = text.split("&SYSTEM", 1)[0]
+    ions = text.split("&IONS", 1)[1].split("/", 1)[0]
+    assert "forc_conv_thr" in control
+    assert "forc_conv_thr" not in ions
     assert "&CELL" not in text
 
 
