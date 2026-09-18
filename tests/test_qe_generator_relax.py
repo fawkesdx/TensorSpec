@@ -1,6 +1,6 @@
 import os
 from pymatgen.core import Lattice, Structure
-from tensorspec.core.dft.qe_generator import QEInputGenerator
+from tensorspec.core.dft.qe_generator import IF_POS_FIXED, IF_POS_FREE, QEInputGenerator, build_if_pos_mask
 
 
 def test_write_relax_ions_fixed_cell(tmp_path, monkeypatch):
@@ -47,7 +47,7 @@ def test_write_vc_relax_flag(tmp_path, monkeypatch):
     assert "&CELL" in text
 
 
-def test_relax_if_pos_appended(tmp_path, monkeypatch):
+def test_relax_if_pos_fix_first_two(tmp_path, monkeypatch):
     lat = Lattice.hexagonal(2.5, 23.4)
     s = Structure(
         lat,
@@ -63,8 +63,38 @@ def test_relax_if_pos_appended(tmp_path, monkeypatch):
     if_pos = [(0, 0, 0), (0, 0, 0), (1, 1, 1), (1, 1, 1)]
     path = gen.write_relax_input(str(tmp_path), ecutwfc=40, kmesh=(4, 4, 1), if_pos=if_pos)
     text = open(path).read()
-    assert " 0  0  0" in text
-    assert " 1  1  1" in text
+    pos_block = text.split("ATOMIC_POSITIONS {crystal}\n", 1)[1].split("\n\n", 1)[0]
+    assert "0  0  0" in pos_block
+    assert "1  1  1" in pos_block
+
+
+def test_build_if_pos_fix_bottom_layer():
+    lat = Lattice.hexagonal(2.5, 23.4)
+    s = Structure(
+        lat,
+        ["C", "C", "B", "N"],
+        [[1 / 3, 2 / 3, 0.2], [2 / 3, 1 / 3, 0.2], [1 / 3, 2 / 3, 0.6], [2 / 3, 1 / 3, 0.6]],
+    )
+    mask = build_if_pos_mask(s, "fix_bottom")
+    assert mask == [IF_POS_FIXED, IF_POS_FIXED, IF_POS_FREE, IF_POS_FREE]
+
+
+def test_build_if_pos_fix_reference_layer():
+    lat = Lattice.hexagonal(2.5, 23.4)
+    s = Structure(
+        lat,
+        ["C", "C", "B", "N"],
+        [[1 / 3, 2 / 3, 0.2], [2 / 3, 1 / 3, 0.2], [1 / 3, 2 / 3, 0.6], [2 / 3, 1 / 3, 0.6]],
+        site_properties={"layer_tag": ["C_L1", "C_L1", "B_L2", "N_L2"]},
+    )
+    mask = build_if_pos_mask(s, "fix_reference", ref_layer=1)
+    assert mask == [IF_POS_FIXED, IF_POS_FIXED, IF_POS_FREE, IF_POS_FREE]
+
+
+def test_build_if_pos_none():
+    lat = Lattice.hexagonal(2.5, 23.4)
+    s = Structure(lat, ["C", "C"], [[1 / 3, 2 / 3, 0.4], [2 / 3, 1 / 3, 0.4]])
+    assert build_if_pos_mask(s, "none") is None
 
 
 def test_scf_nscf_vdw_flag(tmp_path, monkeypatch):

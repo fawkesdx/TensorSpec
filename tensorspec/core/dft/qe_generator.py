@@ -3,6 +3,40 @@ import re
 import shutil
 from pymatgen.core import Structure
 
+IF_POS_FREE = (1, 1, 1)
+IF_POS_FIXED = (0, 0, 0)
+
+
+def build_if_pos_mask(
+    structure: Structure,
+    mode: str,
+    *,
+    ref_layer: int = 1,
+    z_tol: float = 0.02,
+) -> list[tuple[int, int, int]] | None:
+    """Build QE selective-dynamics if_pos list (one triple per site).
+
+    mode: ``none`` | ``fix_reference`` | ``fix_bottom``
+    """
+    if mode in (None, "", "none"):
+        return None
+    if mode == "fix_bottom":
+        z_vals = [float(site.frac_coords[2]) for site in structure]
+        z_min = min(z_vals)
+        return [
+            IF_POS_FIXED if abs(z - z_min) <= z_tol else IF_POS_FREE for z in z_vals
+        ]
+    if mode == "fix_reference":
+        tags = structure.site_properties.get("layer_tag")
+        if not tags:
+            raise ValueError("Structure lacks layer_tag site properties.")
+        suffix = f"_L{ref_layer}"
+        return [
+            IF_POS_FIXED if str(tag).endswith(suffix) else IF_POS_FREE for tag in tags
+        ]
+    raise ValueError(f"Unknown if_pos mode: {mode!r}")
+
+
 class QEInputGenerator:
     """
     Core physics/math engine for generating Quantum Espresso (pw.x) and Wannier90 inputs.
@@ -363,7 +397,11 @@ end kpoints
         return "\n".join(params)
 
     def _generate_atomic_positions(self, if_pos=None) -> str:
-        """Converts PyMatgen fractional coordinates to QE format."""
+        """Converts PyMatgen fractional coordinates to QE format.
+
+        When ``if_pos`` is provided, append QE selective-dynamics flags per site
+        (0 = fixed, 1 = free along each axis).
+        """
         positions = ["ATOMIC_POSITIONS {crystal}"]
         for i, site in enumerate(self.structure):
             coords = "  ".join([f"{c:.6f}" for c in site.frac_coords])
@@ -374,6 +412,12 @@ end kpoints
                 line += f"  {flags[0]}  {flags[1]}  {flags[2]}"
             positions.append(line)
         return "\n".join(positions)
+
+    def resolve_if_pos(self, mode: str, *, ref_layer: int = 1, z_tol: float = 0.02):
+        """Convenience wrapper around :func:`build_if_pos_mask` for this structure."""
+        return build_if_pos_mask(
+            self.structure, mode, ref_layer=ref_layer, z_tol=z_tol
+        )
     
     def _detect_soc(self) -> bool:
         """Detects if any provided pseudopotential is fully relativistic (SOC)."""
