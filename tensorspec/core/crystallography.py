@@ -489,22 +489,20 @@ class CrystalEngine:
         ab = CrystalEngine._inplane_2x2(
             layers[ref_idx]["struct"], layers[ref_idx]["sc_x"], layers[ref_idx]["sc_y"]
         )
-        ab_inv_t = np.linalg.inv(ab.T)
         species, carts, tags = [], [], []
         for idx, l in enumerate(layers):
             supercell = l["struct"] * (l["sc_x"], l["sc_y"], 1)
-            coords = supercell.cart_coords.copy()
-            center_xy = np.mean(coords[:, :2], axis=0)
-            coords[:, :2] -= center_xy
-            # aligned: no twist; z placement matches build_heterostructure_stack
-            coords[:, 2] = coords[:, 2] - np.mean(coords[:, 2]) + (float(l["z_shift"]) - 12.5)
-            for i, site in enumerate(supercell):
-                xy = coords[i, :2]
-                frac_xy = xy @ ab_inv_t
-                frac_xy = frac_xy - np.floor(frac_xy)
-                xy_in_ref = frac_xy @ ab.T
+            # Strain via fractional xy on the ref ab lattice. Do NOT center+wrap:
+            # independent PBC wrap after centering tears in-plane bonds (e.g. C–C ~3 Å).
+            z0 = float(l["z_shift"]) - 12.5
+            z_mean = float(np.mean(supercell.cart_coords[:, 2]))
+            for site in supercell:
+                frac_xy = np.asarray(site.frac_coords[:2], dtype=float)
+                frac_xy = frac_xy - np.floor(frac_xy + 1e-12)
+                xy_in_ref = frac_xy @ ab  # ab rows = lattice vectors
+                z = float(site.coords[2]) - z_mean + z0
                 species.append(site.specie.symbol)
-                carts.append([xy_in_ref[0], xy_in_ref[1], coords[i, 2]])
+                carts.append([float(xy_in_ref[0]), float(xy_in_ref[1]), z])
                 tags.append(f"{site.specie.symbol}_L{idx + 1}")
         return CrystalEngine._finalize_slab_structure(ab, species, carts, tags, vacuum_ang)
 
@@ -623,21 +621,34 @@ class CrystalEngine:
             struct = CrystalEngine._finalize_slab_structure(ab, species, carts, tags, vacuum_ang)
             return struct, info
 
-        species, carts, tags = [], [], []
-        for idx, layer in enumerate(layers):
-            s, c, t = CrystalEngine._place_layer_atoms(layer, idx, apply_twist=True)
-            species.extend(s); carts.extend(c); tags.extend(t)
-
-        # incommensurate: forced strain into ref_idx ab (no extra tiling beyond SC)
+        # incommensurate: strain each layer onto ref ab via native fractional xy,
+        # then rotate in-plane. Joint centroid wrap keeps intra-layer bonds intact
+        # (per-atom wrap after centering was tearing C–C / B–N).
         ab = CrystalEngine._inplane_2x2(
             layers[ref_idx]["struct"], layers[ref_idx]["sc_x"], layers[ref_idx]["sc_y"]
         )
-        ab_inv_t = np.linalg.inv(ab.T)
-        new_carts = []
-        for c in carts:
-            frac = np.asarray(c[:2]) @ ab_inv_t
-            frac = frac - np.floor(frac)
-            xy = frac @ ab.T
-            new_carts.append([xy[0], xy[1], c[2]])
-        struct = CrystalEngine._finalize_slab_structure(ab, species, new_carts, tags, vacuum_ang)
+        ab_inv = np.linalg.inv(ab)
+        species, carts, tags = [], [], []
+        for idx, layer in enumerate(layers):
+            supercell = layer["struct"] * (layer["sc_x"], layer["sc_y"], 1)
+            theta = np.radians(float(layer["twist"]))
+            cth, sth = np.cos(theta), np.sin(theta)
+            R2 = np.array([[cth, -sth], [sth, cth]])
+            z0 = float(layer["z_shift"]) - 12.5
+            z_mean = float(np.mean(supercell.cart_coords[:, 2]))
+            layer_carts = []
+            for site in supercell:
+                frac_xy = np.asarray(site.frac_coords[:2], dtype=float)
+                frac_xy = frac_xy - np.floor(frac_xy + 1e-12)
+                xy = (frac_xy @ ab) @ R2.T
+                z = float(site.coords[2]) - z_mean + z0
+                layer_carts.append([float(xy[0]), float(xy[1]), z])
+                species.append(site.specie.symbol)
+                tags.append(f"{site.specie.symbol}_L{idx + 1}")
+            layer_xy = np.array([c[:2] for c in layer_carts], dtype=float)
+            mean_frac = np.mean(layer_xy, axis=0) @ ab_inv
+            shift = np.floor(mean_frac + 1e-12) @ ab
+            for c in layer_carts:
+                carts.append([c[0] - shift[0], c[1] - shift[1], c[2]])
+        struct = CrystalEngine._finalize_slab_structure(ab, species, carts, tags, vacuum_ang)
         return struct, info

@@ -65,6 +65,24 @@ def test_aligned_bilayer_not_dummy_and_vacuum():
     assert len(s) == 4
 
 
+def test_aligned_preserves_inplane_bonds():
+    """Center+wrap must not tear honeycomb bonds (regression)."""
+    g = _mono(2.46)
+    bn = _mono(2.50, ("B", "N"))
+    layers = [_layer(g, 0.0), _layer(bn, 3.4)]
+    s = CrystalEngine.build_dft_aligned_stack(layers, vacuum_ang=20.0, ref_idx=1)
+    coords = np.array([site.coords for site in s])
+    syms = [site.specie.symbol for site in s]
+    c = coords[[i for i, x in enumerate(syms) if x == "C"]]
+    b = coords[[i for i, x in enumerate(syms) if x == "B"]]
+    n = coords[[i for i, x in enumerate(syms) if x == "N"]]
+    cc = float(np.linalg.norm(c[0, :2] - c[1, :2]))
+    bn_len = float(np.linalg.norm(b[0, :2] - n[0, :2]))
+    # a/√3 for hexagonal honeycomb
+    assert abs(cc - 2.50 / np.sqrt(3)) < 0.02
+    assert abs(bn_len - 2.50 / np.sqrt(3)) < 0.02
+
+
 def test_aligned_mismatch_flag():
     layers = [_layer(_mono(2.46), 0.0), _layer(_mono(2.50), 3.4)]
     assert CrystalEngine.aligned_needs_strain_dialog(layers, ref_idx=0) is True
