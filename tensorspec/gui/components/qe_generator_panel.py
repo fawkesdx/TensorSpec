@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import stat as statmod
@@ -113,7 +114,7 @@ class QERunnerThread(QThread):
                 
                 # Upload only necessary input files to avoid uploading 10GB+ of old data!
                 self.log_signal.emit(f"Uploading input files to {remote_dir}...")
-                allowed_exts = ['.in', '.win', '.sh', '.ps1']
+                allowed_exts = ['.in', '.win', '.sh', '.ps1', '.cif', '.json']
                 for file_name in os.listdir(self.out_dir):
                     local_f = os.path.join(self.out_dir, file_name)
                     if os.path.isfile(local_f) and any(file_name.endswith(ext) for ext in allowed_exts):
@@ -251,6 +252,16 @@ class QEGeneratorPanel(QWidget):
         self.spin_kz = QSpinBox(); self.spin_kz.setRange(1, 20); self.spin_kz.setValue(6)
         kmesh_layout.addWidget(self.spin_kx); kmesh_layout.addWidget(self.spin_ky); kmesh_layout.addWidget(self.spin_kz)
         qe_form.addRow("k-Mesh Grid:", kmesh_layout)
+
+        self.combo_geometry = QComboBox()
+        self.combo_geometry.addItem("Relax ions (fixed cell)", "relax_ions")
+        self.combo_geometry.addItem("SCF only (no relax)", "scf_only")
+        self.combo_geometry.addItem("vc-relax (advanced)", "vc_relax")
+        qe_form.addRow("Geometry:", self.combo_geometry)
+
+        self.chk_vdw = QCheckBox("vdW DFT-D3 (recommended for 2D stacks)")
+        self.chk_vdw.setChecked(False)
+        qe_form.addRow("Dispersion:", self.chk_vdw)
 
         self.line_outdir = QLineEdit("./qe_workspace")
         qe_form.addRow("Output Directory:", self.line_outdir)
@@ -548,6 +559,134 @@ class QEGeneratorPanel(QWidget):
             QMessageBox.information(self, "Success", message)
         else:
             QMessageBox.critical(self, "Fetch Failed", message)
+    def _write_relax_sidecar_files(
+        self,
+        out_dir: str,
+        *,
+        ecut: float,
+        kmesh: tuple,
+        nbnd: int,
+        is_soc_enabled: bool,
+        use_gpu: bool,
+        vdw_dft_d3: bool,
+        is_mlwf: bool,
+        geometry: str,
+    ) -> None:
+        """Write structure_template.cif + tensorspec_relax_meta.json for remote pipeline."""
+        os.makedirs(out_dir, exist_ok=True)
+        template_cif = os.path.join(out_dir, "structure_template.cif")
+        self.engine.crystal_structure.to(filename=template_cif, fmt="cif")
+
+        calc_map = {
+            "relax_ions": "relax",
+            "vc_relax": "vc-relax",
+            "scf_only": "scf",
+        }
+        meta = {
+            "ecutwfc": ecut,
+            "ecutrho": 4 * ecut,
+            "kmesh": list(kmesh),
+            "nbnd": nbnd,
+            "use_soc": is_soc_enabled,
+            "use_gpu": use_gpu,
+            "vdw_dft_d3": vdw_dft_d3,
+            "mlwf": is_mlwf,
+            "calculation": calc_map.get(geometry, "scf"),
+        }
+        meta_path = os.path.join(out_dir, "tensorspec_relax_meta.json")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2)
+
+    def _build_pipeline_script(
+        self,
+        *,
+        kmesh: tuple,
+        pw_mpi_cmd: str,
+        pw_exec: str,
+        wan_mpi_cmd: str,
+        wan_exec: str,
+        pw2wan_exec: str,
+        pw_ranks: int,
+        wan_ranks: int,
+        env_header: str,
+        use_gpu: bool,
+        cuda_devices: str,
+        relax_enabled: bool,
+    ) -> str:
+        sync_cmd = (
+            "python -m tensorspec.core.dft.sync_after_relax "
+            "--out-dir . --template-cif structure_template.cif"
+        )
+        if os.name == "nt":
+            hse_block = (
+                "# ==================================================================\n"
+                "# ADVANCED: HSE HYBRID FUNCTIONAL SWITCH\n"
+                "# By default, this script runs a standard PBE calculation.\n"
+                "# To run HSE, remove the '#' from the two replacement commands below.\n"
+                "# ==================================================================\n"
+                f"# (Get-Content scf.in) -replace '&SYSTEM', \"&SYSTEM`n    input_dft = 'hse',`n    nqx1 = {kmesh[0]}, nqx2 = {kmesh[1]}, nqx3 = {kmesh[2]},\" | Set-Content scf.in\n"
+                f"# (Get-Content nscf.in) -replace '&SYSTEM', \"&SYSTEM`n    input_dft = 'hse',`n    nqx1 = {kmesh[0]}, nqx2 = {kmesh[1]}, nqx3 = {kmesh[2]},\" | Set-Content nscf.in\n\n"
+            )
+            gpu_line = (
+                f"$env:CUDA_VISIBLE_DEVICES='{cuda_devices}'\n" if use_gpu else ""
+            )
+            relax_block = ""
+            if relax_enabled:
+                relax_block = (
+                    "Write-Host '=== RELAX ==='\n"
+                    f"{pw_mpi_cmd}{pw_exec} -in relax.in | Tee-Object -FilePath relax.out\n"
+                    f"{sync_cmd}\n"
+                    "Write-Host '=== SCF ==='\n"
+                )
+            return (
+                "$env:OMP_NUM_THREADS=1\n"
+                + gpu_line
+                + "\n"
+                + hse_block
+                + "mkdir -p out tmp\n"
+                + "export TMPDIR=$(pwd)/tmp\n"
+                + "# Edit this script to run specific parts of the pipeline\n"
+                + relax_block
+                + f"{pw_mpi_cmd}{pw_exec} -in scf.in | Tee-Object -FilePath scf.out\n"
+                + f"{pw_mpi_cmd}{pw_exec} -in nscf.in | Tee-Object -FilePath nscf.out\n"
+                + f"{wan_exec} -pp wannier90\n"
+                + f"{wan_mpi_cmd}{pw2wan_exec} -in pw2wan.in | Tee-Object -FilePath pw2wan.out\n"
+                + f"{wan_exec} wannier90\n"
+            )
+
+        hse_block = (
+            "# ==================================================================\n"
+            "# ADVANCED: HSE HYBRID FUNCTIONAL SWITCH\n"
+            "# By default, this script runs a standard PBE calculation.\n"
+            "# To run HSE, just uncomment (remove the '#') from the python command below.\n"
+            "# ==================================================================\n"
+            f"# python -c \"for f in ['scf.in','nscf.in']: d=open(f).read(); open(f,'w').write(d.replace('&SYSTEM','&SYSTEM\\n    input_dft=\\'hse\\',\\n    nqx1={kmesh[0]}, nqx2={kmesh[1]}, nqx3={kmesh[2]},'))\"\n\n"
+        )
+        relax_block = ""
+        if relax_enabled:
+            relax_block = (
+                "echo \"=== RELAX ===\"\n"
+                f"{pw_mpi_cmd}{pw_exec} -in relax.in | tee relax.out\n"
+                f"{sync_cmd}\n"
+                "echo \"=== SCF ===\"\n"
+            )
+        return (
+            "#!/bin/bash\n"
+            "set -e\n"
+            + env_header
+            + hse_block
+            + "mkdir -p out tmp\n"
+            + "export TMPDIR=$(pwd)/tmp\n"
+            + "# Edit this script to run specific parts of the pipeline\n"
+            + f"# pw.x ranks={pw_ranks}; pw2wannier90 ranks={wan_ranks}\n"
+            + relax_block
+            + f"{pw_mpi_cmd}{pw_exec} -in scf.in | tee scf.out\n"
+            + f"{pw_mpi_cmd}{pw_exec} -in nscf.in | tee nscf.out\n"
+            + f"{wan_exec} -pp wannier90\n"
+            + f"{wan_mpi_cmd}{pw2wan_exec} -in pw2wan.in | tee pw2wan.out\n"
+            + f"{wan_exec} wannier90\n"
+        )
+
     def generate_qe_files(self):
         if not self.engine.crystal_structure:
             QMessageBox.warning(self, "Warning", "Please load a structure from the workspace first.")
@@ -557,11 +696,21 @@ class QEGeneratorPanel(QWidget):
         kmesh = (self.spin_kx.value(), self.spin_ky.value(), self.spin_kz.value())
         ecut = float(self.spin_ecut.value())
         nbnd = self.spin_nbnd.value()
+        geometry = self.combo_geometry.currentData()
+        vdw_dft_d3 = self.chk_vdw.isChecked()
+        relax_enabled = geometry in ("relax_ions", "vc_relax")
+
+        if relax_enabled and not vdw_dft_d3:
+            QMessageBox.warning(
+                self,
+                "vdW recommended",
+                "Layered or vdW-bound systems usually need DFT-D3 for realistic "
+                "interlayer spacing. Consider enabling vdW DFT-D3 before relaxing.",
+            )
 
         qe_gen = QEInputGenerator(self.engine.crystal_structure)
-        
+
         try:
-            # Grab the SOC state directly from this QE panel!
             is_soc_enabled = self.chk_soc.isChecked()
             use_gpu, cuda_devices, pw_ranks, wan_ranks, _slurm_ntasks = self._pw_backend_flags()
             if use_gpu and is_soc_enabled:
@@ -572,9 +721,27 @@ class QEGeneratorPanel(QWidget):
                     "Verify on your cluster before long runs.",
                 )
 
-            # Generate all 4 configuration files, passing the SOC state
+            is_mlwf = self.combo_wannier_mode.currentIndex() == 1
+
+            self._write_relax_sidecar_files(
+                out_dir,
+                ecut=ecut,
+                kmesh=kmesh,
+                nbnd=nbnd,
+                is_soc_enabled=is_soc_enabled,
+                use_gpu=use_gpu,
+                vdw_dft_d3=vdw_dft_d3,
+                is_mlwf=is_mlwf,
+                geometry=geometry,
+            )
+
             qe_gen.write_scf_input(
-                out_dir, ecutwfc=ecut, kmesh=kmesh, use_soc=is_soc_enabled, use_gpu=use_gpu
+                out_dir,
+                ecutwfc=ecut,
+                kmesh=kmesh,
+                use_soc=is_soc_enabled,
+                use_gpu=use_gpu,
+                vdw_dft_d3=vdw_dft_d3,
             )
             qe_gen.write_nscf_input(
                 out_dir,
@@ -583,19 +750,30 @@ class QEGeneratorPanel(QWidget):
                 nbnd=nbnd,
                 use_soc=is_soc_enabled,
                 use_gpu=use_gpu,
+                vdw_dft_d3=vdw_dft_d3,
             )
-            
-            # Pass the MLWF mode toggle 
-            is_mlwf = (self.combo_wannier_mode.currentIndex() == 1)
-            qe_gen.write_wannier90_input(out_dir, kmesh=kmesh, num_wann=nbnd, use_soc=is_soc_enabled, mlwf_mode=is_mlwf)
-            
+
+            if relax_enabled:
+                relax_calc = "relax" if geometry == "relax_ions" else "vc-relax"
+                qe_gen.write_relax_input(
+                    out_dir,
+                    ecutwfc=ecut,
+                    kmesh=kmesh,
+                    use_soc=is_soc_enabled,
+                    use_gpu=use_gpu,
+                    vdw_dft_d3=vdw_dft_d3,
+                    calculation=relax_calc,
+                )
+
+            qe_gen.write_wannier90_input(
+                out_dir, kmesh=kmesh, num_wann=nbnd, use_soc=is_soc_enabled, mlwf_mode=is_mlwf
+            )
             qe_gen.write_pw2wan_input(out_dir)
-            
-            # Extract Commands
+
             pw_exec = self.line_pw_cmd.text().strip()
             wan_exec = self.line_wan_cmd.text().strip()
             pw2wan_exec = self.line_pw2wan_cmd.text().strip()
-            
+
             cluster = self.get_selected_cluster()
             pw_mpi_cmd = cp.mpi_launch_prefix(
                 cluster,
@@ -608,59 +786,24 @@ class QEGeneratorPanel(QWidget):
                 use_mpi=self.chk_mpi.isChecked(),
             )
             env_header = self._pipeline_env_header(use_gpu, cuda_devices)
-            
-            # Auto-populate portable script with exact commands based on Operating System
-            if os.name == 'nt':
-                # Windows native PowerShell formatting
-                script_text = (
-                    "$env:OMP_NUM_THREADS=1\n"
-                    + (
-                        f"$env:CUDA_VISIBLE_DEVICES='{cuda_devices}'\n"
-                        if use_gpu
-                        else ""
-                    )
-                    + "\n"
-                    "# ==================================================================\n"
-                    "# ADVANCED: HSE HYBRID FUNCTIONAL SWITCH\n"
-                    "# By default, this script runs a standard PBE calculation.\n"
-                    "# To run HSE, remove the '#' from the two replacement commands below.\n"
-                    "# ==================================================================\n"
-                    f"# (Get-Content scf.in) -replace '&SYSTEM', \"&SYSTEM`n    input_dft = 'hse',`n    nqx1 = {kmesh[0]}, nqx2 = {kmesh[1]}, nqx3 = {kmesh[2]},\" | Set-Content scf.in\n"
-                    f"# (Get-Content nscf.in) -replace '&SYSTEM', \"&SYSTEM`n    input_dft = 'hse',`n    nqx1 = {kmesh[0]}, nqx2 = {kmesh[1]}, nqx3 = {kmesh[2]},\" | Set-Content nscf.in\n\n"
-                    "mkdir -p out tmp\n" 
-                    "export TMPDIR=$(pwd)/tmp\n" 
-                    "# Edit this script to run specific parts of the pipeline\n"
-                    f"{pw_mpi_cmd}{pw_exec} -in scf.in | Tee-Object -FilePath scf.out\n"
-                    f"{pw_mpi_cmd}{pw_exec} -in nscf.in | Tee-Object -FilePath nscf.out\n"
-                    f"{wan_exec} -pp wannier90\n"
-                    f"{wan_mpi_cmd}{pw2wan_exec} -in pw2wan.in | Tee-Object -FilePath pw2wan.out\n"
-                    f"{wan_exec} wannier90\n"
-                )
-            else:
-                # Mac / Linux native Bash formatting using a robust Python one-liner!
-                script_text = (
-                    "#!/bin/bash\n"
-                    "set -e\n"
-                    + env_header
-                    + "# ==================================================================\n"
-                    + "# ADVANCED: HSE HYBRID FUNCTIONAL SWITCH\n"
-                    + "# By default, this script runs a standard PBE calculation.\n"
-                    + "# To run HSE, just uncomment (remove the '#') from the python command below.\n"
-                    + "# ==================================================================\n"
-                    + f"# python -c \"for f in ['scf.in','nscf.in']: d=open(f).read(); open(f,'w').write(d.replace('&SYSTEM','&SYSTEM\\n    input_dft=\\'hse\\',\\n    nqx1={kmesh[0]}, nqx2={kmesh[1]}, nqx3={kmesh[2]},'))\"\n\n"
-                    + "mkdir -p out tmp\n"
-                    + "export TMPDIR=$(pwd)/tmp\n"
-                    + "# Edit this script to run specific parts of the pipeline\n"
-                    + f"# pw.x ranks={pw_ranks}; pw2wannier90 ranks={wan_ranks}\n"
-                    + f"{pw_mpi_cmd}{pw_exec} -in scf.in | tee scf.out\n"
-                    + f"{pw_mpi_cmd}{pw_exec} -in nscf.in | tee nscf.out\n"
-                    + f"{wan_exec} -pp wannier90\n"
-                    + f"{wan_mpi_cmd}{pw2wan_exec} -in pw2wan.in | tee pw2wan.out\n"
-                    + f"{wan_exec} wannier90\n"
-                )
-            
+
+            script_text = self._build_pipeline_script(
+                kmesh=kmesh,
+                pw_mpi_cmd=pw_mpi_cmd,
+                pw_exec=pw_exec,
+                wan_mpi_cmd=wan_mpi_cmd,
+                wan_exec=wan_exec,
+                pw2wan_exec=pw2wan_exec,
+                pw_ranks=pw_ranks,
+                wan_ranks=wan_ranks,
+                env_header=env_header,
+                use_gpu=use_gpu,
+                cuda_devices=cuda_devices,
+                relax_enabled=relax_enabled,
+            )
+
             self.script_editor.setPlainText(script_text)
-            
+
             QMessageBox.information(self, "Success", f"Inputs generated in {out_dir}.")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to generate files:\n{str(e)}")
