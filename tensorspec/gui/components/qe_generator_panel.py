@@ -613,10 +613,16 @@ class QEGeneratorPanel(QWidget):
         cuda_devices: str,
         relax_enabled: bool,
     ) -> str:
-        sync_cmd = (
-            "python -m tensorspec.core.dft.sync_after_relax "
-            "--out-dir . --template-cif structure_template.cif"
-        )
+        if os.name == "nt":
+            sync_cmd = (
+                "& $env:PYTHON -m tensorspec.core.dft.sync_after_relax "
+                "--out-dir . --template-cif structure_template.cif"
+            )
+        else:
+            sync_cmd = (
+                '"$PYTHON" -m tensorspec.core.dft.sync_after_relax '
+                "--out-dir . --template-cif structure_template.cif"
+            )
         if os.name == "nt":
             hse_block = (
                 "# ==================================================================\n"

@@ -57,8 +57,10 @@ class QEInputGenerator:
                 if pseudo_name is None:
                     pseudo_name = element_files[0] # Fallback if only one exists
             
-            shutil.copy2(os.path.join(self.app_pseudo_dir, pseudo_name), 
-                         os.path.join(run_pseudo_dir, pseudo_name))
+            src = os.path.join(self.app_pseudo_dir, pseudo_name)
+            dst = os.path.join(run_pseudo_dir, pseudo_name)
+            if os.path.abspath(src) != os.path.abspath(dst):
+                shutil.copy2(src, dst)
                 
             species.append(f" {symbol}  {float(mass):.4f}  {pseudo_name}")
             
