@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (QWidget, QFormLayout, QGroupBox, QComboBox,
 
 from pymatgen.core import Structure
 
-from tensorspec.core.dft.qe_generator import QEInputGenerator
+from tensorspec.core.dft.qe_generator import QEInputGenerator, build_if_pos_mask
 from tensorspec.core.compute import cluster_paths as cp
 from tensorspec.core.workspace import global_workspace
 from tensorspec.gui.services.nersc_auth import refresh_sshproxy_login
@@ -264,6 +264,18 @@ class QEGeneratorPanel(QWidget):
         self.combo_geometry.addItem("vc-relax (advanced)", "vc_relax")
         qe_form.addRow("Geometry:", self.combo_geometry)
 
+        self.combo_selective = QComboBox()
+        self.combo_selective.addItem("None", "none")
+        self.combo_selective.addItem("Fix reference layer", "fix_reference")
+        self.combo_selective.addItem("Fix bottom layer", "fix_bottom")
+        self.combo_selective.setToolTip(
+            "Hold selected atoms fixed during ionic relax (QE if_pos).\n"
+            "Reference layer: sites tagged _L1 (from Crystal Push stack rebuild).\n"
+            "Bottom layer: all sites at minimum fractional z."
+        )
+        qe_form.addRow("Fix atoms during relax:", self.combo_selective)
+        self.combo_geometry.currentIndexChanged.connect(self._sync_selective_dynamics_ui)
+
         self.chk_vdw = QCheckBox("vdW DFT-D3 (recommended for 2D stacks)")
         self.chk_vdw.setChecked(False)
         qe_form.addRow("Dispersion:", self.chk_vdw)
@@ -407,6 +419,7 @@ class QEGeneratorPanel(QWidget):
         self.line_outdir.textChanged.connect(self._update_push_relaxed_button)
         self._sync_mpi_spinboxes()
         self._on_cluster_changed()
+        self._sync_selective_dynamics_ui()
         self._update_push_relaxed_button()
 
     def _on_cluster_changed(self, _index=None):
@@ -441,6 +454,26 @@ class QEGeneratorPanel(QWidget):
         enabled = self.chk_mpi.isChecked()
         self.spin_pw_cores.setEnabled(enabled)
         self.spin_wannier_cores.setEnabled(enabled)
+
+    def _sync_selective_dynamics_ui(self, *_args) -> None:
+        geometry = self.combo_geometry.currentData()
+        relax_enabled = geometry in ("relax_ions", "vc_relax")
+        self.combo_selective.setEnabled(relax_enabled)
+
+        has_tags = bool(
+            self.engine.crystal_structure is not None
+            and "layer_tag" in self.engine.crystal_structure.site_properties
+        )
+        ref_item = self.combo_selective.model().item(1)
+        if ref_item is not None:
+            ref_item.setEnabled(has_tags)
+            ref_item.setToolTip(
+                "Requires layer_tag from Crystal Push stack rebuild."
+                if not has_tags
+                else "Fix substrate (_L1 tags); relax upper layer(s)."
+            )
+        if not has_tags and self.combo_selective.currentData() == "fix_reference":
+            self.combo_selective.setCurrentIndex(0)
 
     def _sync_pw_backend_ui(self, _index=None):
         use_gpu = self.combo_pw_backend.currentData() == "gpu"
@@ -816,6 +849,10 @@ class QEGeneratorPanel(QWidget):
 
             if relax_enabled:
                 relax_calc = "relax" if geometry == "relax_ions" else "vc-relax"
+                selective_mode = self.combo_selective.currentData()
+                if_pos = build_if_pos_mask(
+                    self.engine.crystal_structure, selective_mode
+                )
                 qe_gen.write_relax_input(
                     out_dir,
                     ecutwfc=ecut,
@@ -824,6 +861,7 @@ class QEGeneratorPanel(QWidget):
                     use_gpu=use_gpu,
                     vdw_dft_d3=vdw_dft_d3,
                     calculation=relax_calc,
+                    if_pos=if_pos,
                 )
 
             qe_gen.write_wannier90_input(
