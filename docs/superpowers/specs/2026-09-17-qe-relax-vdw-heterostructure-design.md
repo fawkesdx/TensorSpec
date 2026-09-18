@@ -187,6 +187,6 @@ Extends `2026-09-13-stack-dft-cell-rebuild-design.md` (do not break aligned N-la
 
 ## Open points (resolve in plan if needed)
 
-1. Exact QE version string / D3 keyword on Einstein `qe` conda env (verify once).  
+1. ~~Exact QE version string / D3 keyword on Einstein `qe` conda env~~ — **Resolved 2026-09-18 (Task 10 smoke):** PWSCF **v7.5** at `/home/sandy/miniconda3/envs/qe/bin/pw.x` (conda env `qe`; not on default SSH PATH — `conda activate qe` or full path). **DFT-D3: yes.** Binary embeds `dft-d3` / `DFT-D3` (Grimme); `vdw_corr = 'dft-d3'` in `&SYSTEM` is accepted (same spelling as TensorSpec generator). One-atom C relax smoke with `/home/sandy/TensorSpec/Pseudo/C.us.pbe.z_4.uspp.gbrv.v1.2.upf` printed `DFT-D3 Dispersion Correction (3-body terms):` and C6 table — no unsupported-keyword error.  
 2. Whether post-relax SCF reuses relax charge density (`startingwfc`/`startingpot`) — optimization, not required for correctness.  
 3. Auto-push relaxed structure to workspace vs file-only + button — default **file + optional button** to avoid surprising Crystal state.
