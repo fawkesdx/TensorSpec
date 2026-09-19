@@ -1,0 +1,100 @@
+"""Adapt DINOv2 ViT-S/14 pretrained weights into our ViT2D backbone."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import torch
+import torch.nn.functional as F
+
+from tensorspec.core.ml.ssl.models.vit2d import ViT2D
+
+# Keys that exist in DINOv2 but not in our ViT2D (heads, register tokens, etc.)
+_SKIP_PREFIXES = ("head.", "dino_head.")
+
+
+def _adapt_patch_embed(
+    w_rgb: torch.Tensor, bias: torch.Tensor, out_chans: int, out_patch: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """RGB [D,3,P,P] -> mean over channels -> interpolate to out_patch."""
+    w = w_rgb.mean(dim=1, keepdim=True)
+    if out_chans != 1:
+        w = w.expand(-1, out_chans, -1, -1).contiguous()
+    w = F.interpolate(w, size=(out_patch, out_patch), mode="bilinear", align_corners=False)
+    return w, bias
+
+
+def _adapt_pos_embed(pos: torch.Tensor, num_patches: int) -> torch.Tensor:
+    """Interpolate spatial pos_embed from DINOv2 grid to target patch count."""
+    cls, spat = pos[:, :1], pos[:, 1:]
+    n0 = spat.shape[1]
+    g0 = int(n0**0.5)
+    d = spat.shape[-1]
+    spat = spat.reshape(1, g0, g0, d).permute(0, 3, 1, 2)
+    g1 = int(num_patches**0.5)
+    spat = F.interpolate(spat, size=(g1, g1), mode="bicubic", align_corners=False)
+    spat = spat.permute(0, 2, 3, 1).reshape(1, g1 * g1, d)
+    return torch.cat([cls, spat], dim=1)
+
+
+def _get_patch_embed_keys(sd: dict[str, torch.Tensor]) -> tuple[str, str] | None:
+    if "patch_embed.proj.weight" in sd:
+        return "patch_embed.proj.weight", "patch_embed.proj.bias"
+    if "patch_embed.weight" in sd:
+        return "patch_embed.weight", "patch_embed.bias"
+    return None
+
+
+def adapt_dinov2_state_to_vit2d(
+    dinov2_sd: dict[str, torch.Tensor], vit: ViT2D
+) -> dict[str, torch.Tensor]:
+    """Map DINOv2 state dict keys/shapes to match *vit* backbone."""
+    adapted: dict[str, torch.Tensor] = {}
+    target_keys = set(vit.state_dict().keys())
+
+    pe_keys = _get_patch_embed_keys(dinov2_sd)
+    if pe_keys is not None:
+        w_key, b_key = pe_keys
+        w, b = _adapt_patch_embed(
+            dinov2_sd[w_key],
+            dinov2_sd[b_key],
+            vit.patch_embed.in_channels,
+            vit.patch_size,
+        )
+        adapted["patch_embed.weight"] = w
+        adapted["patch_embed.bias"] = b
+
+    if "cls_token" in dinov2_sd:
+        adapted["cls_token"] = dinov2_sd["cls_token"]
+
+    if "pos_embed" in dinov2_sd:
+        adapted["pos_embed"] = _adapt_pos_embed(dinov2_sd["pos_embed"], vit.num_patches)
+
+    for key, val in dinov2_sd.items():
+        if key.startswith(_SKIP_PREFIXES):
+            continue
+        if key.startswith("patch_embed.") or key in ("cls_token", "pos_embed"):
+            continue
+        if key in target_keys:
+            adapted[key] = val
+
+    return adapted
+
+
+def load_dinov2_vits14_state_dict(**kwargs: Any) -> dict[str, torch.Tensor]:
+    """Download DINOv2 ViT-S/14 from torch.hub (requires network)."""
+    model = torch.hub.load("facebookresearch/dinov2", "dinov2_vits14", pretrained=True, **kwargs)
+    return {k: v.detach().cpu() for k, v in model.state_dict().items()}
+
+
+def load_pretrained_into_vit2d(vit: ViT2D, *, source: str = "dinov2_vits14") -> dict[str, int]:
+    """Load and adapt pretrained weights into *vit* backbone (strict=False)."""
+    if source != "dinov2_vits14":
+        raise ValueError(f"unsupported pretrained source: {source!r}")
+
+    dinov2_sd = load_dinov2_vits14_state_dict()
+    adapted = adapt_dinov2_state_to_vit2d(dinov2_sd, vit)
+    target_sd = vit.state_dict()
+    overlap = {k: v for k, v in adapted.items() if k in target_sd and target_sd[k].shape == v.shape}
+    vit.load_state_dict(overlap, strict=False)
+    return {"loaded": len(overlap), "skipped": len(target_sd) - len(overlap)}
