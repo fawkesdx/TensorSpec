@@ -375,7 +375,18 @@ def train(
 
         student = build_vit2d(config.model)
         teacher = build_vit2d(config.model)
-        teacher.load_state_dict(student.state_dict())
+        if config.pretrained:
+            from tensorspec.core.ml.ssl.pretrained import load_pretrained_into_vit2d
+
+            stats = load_pretrained_into_vit2d(student, source=config.pretrained)
+            teacher.load_state_dict(student.state_dict())
+            if is_main:
+                print(
+                    f"pretrained {config.pretrained}: {stats}",
+                    flush=True,
+                )
+        else:
+            teacher.load_state_dict(student.state_dict())
         model = DinoModel(student, teacher, config.dino).to(device)
         optimizer = torch.optim.AdamW(
             model.student_parameters(),

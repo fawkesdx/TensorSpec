@@ -1,7 +1,11 @@
 import torch
 
 from tensorspec.core.ml.ssl.models.vit2d import build_vit2d
-from tensorspec.core.ml.ssl.pretrained import adapt_dinov2_state_to_vit2d, load_pretrained_into_vit2d
+from tensorspec.core.ml.ssl.pretrained import (
+    _adapt_pos_embed,
+    adapt_dinov2_state_to_vit2d,
+    load_pretrained_into_vit2d,
+)
 from tensorspec.core.ml.ssl.spec import ModelSpec
 
 
@@ -28,6 +32,16 @@ def _fake_dinov2_vits14_state(*, patch=14, grid=37, dim=384, depth=12):
     sd["norm.weight"] = torch.ones(dim)
     sd["norm.bias"] = torch.zeros(dim)
     return sd
+
+
+def test_adapt_pos_embed_skips_register_tokens():
+    dim = 384
+    grid = 37
+    n_reg = 4
+    pos = torch.randn(1, 1 + n_reg + grid * grid, dim)
+    vit = build_vit2d(ModelSpec(name="vit_s", img_size=128, patch_size=16, in_chans=1))
+    adapted = _adapt_pos_embed(pos, vit.num_patches)
+    assert adapted.shape == (1, 1 + vit.num_patches, dim)
 
 
 def test_adapt_shapes_match_vit_s_128():

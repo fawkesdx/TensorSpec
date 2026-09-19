@@ -111,6 +111,7 @@ class RunConfig:
     log_every: int = 20
     ckpt_every: int = 1000
     max_steps: int | None = None
+    pretrained: str | None = None
 
 
 @dataclass
@@ -220,6 +221,7 @@ def run_config_from_dict(d: dict) -> RunConfig:
         log_every=d.get("log_every", 20),
         ckpt_every=d.get("ckpt_every", 1000),
         max_steps=d.get("max_steps"),
+        pretrained=d.get("pretrained"),
     )
 
 
