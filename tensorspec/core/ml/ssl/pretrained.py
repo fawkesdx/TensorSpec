@@ -24,9 +24,36 @@ def _adapt_patch_embed(
     return w, bias
 
 
-def _adapt_pos_embed(pos: torch.Tensor, num_patches: int) -> torch.Tensor:
+_DINOV2_VITS14_NUM_REGISTERS = 4
+
+
+def _spatial_pos_tokens(pos: torch.Tensor, num_registers: int = 0) -> torch.Tensor:
+    """Return spatial grid tokens, skipping CLS and optional register tokens."""
+    rest = pos[:, 1:]
+    n_rest = rest.shape[1]
+    g0 = int(n_rest**0.5)
+    if g0 * g0 == n_rest:
+        return rest
+
+    candidates = (num_registers,) if num_registers else (_DINOV2_VITS14_NUM_REGISTERS, 1, 8)
+    for n_reg in candidates:
+        if n_reg >= n_rest:
+            continue
+        n_spat = n_rest - n_reg
+        g = int(n_spat**0.5)
+        if g * g == n_spat:
+            return rest[:, n_reg:]
+    raise ValueError(
+        f"pos_embed has {n_rest} non-CLS tokens; cannot infer spatial grid"
+    )
+
+
+def _adapt_pos_embed(
+    pos: torch.Tensor, num_patches: int, *, num_registers: int = 0
+) -> torch.Tensor:
     """Interpolate spatial pos_embed from DINOv2 grid to target patch count."""
-    cls, spat = pos[:, :1], pos[:, 1:]
+    cls = pos[:, :1]
+    spat = _spatial_pos_tokens(pos, num_registers)
     n0 = spat.shape[1]
     g0 = int(n0**0.5)
     d = spat.shape[-1]

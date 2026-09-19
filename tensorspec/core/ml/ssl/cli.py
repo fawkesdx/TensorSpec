@@ -68,6 +68,10 @@ def _parser() -> argparse.ArgumentParser:
         "--resume",
         help="checkpoint path to resume from",
     )
+    train_parser.add_argument(
+        "--pretrained",
+        help="override RunConfig.pretrained (e.g. dinov2_vits14)",
+    )
     probe_parser = subparsers.add_parser(
         "probe", help="floor metrics from ckpt + reference map"
     )
@@ -167,8 +171,11 @@ def main(argv=None) -> int:
         )
         return 0
     if args.cmd == "train":
+        cfg = _run_config(args.config)
+        if args.pretrained:
+            cfg = replace(cfg, pretrained=args.pretrained)
         summary = train(
-            _run_config(args.config),
+            cfg,
             args.data,
             args.out,
             resume=args.resume,
