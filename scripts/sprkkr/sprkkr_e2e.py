@@ -103,15 +103,33 @@ def print_layer_stack(pot_geom, hkl_abas) -> None:
         print(f"[geom]   plane {i}: proj={pl.proj_alat:.4f} n={len(pl.iqs)} iqs={pl.iqs} species=[{species}]")
 
 
-def make_scf_poll_cb():
-    last = [0.0]
+def make_scf_poll_cb(heartbeat_s: float = 120.0):
+    """Print only when the SCF status actually changes.
+
+    The previous version printed every 2 s regardless, which buries a long
+    first iteration (core states + BZ integration emit nothing) under hundreds
+    of identical "iter=0" lines. A heartbeat still fires every `heartbeat_s`
+    so a live-but-quiet job is distinguishable from a hung one.
+    """
+    last_state = [None]
+    last_print = [0.0]
+    t0 = [time.time()]
 
     def cb(status):
         now = time.time()
-        if now - last[0] < 2.0:
+        state = (status.iterations, status.last_err, status.ef_ry)
+        changed = state != last_state[0]
+        if not changed and now - last_print[0] < heartbeat_s:
             return
-        last[0] = now
-        print(f"[scf] iter={status.iterations} err={status.last_err} EF={status.ef_ry}", flush=True)
+        last_state[0] = state
+        last_print[0] = now
+        mins = (now - t0[0]) / 60.0
+        tag = "" if changed else "  (no change)"
+        print(
+            f"[scf] t={mins:5.1f}m iter={status.iterations} "
+            f"err={status.last_err} EF={status.ef_ry}{tag}",
+            flush=True,
+        )
 
     return cb
 
@@ -231,12 +249,18 @@ def main() -> int:
     is_remote = args.target != "local"
     launcher = None
     cluster = None
+    # Resolve the cluster even for --dry-run: it is a local read of
+    # ~/.tensorspec_clusters.json (no network, no ssh), and remote_scf_workdir /
+    # remote_arpes_workdir below dereference `cluster` whenever is_remote, so
+    # leaving it None made "--dry-run --target <cluster>" crash in
+    # cluster_paths.job_dir. Only the launcher needs the live connection.
+    if is_remote:
+        cluster = find_cluster_by_name(args.target)
+        if cluster is None:
+            print(f"ERROR: no cluster named {args.target!r} in ~/.tensorspec_clusters.json", file=sys.stderr)
+            return 1
     if not args.dry_run:
         if is_remote:
-            cluster = find_cluster_by_name(args.target)
-            if cluster is None:
-                print(f"ERROR: no cluster named {args.target!r} in ~/.tensorspec_clusters.json", file=sys.stderr)
-                return 1
             launcher = RemoteLauncher(cluster)
         else:
             mpi_prefix = args.mpi_prefix.format(n=nproc) if args.mpi_prefix else None
