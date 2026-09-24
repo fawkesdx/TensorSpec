@@ -148,14 +148,20 @@ def extract_patch_mean_embeddings(
 
 
 def cluster_embeddings(emb, cfg: ProbeConfig):
+    """K-means on embeddings. ``pca_dim <= 0`` skips PCA (full embedding space)."""
     from sklearn.cluster import KMeans
     from sklearn.decomposition import PCA
 
+    emb = np.asarray(emb)
     n = emb.shape[0]
-    dim = min(cfg.pca_dim, n - 1, emb.shape[1])
-    if dim < 1:
-        raise ValueError("not enough samples for PCA")
-    z = PCA(n_components=dim, random_state=cfg.seed).fit_transform(emb)
+    # pca_dim <= 0: use full D-dimensional embedding (no PCA / no whitening).
+    if cfg.pca_dim <= 0:
+        z = emb
+    else:
+        dim = min(cfg.pca_dim, n - 1, emb.shape[1])
+        if dim < 1:
+            raise ValueError("not enough samples for PCA")
+        z = PCA(n_components=dim, random_state=cfg.seed).fit_transform(emb)
     return KMeans(n_clusters=cfg.k, random_state=cfg.seed, n_init=10).fit_predict(z).astype(
         np.int32
     )

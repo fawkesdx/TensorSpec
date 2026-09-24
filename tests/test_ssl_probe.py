@@ -262,6 +262,16 @@ def test_cluster_two_blobs():
     assert labels[:40].mean() != labels[40:].mean()  # separated
 
 
+def test_cluster_full_embedding_skips_pca():
+    rng = np.random.default_rng(1)
+    a = rng.normal(0, 0.1, size=(30, 16))
+    b = rng.normal(3, 0.1, size=(30, 16))
+    emb = np.vstack([a, b]).astype(np.float32)
+    labels = cluster_embeddings(emb, ProbeConfig(source_id="x", k=2, pca_dim=0, seed=0))
+    assert set(labels.tolist()) == {0, 1}
+    assert labels[:30].mean() != labels[30:].mean()
+
+
 
 def test_labels_to_grid_fills_yx():
     assigns = np.array([0, 1, 0, 1])
