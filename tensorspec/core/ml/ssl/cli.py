@@ -103,6 +103,12 @@ def _parser() -> argparse.ArgumentParser:
         default="cls",
         help="CLS token or mean of all patch tokens",
     )
+    probe_parser.add_argument(
+        "--pca-dim",
+        type=int,
+        default=50,
+        help="PCA dims before k-means; <=0 skips PCA (full embedding)",
+    )
     return parser
 
 
@@ -196,6 +202,7 @@ def main(argv=None) -> int:
             use_teacher=not args.student,
             roi_mode="mask" if args.roi_mask else "full",
             embed=args.embed,
+            pca_dim=args.pca_dim,
         )
         metrics = probe(
             ckpt=args.ckpt,
