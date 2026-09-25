@@ -410,6 +410,9 @@ def train_mae(
             ddp_kwargs: dict[str, Any] = {}
             if device.type == "cuda":
                 ddp_kwargs = {"device_ids": [device.index], "output_device": device.index}
+            # cls_token and the iBOT mask token stay on ViT2D for forward_features
+            # but the MAE loss never reads them.
+            ddp_kwargs["find_unused_parameters"] = True
             model = DistributedDataParallel(model, **ddp_kwargs)
 
         start_epoch, completed_batches = _resume_position(step, steps_per_epoch)
