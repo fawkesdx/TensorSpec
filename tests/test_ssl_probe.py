@@ -11,6 +11,7 @@ from tensorspec.core.ml.ssl.probe import (
     cluster_embeddings,
     extract_cls_embeddings,
     extract_patch_mean_embeddings,
+    extract_patch_mean_from_backbone,
     filter_manifest_indices,
     labels_to_grid,
     load_dino_for_probe,
@@ -250,6 +251,26 @@ def test_extract_patch_mean_no_l2_differs(tmp_path):
     )
     assert a.shape == b.shape
     assert not np.allclose(a, b)
+
+
+def test_extract_patch_mean_from_backbone_matches_wrapper():
+    vit = build_vit2d(ModelSpec(name="vit_ti", img_size=128, patch_size=16, in_chans=1))
+
+    class Wrap:
+        def __init__(self, b):
+            self.teacher = b
+            self.student = b
+
+        def eval(self):
+            self.teacher.eval()
+
+    images = np.random.randn(4, 128, 128).astype(np.float32)
+    device = torch.device("cpu")
+    a = extract_patch_mean_from_backbone(vit, images, batch_size=2, device=device)
+    b = extract_patch_mean_embeddings(
+        Wrap(vit), images, batch_size=2, use_teacher=True, device=device
+    )
+    np.testing.assert_allclose(a, b, rtol=1e-5, atol=1e-5)
 
 
 def test_cluster_two_blobs():

@@ -125,3 +125,22 @@ def load_pretrained_into_vit2d(vit: ViT2D, *, source: str = "dinov2_vits14") -> 
     overlap = {k: v for k, v in adapted.items() if k in target_sd and target_sd[k].shape == v.shape}
     vit.load_state_dict(overlap, strict=False)
     return {"loaded": len(overlap), "skipped": len(target_sd) - len(overlap)}
+
+
+def load_dinov2_vit2d_for_probe(
+    *,
+    device: str | torch.device = "cpu",
+    img_size: int = 128,
+    patch_size: int = 16,
+) -> ViT2D:
+    """Build vit_s 1-ch ViT2D, load DINOv2 weights, eval mode on *device*."""
+    from tensorspec.core.ml.ssl.spec import ModelSpec
+    from tensorspec.core.ml.ssl.models.vit2d import build_vit2d
+
+    vit = build_vit2d(
+        ModelSpec(name="vit_s", img_size=img_size, patch_size=patch_size, in_chans=1)
+    )
+    load_pretrained_into_vit2d(vit, source="dinov2_vits14")
+    vit.to(device)
+    vit.eval()
+    return vit
