@@ -309,7 +309,11 @@ def train(
     *,
     resume: str | None = None,
 ) -> dict[str, Any]:
-    """Train DINO from shards and return final step/epoch summary."""
+    """Train from shards. ``objective='mae'`` uses the masked autoencoder."""
+    if config.objective == "mae":
+        from tensorspec.core.ml.ssl.mae import train_mae
+
+        return train_mae(config, data_dir, out_dir, resume=resume)
     device, distributed, rank, world_size, initialized_here = _device_and_ddp()
     is_main = rank == 0
     output = Path(out_dir)

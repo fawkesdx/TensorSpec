@@ -99,6 +99,20 @@ def load_disp2d_axes(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(payload["energy_axis"]), np.asarray(payload["slit_axis"])
 
 
+def load_mae_encoder_for_probe(ckpt, *, device):
+    """Load the ViT2D encoder stored under the checkpoint key ``encoder``."""
+    path = Path(ckpt)
+    payload = torch.load(path, map_location=device, weights_only=False)
+    if not isinstance(payload, dict) or "encoder" not in payload:
+        raise ValueError("checkpoint is missing encoder")
+    cfg = run_config_from_dict(payload["config"])
+    encoder = build_vit2d(cfg.model)
+    encoder.load_state_dict(payload["encoder"])
+    encoder.to(device)
+    encoder.eval()
+    return encoder
+
+
 def load_dino_for_probe(ckpt, *, device):
     path = Path(ckpt)
     payload = torch.load(path, map_location=device, weights_only=False)
@@ -405,24 +419,40 @@ def probe(
             }
         )
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, _run_cfg = load_dino_for_probe(ckpt, device=device)
-    if config.embed == "cls":
-        emb = extract_cls_embeddings(
-            model,
+    header = torch.load(ckpt, map_location="cpu", weights_only=False)
+    mae_ckpt = (
+        isinstance(header, dict) and "encoder" in header and "model" not in header
+    )
+    if mae_ckpt:
+        if config.embed != "patch_mean":
+            raise ValueError("MAE probe requires embed=patch_mean")
+        encoder = load_mae_encoder_for_probe(ckpt, device=device)
+        emb = extract_patch_mean_from_backbone(
+            encoder,
             images,
             batch_size=config.batch_size,
-            use_teacher=config.use_teacher,
-            device=device,
-        )
-    else:
-        emb = extract_patch_mean_embeddings(
-            model,
-            images,
-            batch_size=config.batch_size,
-            use_teacher=config.use_teacher,
             device=device,
             l2_normalize=config.l2_normalize,
         )
+    else:
+        model, _run_cfg = load_dino_for_probe(ckpt, device=device)
+        if config.embed == "cls":
+            emb = extract_cls_embeddings(
+                model,
+                images,
+                batch_size=config.batch_size,
+                use_teacher=config.use_teacher,
+                device=device,
+            )
+        else:
+            emb = extract_patch_mean_embeddings(
+                model,
+                images,
+                batch_size=config.batch_size,
+                use_teacher=config.use_teacher,
+                device=device,
+                l2_normalize=config.l2_normalize,
+            )
     np.save(out / "embeddings.npy", emb)
     assigns = cluster_embeddings(emb, config)
     ny, nx = ref.map.shape
