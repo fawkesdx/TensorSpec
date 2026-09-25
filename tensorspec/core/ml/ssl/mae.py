@@ -150,7 +150,8 @@ class MaeDecoder(nn.Module):
         batch, n_patches = hidden.shape
         full = self.mask_token.expand(batch, n_patches, -1).clone()
         index = vis_idx.unsqueeze(-1).expand(-1, -1, projected.shape[-1])
-        full.scatter_(1, index, projected)
+        # Autocast runs the projection in fp16 while the mask token stays fp32.
+        full.scatter_(1, index, projected.to(dtype=full.dtype))
         full = full + self.pos_embed
         for block in self.blocks:
             full = block(full)

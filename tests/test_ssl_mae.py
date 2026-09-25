@@ -135,6 +135,25 @@ def test_smoke_step_lowers_finite_loss():
     assert end.item() < start.item()
 
 
+def test_decoder_scatter_accepts_autocast_half_projection():
+    decoder = MaeDecoder(
+        encoder_dim=32,
+        decoder_dim=16,
+        depth=1,
+        num_heads=4,
+        patch_size=16,
+        num_patches=64,
+    )
+    visible = torch.randn(2, 32, 32)
+    vis_idx = torch.arange(32).view(1, 32).expand(2, 32).contiguous()
+    hidden = torch.zeros(2, 64, dtype=torch.bool)
+    hidden[:, 32:] = True
+    with torch.autocast(device_type="cpu", dtype=torch.bfloat16):
+        pred = decoder(visible, vis_idx, hidden)
+    assert pred.shape == (2, 64, 256)
+    assert torch.isfinite(pred.float()).all()
+
+
 def test_health_indices_are_sorted_one_percent():
     first = health_indices(250, seed=0)
     second = health_indices(250, seed=0)
