@@ -66,3 +66,19 @@ def test_load_changes_backbone_from_random(monkeypatch):
     cls, patches = vit.forward_features(x)
     assert cls.shape == (2, 384)
     assert patches.shape == (2, 64, 384)
+
+
+def test_load_dinov2_vit2d_for_probe_shape(monkeypatch):
+    import tensorspec.core.ml.ssl.pretrained as pret
+
+    def fake_load(v, *, source="dinov2_vits14"):
+        assert source == "dinov2_vits14"
+        return {"loaded": 1, "skipped": 0, "missing": 0, "unexpected": 0}
+
+    monkeypatch.setattr(pret, "load_pretrained_into_vit2d", fake_load)
+    out = pret.load_dinov2_vit2d_for_probe(device="cpu")
+    assert out.img_size == 128
+    x = torch.zeros(2, 1, 128, 128)
+    cls, patches = out.forward_features(x)
+    assert cls.shape == (2, 384)
+    assert patches.shape[0] == 2

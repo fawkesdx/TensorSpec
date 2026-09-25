@@ -128,11 +128,10 @@ def extract_cls_embeddings(model, images, *, batch_size, use_teacher, device):
 
 
 @torch.no_grad()
-def extract_patch_mean_embeddings(
-    model, images, *, batch_size, use_teacher, device, l2_normalize=True
+def extract_patch_mean_from_backbone(
+    backbone, images, *, batch_size, device, l2_normalize=True
 ):
-    model.eval()
-    backbone = model.teacher if use_teacher else model.student
+    backbone.eval()
     outs = []
     x_all = torch.from_numpy(np.asarray(images, dtype=np.float32))
     if x_all.ndim != 3:
@@ -145,6 +144,21 @@ def extract_patch_mean_embeddings(
             vec = torch.nn.functional.normalize(vec, dim=-1)
         outs.append(vec.cpu().numpy())
     return np.concatenate(outs, axis=0)
+
+
+@torch.no_grad()
+def extract_patch_mean_embeddings(
+    model, images, *, batch_size, use_teacher, device, l2_normalize=True
+):
+    model.eval()
+    backbone = model.teacher if use_teacher else model.student
+    return extract_patch_mean_from_backbone(
+        backbone,
+        images,
+        batch_size=batch_size,
+        device=device,
+        l2_normalize=l2_normalize,
+    )
 
 
 def cluster_embeddings(emb, cfg: ProbeConfig):
