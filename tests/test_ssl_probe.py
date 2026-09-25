@@ -16,6 +16,7 @@ from tensorspec.core.ml.ssl.probe import (
     labels_to_grid,
     load_dino_for_probe,
     probe,
+    probe_precomputed_embeddings,
     reference_to_binary,
     spatial_contiguity,
 )
@@ -197,6 +198,43 @@ def test_probe_rejects_k_lt_2(tmp_path):
             out_dir=tmp_path / "out",
             config=ProbeConfig(source_id="x", k=1),
         )
+
+
+def test_probe_precomputed_writes_metrics(tmp_path):
+    import json
+
+    ny, nx, d = 4, 4, 8
+    emb = np.zeros((ny * nx, d), dtype=np.float32)
+    provenances = []
+    i = 0
+    for y in range(ny):
+        for x in range(nx):
+            emb[i, 0] = 0.0 if x < 2 else 10.0
+            provenances.append({"index": {"y": y, "x": x}})
+            i += 1
+    ref_map = np.zeros((ny, nx), dtype=np.float32)
+    ref_map[:, 2:] = 1.0
+    ref = FloorReference(
+        map=ref_map,
+        y_axis=np.arange(ny, dtype=np.float64),
+        x_axis=np.arange(nx, dtype=np.float64),
+        roi={"source_id": "toy", "saved_utc": "t"},
+    )
+    out = tmp_path / "out"
+    cfg = ProbeConfig(k=2, pca_dim=0, seed=0, source_id="toy")
+    metrics = probe_precomputed_embeddings(
+        embeddings=emb,
+        provenances=provenances,
+        reference=ref,
+        out_dir=out,
+        config=cfg,
+        meta={"arm": "unit"},
+    )
+    assert (out / "embeddings.npy").exists()
+    assert (out / "metrics.json").exists()
+    assert (out / "fig_overlay.png").exists()
+    assert metrics["ari"] > 0.5
+    assert json.loads((out / "metrics.json").read_text())["arm"] == "unit"
 
 
 def test_agreement_metrics_multiclass_ari():

@@ -452,3 +452,45 @@ def probe(
     )
     _save_overlay_pngs(out, ref.map, ssl_map, ref_lab)
     return metrics
+
+
+def probe_precomputed_embeddings(
+    *,
+    embeddings,
+    provenances,
+    reference,
+    out_dir,
+    config: ProbeConfig,
+    meta: dict | None = None,
+) -> dict:
+    """Cluster + metrics + overlay from precomputed XY embeddings (no ckpt/shards)."""
+    if config.k < 2:
+        raise ValueError(f"probe requires k>=2 (got k={config.k})")
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    emb = np.asarray(embeddings, dtype=np.float32)
+    if emb.ndim != 2:
+        raise ValueError("embeddings must be (N, D)")
+    if len(provenances) != emb.shape[0]:
+        raise ValueError("provenances length mismatch")
+    ref = reference if hasattr(reference, "map") else load_floor_reference(reference)
+    np.save(out / "embeddings.npy", emb)
+    assigns = cluster_embeddings(emb, config)
+    ny, nx = ref.map.shape
+    ssl_map = labels_to_grid(assigns, provenances, ny=ny, nx=nx)
+    ref_lab = reference_to_binary(ref.map, seed=config.seed)
+    metrics = agreement_metrics(ssl_map, ref_lab)
+    metrics.update(
+        {
+            "source_id": config.source_id,
+            "k": config.k,
+            "pca_dim": config.pca_dim,
+            "seed": config.seed,
+            "embed": "patch_mean",
+            "n_samples": int(emb.shape[0]),
+            **(meta or {}),
+        }
+    )
+    (out / "metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    _save_overlay_pngs(out, ref.map, ssl_map, ref_lab)
+    return metrics
