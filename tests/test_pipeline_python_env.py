@@ -14,13 +14,13 @@ def test_pipeline_python_env_local_exports():
 
 def test_pipeline_python_env_cluster_uses_cluster_paths():
     cluster = {
-        "user": "sandy",
-        "host": "einstein.lbl.gov",
+        "user": "user",
+        "host": "gpu.example.org",
         "paths": {
-            "repo_root": "/home/sandy/TensorSpec",
-            "python": "/home/sandy/TensorSpec/TensorSpec_env/bin/python",
+            "repo_root": "/opt/tensorspec/TensorSpec",
+            "python": "/opt/tensorspec/TensorSpec/TensorSpec_env/bin/python",
         },
     }
     bash, _ = pipeline_python_env(cluster)
-    assert '/home/sandy/TensorSpec/TensorSpec_env/bin/python' in bash
-    assert 'PYTHONPATH="/home/sandy/TensorSpec:' in bash
+    assert '/opt/tensorspec/TensorSpec/TensorSpec_env/bin/python' in bash
+    assert 'PYTHONPATH="/opt/tensorspec/TensorSpec:' in bash

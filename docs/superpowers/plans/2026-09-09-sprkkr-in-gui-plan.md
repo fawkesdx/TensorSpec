@@ -53,9 +53,9 @@ Tests `tests/sprkkr/test_jobs.py`: resolve_binary picks MPI when nproc>1; LocalL
 - `roadmap.md`: edits per spec §9 (planner tells Sandy exact lines; Sandy or worker pastes).
 - Tests: `tests/sprkkr/test_kkr_wrapper.py` with monkeypatched launcher (fake .spc copy) → returns TensorData; panel smoke with `qapp` fixture (construct only).
 
-## Gate D = P6 Einstein deploy + Cu(001) real
-- Sandy: `ssh-copy-id` to Einstein; `~/.tensorspec_clusters.json` → `paths.ssh_key`, drop `password`; `paths.sprkkr_bin`.
-- Rebuild on Einstein: upload tgz (sftp via GUI compute panel or scp), make.inc recipe from sandbox (`/mnt/user-data/outputs/sprkkr_fixtures/make.inc`, adjust INCLUDE + BIN), `make scf gen spec scfmpi specmpi`.
+## Gate D = P6 remote host deploy + Cu(001) real
+- Sandy: `ssh-copy-id` to the remote host; `~/.tensorspec_clusters.json` → `paths.ssh_key`, drop `password`; `paths.sprkkr_bin`.
+- Rebuild on the remote host: upload tgz (sftp via GUI compute panel or scp), make.inc recipe from sandbox (`/mnt/user-data/outputs/sprkkr_fixtures/make.inc`, adjust INCLUDE + BIN), `make scf gen spec scfmpi specmpi`.
 - Run Cu SCF + ARPES 71×21 with `-np 32` from GUI. Calibrate ETA. Compare .spc with sandbox (bit-identical expected up to compiler).
 
 ## Gate E = P7 VTe2 (Sandy's system)

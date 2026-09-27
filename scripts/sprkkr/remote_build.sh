@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build SPR-KKR 9.7 (serial + MPI) on a remote Linux host (Einstein). Run from the MAC:
+# Build SPR-KKR 9.7 (serial + MPI) on a remote Linux host. Run from your local machine:
 #
-#   bash scripts/sprkkr/einstein_build.sh sandy@einstein.lbl.gov
+#   REMOTE_ROOT=/abs/path/on/remote/SPRKKR bash scripts/sprkkr/remote_build.sh user@host
 #
 # Env overrides:
-#   REMOTE_ROOT  default /mnt/data/<user>/tensorspec_heavy/SPRKKR   (bins land in $REMOTE_ROOT/bin)
+#   REMOTE_ROOT  REQUIRED, absolute path on the remote   (bins land in $REMOTE_ROOT/bin)
 #   TGZ          default SPRKKR/PUB9.7_260427_09h17.tgz (local, uploaded only if remote has no makefile)
 #   QE_ENV       default /home/<user>/miniconda3/envs/qe  (conda env with mpif90 + lapack; skipped if absent)
 #   JOBS         default 8
@@ -12,9 +12,9 @@
 # Recipe = what worked in the sandbox (gfortran + openmpi): only make.inc edits, no source edits.
 set -euo pipefail
 
-HOST="${1:?usage: einstein_build.sh user@host}"
+HOST="${1:?usage: REMOTE_ROOT=/abs/path remote_build.sh user@host}"
 RUSER="${HOST%%@*}"
-REMOTE_ROOT="${REMOTE_ROOT:-/mnt/data/${RUSER}/tensorspec_heavy/SPRKKR}"
+REMOTE_ROOT="${REMOTE_ROOT:?set REMOTE_ROOT to an absolute path on the remote, e.g. <heavy_root>/SPRKKR}"
 TGZ="${TGZ:-SPRKKR/PUB9.7_260427_09h17.tgz}"
 QE_ENV="${QE_ENV:-/home/${RUSER}/miniconda3/envs/qe}"
 JOBS="${JOBS:-8}"

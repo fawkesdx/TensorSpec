@@ -125,19 +125,21 @@ def test_mpi_launch_prefix_daemon_is_plain():
     assert "--oversubscribe" not in mpi_launch_prefix(None, 4)
 
 
-def test_load_private_key_nersc_rsa_pem():
-    key_path = os.path.expanduser("~/.ssh/nersc")
-    if not os.path.isfile(key_path):
-        pytest.skip("~/.ssh/nersc not present")
+def test_load_private_key_sshproxy_rsa_pem():
+    # Point TENSORSPEC_TEST_SSHPROXY_KEY at a real sshproxy key to exercise this.
+    key_path = os.path.expanduser(os.environ.get("TENSORSPEC_TEST_SSHPROXY_KEY", ""))
+    if not key_path or not os.path.isfile(key_path):
+        pytest.skip("TENSORSPEC_TEST_SSHPROXY_KEY not set / key not present")
     pkey = load_private_key(key_path)
     assert pkey is not None
 
 
 def test_uses_sshproxy_and_arpes_fetch_filter():
-    assert uses_sshproxy({"host": "login.nersc.gov", "user": "u"})
+    # Opt-in only: no host-name detection.
+    assert not uses_sshproxy({"host": "login.hpc.example.org", "user": "u"})
     assert uses_sshproxy({"host": "gpu.example.edu", "auth": "sshproxy"})
     assert not uses_sshproxy({"host": "gpu.example.edu", "mode": "Daemon"})
-    assert not uses_sshproxy({"host": "login.nersc.gov", "auth": "password"})
+    assert not uses_sshproxy({"host": "login.hpc.example.org", "auth": "password"})
 
     assert is_arpes_fetch_candidate("wannier90_hr.dat")
     assert is_arpes_fetch_candidate("scf.out")

@@ -76,7 +76,7 @@ def test_fresnel_LV_stays_along_z():
 - [ ] **Step 2: Run tests — expect NEW asserts to FAIL on vacuum-angle code**
 
 ```bash
-cd /Users/sandyai/Documents/GitHub/TensorSpec_GUI
+cd <repo_root>
 PYTHONPATH=. pytest tests/test_arpes_approach_c.py::test_fresnel_n_gt1_changes_LH_direction_mix tests/test_arpes_approach_c.py::test_fresnel_LH_Ez_mix_differs_55_vs_20 -v
 ```
 
@@ -152,7 +152,7 @@ git commit -m "feat(arpes): refracted-angle Fresnel local-field rebuild"
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-07-arpes-fresnel-refracted-angle-design.md` (status → implemented)
-- Modify if present: `/Users/sandyai/Dropbox/Apps/Overleaf/VTe2 Project/Matrix Element Issue/02_TensorSpec_ApproachB_Rerun_Checklist.md` (note v2 refracted; vacuum-angle superseded) — outside TensorSpec git; edit file but do not force into TensorSpec commit
+- Modify if present: `<overleaf_project>/Matrix Element Issue/02_TensorSpec_ApproachB_Rerun_Checklist.md` (note v2 refracted; vacuum-angle superseded) — outside TensorSpec git; edit file but do not force into TensorSpec commit
 - Modify: `docs/superpowers/specs/2026-09-07-arpes-approach-c-fresnel-photon-q-design.md` — one-line note that A-rebuild is now refracted (v2)
 
 **Interfaces:**

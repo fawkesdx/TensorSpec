@@ -49,7 +49,7 @@ Grand App
 		- [x] Option B: One-Step Photoemission Model
 			- [x] B1: Tight-Binding + Free Electron Final State (Chinook Engine integration)
 			- [ ] B2: Real-space DFT Orbitals + Plane Wave Final State (kMap FFT tomography integration)
-			- [x] B3: Full Multiple Scattering & Time-Reversed LEED (SPR-KKR `kkrspec` wrapper: native θ×φ grid, MPI, energy/hv fan-out, local or remote; `.spc` → DataTree). Code done 2026-09-09; real-run check on Einstein pending (Gate D).
+			- [x] B3: Full Multiple Scattering & Time-Reversed LEED (SPR-KKR `kkrspec` wrapper: native θ×φ grid, MPI, energy/hv fan-out, local or remote; `.spc` → DataTree). Code done 2026-09-09; real-run check on the remote host pending (Gate D).
 	- [ ] Data Loader from various beamlines (MAESTRO, i05 Diamond, SIS SLS, etc.)
 	- [ ] Linked Crosshair Data Viewer (Interactive EDC and MDC extraction)
 	- [ ] data loader from various beamline

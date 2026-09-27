@@ -21,7 +21,7 @@ try:
     from tensorspec.core.arpes.one_step.fresnel import apply_fresnel_to_A_lab
     from tensorspec.core.arpes.one_step.photon_momentum import photon_q_lab
 except ImportError:
-    # Remote Einstein jobs upload flat .py files beside this module (no package).
+    # Remote jobs upload flat .py files beside this module (no package).
     def _load_co_uploaded(name: str):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"{name}.py")
         if name in sys.modules:

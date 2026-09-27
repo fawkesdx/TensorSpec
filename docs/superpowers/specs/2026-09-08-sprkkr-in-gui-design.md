@@ -22,7 +22,7 @@ NOT this doc: GPU KKR clone (OSKI, other chat).
 
 Goals
 1. Correct inputs (via ase2sprkkr) for SCF + ARPES from Crystal Suite structure.
-2. Run local (Mac, if binaries) or remote (Einstein) with same job object. Live progress.
+2. Run local (Mac, if binaries) or remote (remote host) with same job object. Live progress.
 3. Parse `.spc` → `xarray.DataTree` `/simulated/arpes` (coords energy_eV, theta_deg, phi_deg; data I_tot, I_up, I_dn, pol, k_par; attrs hv, pol_p, EF_Ry, ework, N_LAYER…). Show in existing N-D viewer.
 4. Speed: native NT×NP grid, MPI, energy-chunk + hv-list fan-out, potential vault reuse, ETA estimate before submit.
 5. Tests without binaries (fixtures). Smoke test if binary present.
@@ -99,13 +99,13 @@ def parse_spc(path) -> xr.Dataset   # dims (energy, theta, phi); vars I_tot I_up
 
 ## 7. Deploy targets
 
-- Einstein: rebuild 9.7 with MPI (`make scfmpi specmpi`), bin dir in `~/.tensorspec_clusters.json` `paths.sprkkr_bin`. Use ssh KEY. Remove plaintext-password scratch scripts from repo root.
+- Remote host: rebuild 9.7 with MPI (`make scfmpi specmpi`), bin dir in `~/.tensorspec_clusters.json` `paths.sprkkr_bin`. Use ssh KEY. Remove plaintext-password scratch scripts from repo root.
 - Mac Studio (optional): `brew install gcc open-mpi openblas`; same make.inc recipe. Enables local runs + fast dev loop.
 - Sandbox: my test bench only, ephemeral.
 
 ## 8. Phases (each = gate, Sandy approves before next)
 
-P1 params+inputs (+tests) → P2 outputs parse → DataTree (+tests) → P3 jobs+progress+fanout (local first) → P4 kkr_wrapper + router B3 → P5 GUI panels rewire + roadmap.md edits → P6 Einstein deploy + Cu(001) real run → P7 VTe2.
+P1 params+inputs (+tests) → P2 outputs parse → DataTree (+tests) → P3 jobs+progress+fanout (local first) → P4 kkr_wrapper + router B3 → P5 GUI panels rewire + roadmap.md edits → P6 remote host deploy + Cu(001) real run → P7 VTe2.
 
 ## 9. roadmap.md edits (tell Sandy, do not rewrite roadmap)
 
@@ -117,4 +117,4 @@ P1 params+inputs (+tests) → P2 outputs parse → DataTree (+tests) → P3 jobs
 
 - ase2sprkkr version drift vs 9.7 keywords → pin version; keyword table in `params.py` is ours; fixtures catch drift.
 - Real systems: SCF convergence, `dlm1 not converged in gikamm` crash seen before (bad inputs). Expose `IMV_*`, `N_LAYER` knobs; surface Fortran error lines in GUI.
-- Cost: 4 s/pt/core. 200×200 Fermi map at 1 E = 40k pts ≈ 44 core-h. Fan-out + Einstein needed; ETA panel must warn.
+- Cost: 4 s/pt/core. 200×200 Fermi map at 1 E = 40k pts ≈ 44 core-h. Fan-out + remote host needed; ETA panel must warn.

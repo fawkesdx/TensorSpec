@@ -88,7 +88,7 @@ At 1100 jobs, one ssh round trip per job per poll = 1100 `ssh` calls every 3 s. 
 - `len({p.defl_deg for p in points}) > 1` -> 2-D grid path.
 - else -> **today's 1-D path, unchanged**, `phi = [float(deflector_deg)]` from the argument.
 
-Old sidecars written by phase 1a have no `defl_deg` key; `AnglePoint(**d)` still works because the field has default `0.0`, all equal -> 1-D path -> `deflector_deg` from `meta`. Old runs on Einstein keep loading.
+Old sidecars written by phase 1a have no `defl_deg` key; `AnglePoint(**d)` still works because the field has default `0.0`, all equal -> 1-D path -> `deflector_deg` from `meta`. Old runs on the remote host keep loading.
 
 ### Energy reference: unchanged
 
@@ -407,7 +407,7 @@ def _remote_rows_done_many(launcher: Any, paths: List[str]) -> Dict[str, int]:
 **Steps**
 - [ ] `_SubJob` (dataclass, line 313-320): add `finished: bool = False` and `rows_cached: Optional[int] = None`. Defaults keep every existing construction valid.
 - [ ] NEW `ArpesRunHandle._refresh_remote(self)`: called once per poll when `_is_remote(self._launcher)`.
-  - Collect `pids = [sj.handle.pid for sj in self.handles if not sj.finished and getattr(sj.handle, "pid", None)]`; one `_remote_alive_pids` call; mark `sj.finished = True` for any whose pid is gone. A job whose handle has a `jobid` (SLURM) or no pid falls back to per-handle `_is_running` — Einstein has no SLURM, so this path is cold.
+  - Collect `pids = [sj.handle.pid for sj in self.handles if not sj.finished and getattr(sj.handle, "pid", None)]`; one `_remote_alive_pids` call; mark `sj.finished = True` for any whose pid is gone. A job whose handle has a `jobid` (SLURM) or no pid falls back to per-handle `_is_running` — remote host has no SLURM, so this path is cold.
   - Collect `paths = [f"{sj.job.workdir}/{sj.expected_spc}" for sj in self.handles if sj.rows_cached is None or not sj.finished]`; ONE `_remote_rows_done_many` call; store into `sj.rows_cached`. Once `sj.finished` and rows read, never query that job again.
   - Chunk both calls at 200 items per ssh command so the command line stays sane.
 - [ ] `fraction_done`: for the remote branch (lines 350-354), call `self._refresh_remote()` once, then sum `sj.rows_cached or 0` instead of the per-job `_remote_rows_done` call. Local branch (lines 355-358) unchanged — `arpes_rows_done` is a cheap local file read, but still latch `rows_cached` when `sj.finished`.
@@ -646,7 +646,7 @@ Depends on: Tasks 5, 7.
 def pointwise_eta_seconds(ne: int, n_jobs: int, max_concurrent: Optional[int],
                           t_energy_s: float = 35.0, effective_cores: int = 40) -> float:
     """Wall seconds for point-wise mode: each job is ONE (Theta,Phi) at all NE
-    energies on a single rank. Measured on Einstein 2026-09-14: ~35 s CPU per
+    energies on a single rank. Measured on the remote host 2026-09-14: ~35 s CPU per
     energy point per job, and 100 concurrent jobs took 2.5x their CPU time in
     wall -> the box delivers ~40 cores of throughput. So wall is CPU-bound:
         wall = ne * t_energy_s * n_jobs / min(effective_cores, cap)
@@ -674,7 +674,7 @@ Add it to `sprkkr/__init__.py`'s `from .progress import (...)` block (currently 
   ```python
                   'max_concurrent': self.remote_cores_spin.value(),
   ```
-  `remote_cores_spin` is built at lines 237-240 (`QSpinBox`, range 1-128, value 40, prefix `"Cores: "`). Also set its tooltip there: `"Point-wise mode: max kkrspec jobs alive at once. Einstein ran 100 concurrent single-rank jobs with no slowdown (2026-09-13)."`
+  `remote_cores_spin` is built at lines 237-240 (`QSpinBox`, range 1-128, value 40, prefix `"Cores: "`). Also set its tooltip there: `"Point-wise mode: max kkrspec jobs alive at once. Remote host ran 100 concurrent single-rank jobs with no slowdown (2026-09-13)."`
 - [ ] Anchor 3 — the job-count guard. Replace this exact block (currently 1057-1066):
   ```python
               if self.chk_pointwise.isChecked() and kx_steps_eff > 64:
@@ -808,14 +808,14 @@ Depends on: Tasks 1-8.
   `ETA: ~2d 6h  (1100 jobs, 28 wave(s) of 40)` — the label must show waves AND the CPU-bound wall estimate from `pointwise_eta_seconds`; at Cores: 100 it must STILL read ~2d 6h (11 waves, but 40 effective cores)
   and that pressing Run pops ONE dialog saying `NT=100 x NP=11 = 1100 kkrspec jobs, 28 wave(s) of up to 40`. Answer No. Nothing launches.
 
-- [ ] **Wall-time estimate, hand-computed, for Sandy's real run.** Measured on Einstein 2026-09-14 (100x200 cut): per job CPU = 200 x 35 s ≈ 1.95 h, but 100 concurrent jobs took **4 h 57 min wall** — i.e. Einstein delivered ~40 cores' worth of throughput to 100 processes (2.5x oversubscribed). So the budget is CPU-bound:
+- [ ] **Wall-time estimate, hand-computed, for Sandy's real run.** Measured on the remote host 2026-09-14 (100x200 cut): per job CPU = 200 x 35 s ≈ 1.95 h, but 100 concurrent jobs took **4 h 57 min wall** — i.e. Remote host delivered ~40 cores' worth of throughput to 100 processes (2.5x oversubscribed). So the budget is CPU-bound:
   - total CPU = `NT x NP x NE x 35 s` = `1100 x 7000 s` = **2140 core-hours**
   - wall ≈ `2140 / ~40 effective cores` ≈ **54 h ≈ 2 days 6 h**, whatever `max_concurrent` is, as long as it is >= 40.
-  - `max_concurrent` therefore does NOT buy wall time here; it buys **politeness** (Einstein stays usable for others, no 1100-process pile-up) and **partial results** (deflector-major waves finish whole cuts). Set Cores to 40-100; both give ~54 h. Do not set 1100.
+  - `max_concurrent` therefore does NOT buy wall time here; it buys **politeness** (remote host stays usable for others, no 1100-process pile-up) and **partial results** (deflector-major waves finish whole cuts). Set Cores to 40-100; both give ~54 h. Do not set 1100.
   - Same as today's bash loop (11 x ~5 h ≈ 55 h) — the win of 1b is one Run button + one stitched cube + workspace save, not speed. To be faster: fewer energies (E is the wall-time axis: NE=100 -> ~27 h), or a narrow window around E_F for a pure Fermi surface.
   - Fixed reviewer note (Fable): the planner's first draft claimed "Cores: 100 saves 33 h" from "no slowdown at 100 concurrent" — wrong; CPU per job was uniform but wall was 2.5x CPU. Corrected here.
 
-- [ ] **Sandy runs the one real Einstein job herself.** Do not launch it from an agent.
+- [ ] **Sandy runs the one real remote host job herself.** Do not launch it from an agent.
   - pot `scratch/sprkkr_gui_run/scf_20260909_205106/scf.pot_new`, `hkl` ABAS `0 1 -1`, `IQ_AT_SURF 2`, `hv 84`, pol `P`, `theta_ph 45`, `ework 4.5`
   - slit `0`, manip theta/tilt/azimuth `0`, `phi_offset 0` (still UNCALIBRATED)
   - `Θ -10..10 NT=100`, `Φ -15..15 NP=11`, `E -1.0..0.1 NE=200`, point-wise ON, `Cores: 40` (or up to 100; wall ~54 h either way)
@@ -823,8 +823,8 @@ Depends on: Tasks 1-8.
   - **Fail gates:**
     - all 11 cuts identical -> the deflector never reached the points; check `pointwise_points.json` has 1100 entries with 11 distinct `defl_deg`
     - `phi` axis is `[0..10]` integers -> `stitch_points` took the 1-D branch; check `defl_deg` is non-constant in the sidecar
-    - more than `Cores:` jobs alive on Einstein at once (`pgrep -c kkrspec9.7`) -> throttle did not engage; check `[throttle]` printed at launch
-    - run appears frozen with no progress -> expected, see the known gap in Task 8; check `pgrep -c kkrspec9.7` on Einstein instead of the GUI
+    - more than `Cores:` jobs alive on the remote host at once (`pgrep -c kkrspec9.7`) -> throttle did not engage; check `[throttle]` printed at launch
+    - run appears frozen with no progress -> expected, see the known gap in Task 8; check `pgrep -c kkrspec9.7` on the remote host instead of the GUI
 
 - [ ] Still open after this, do not pretend otherwise: the absolute `PHI` zero axis (the Task-8 runbook from phase 1a, `docs/superpowers/runbooks/2026-09-13-sprkkr-phi-axis-calibration.md`, still NOT run); `TYP=3/4` native 2-D maps; `BETA1/BETA2/ROTAXIS`; live progress in the GUI during a point-wise run; per-energy angle re-evaluation (the `0.13 deg/eV` drift). Phase 2, not here.
 

@@ -2,9 +2,9 @@
 
 **Date:** 2026-09-08  
 **For:** Fresh agent session (read this file first; scope = new package + TensorSpec_GUI glue later)  
-**Repo context:** `/Users/sandyai/Documents/GitHub/TensorSpec_GUI` (branch `TensorSpec_GUI` / also on `main`)  
+**Repo context:** `<repo_root>` (branch `TensorSpec_GUI` / also on `main`)  
 **Related science docs (Overleaf, optional):**  
-`/Users/sandyai/Dropbox/Apps/Overleaf/VTe2 Project/Matrix Element Issue/`  
+`<overleaf_project>/Matrix Element Issue/`  
 especially `00_HANDOFF_READ_ME_FIRST.md`, `01_Why_Chinook_Fails_Magneto_ARPES.md`
 
 ---
@@ -32,7 +32,7 @@ VTe₂ magneto-ARPES Setup‑2: tip changes beam↔surface (~55° vs ~20°) at *
 | Approach B | hydrogenic rad, mfp, kz Lorentz broaden, incidence→`A_lab` |
 | Approach C | Fresnel local A + optional photon-q |
 | Fresnel v2 | **refracted-angle** rebuild (`fresnel.py`); vacuum-angle superseded |
-| Remote Einstein | uploads `fresnel.py` / `photon_momentum.py` with runner |
+| Remote GPU host | uploads `fresnel.py` / `photon_momentum.py` with runner |
 | GrizzlyME | separate PyPI package; Chinook ME on CUDA |
 
 Key paths:

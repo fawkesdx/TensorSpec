@@ -202,10 +202,10 @@ def test_vault_register_remote_entry(tmp_path):
     entry = vault.register(
         "deadbeef00000001",
         "VTe2_remote",
-        cluster="einstein",
+        cluster="remote-gpu",
         remote_path="/scratch/user/VTe2/VTe2_SCF.pot",
     )
     assert entry.pot_path is None
-    assert entry.cluster == "einstein"
+    assert entry.cluster == "remote-gpu"
     got = vault.get("VTe2_remote")
     assert got.remote_path == "/scratch/user/VTe2/VTe2_SCF.pot"

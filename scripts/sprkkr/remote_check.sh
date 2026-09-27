@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Quick remote health check for SPR-KKR runs. Run from the MAC:
-#   bash scripts/sprkkr/einstein_check.sh sandy@einstein.lbl.gov
+# Quick remote health check for SPR-KKR runs. Run from your local machine:
+#   REMOTE_ROOT=/abs/path/on/remote/SPRKKR bash scripts/sprkkr/remote_check.sh user@host
 # Paste the output back to the planner.
 set -uo pipefail
-HOST="${1:?usage: einstein_check.sh user@host}"
+HOST="${1:?usage: REMOTE_ROOT=/abs/path remote_check.sh user@host}"
 RUSER="${HOST%%@*}"
-REMOTE_ROOT="${REMOTE_ROOT:-/mnt/data/${RUSER}/tensorspec_heavy/SPRKKR}"
+REMOTE_ROOT="${REMOTE_ROOT:?set REMOTE_ROOT to an absolute path on the remote, e.g. <heavy_root>/SPRKKR}"
 QE_ENV="${QE_ENV:-/home/${RUSER}/miniconda3/envs/qe}"
 
 echo "== ssh key auth test (no password prompt expected)"

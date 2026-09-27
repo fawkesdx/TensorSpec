@@ -21,7 +21,7 @@ Primary users this week: groups stacking 2D devices (aligned multilayers) and gr
 - Changing Render to use the real DFT lattice (viewer stays on 500 Å canvas)
 - Multi-layer **twisting** DFT cells (more than 2 layers with any θ ≠ 0) — placeholder only
 - DFT Suite / QE generator changes (consumers load Structure as today)
-- MPI launcher / `nnr` / Einstein–Mac QE parallel fixes
+- MPI launcher / `nnr` / remote–Mac QE parallel fixes
 - Auto-relax / interface reconstruction / DFT strain energy
 
 ## Decisions (from brainstorm)

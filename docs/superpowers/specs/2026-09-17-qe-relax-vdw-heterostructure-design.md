@@ -18,7 +18,7 @@ TensorSpec’s QE path today is **SCF → NSCF → Wannier** on the structure as
 
 Add a first-class **geometry relaxation** option to the DFT Suite QE generator, with **2D-safe defaults**, optional **DFT-D3**, and a pipeline that always runs electronic steps on the **relaxed** structure. In the same project, deliver the follow-through items that make heterostructure DFT usable end-to-end: selective dynamics, relaxed-structure write-back, and improved Push strain / moiré handling.
 
-Primary users: 2D stack → Push → Einstein/local QE → bands / ARPES (graphene/hBN and similar).
+Primary users: 2D stack → Push → remote/local QE → bands / ARPES (graphene/hBN and similar).
 
 ## Decisions (from brainstorm)
 
@@ -160,7 +160,7 @@ Extends `2026-09-13-stack-dft-cell-rebuild-design.md` (do not break aligned N-la
 
 ## Success criteria
 
-1. Generate with default **Relax ions** produces `relax.in` + pipeline that relaxes then SCF→Wannier on Einstein/local.  
+1. Generate with default **Relax ions** produces `relax.in` + pipeline that relaxes then SCF→Wannier on remote/local.  
 2. With DFT-D3 on, `relax.in` contains `vdw_corr` (or explicit unsupported error).  
 3. After success, `relaxed_structure.cif` exists and loads in Crystal Suite.  
 4. P2: fixing bottom/ref layer yields `if_pos` in `relax.in` and those atoms do not move beyond threshold in a tiny fixture test.  
@@ -187,6 +187,6 @@ Extends `2026-09-13-stack-dft-cell-rebuild-design.md` (do not break aligned N-la
 
 ## Open points (resolve in plan if needed)
 
-1. ~~Exact QE version string / D3 keyword on Einstein `qe` conda env~~ — **Resolved 2026-09-18 (Task 10 smoke):** PWSCF **v7.5** at `/home/sandy/miniconda3/envs/qe/bin/pw.x` (conda env `qe`; not on default SSH PATH — `conda activate qe` or full path). **DFT-D3: yes.** Binary embeds `dft-d3` / `DFT-D3` (Grimme); `vdw_corr = 'dft-d3'` in `&SYSTEM` is accepted (same spelling as TensorSpec generator). One-atom C relax smoke with `/home/sandy/TensorSpec/Pseudo/C.us.pbe.z_4.uspp.gbrv.v1.2.upf` printed `DFT-D3 Dispersion Correction (3-body terms):` and C6 table — no unsupported-keyword error.  
+1. ~~Exact QE version string / D3 keyword on the remote host `qe` conda env~~ — **Resolved 2026-09-18 (Task 10 smoke):** PWSCF **v7.5** at `<remote_conda>/envs/qe/bin/pw.x` (conda env `qe`; not on default SSH PATH — `conda activate qe` or full path). **DFT-D3: yes.** Binary embeds `dft-d3` / `DFT-D3` (Grimme); `vdw_corr = 'dft-d3'` in `&SYSTEM` is accepted (same spelling as TensorSpec generator). One-atom C relax smoke with `<remote_repo>/Pseudo/C.us.pbe.z_4.uspp.gbrv.v1.2.upf` printed `DFT-D3 Dispersion Correction (3-body terms):` and C6 table — no unsupported-keyword error.  
 2. Whether post-relax SCF reuses relax charge density (`startingwfc`/`startingpot`) — optimization, not required for correctness.  
 3. Auto-push relaxed structure to workspace vs file-only + button — default **file + optional button** to avoid surprising Crystal state.

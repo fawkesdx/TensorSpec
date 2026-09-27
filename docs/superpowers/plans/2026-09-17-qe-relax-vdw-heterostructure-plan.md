@@ -19,7 +19,7 @@
 - Pipeline stage banners required: `=== RELAX ===`, `=== SCF ===`, etc.
 - Prefer file write-back `relaxed_structure.cif` + optional workspace button; do not silently overwrite Crystal viz structure.
 - Do not enable multi-twist DFT (>2 twisted layers).
-- Dry-run / Einstein validation is manual; CI covers unit tests only.
+- Dry-run / remote host validation is manual; CI covers unit tests only.
 
 ## File map
 
@@ -92,7 +92,7 @@ def test_write_relaxed_cif(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/sandyai/Documents/GitHub/TensorSpec_GUI && PYTHONPATH=. TensorSpec_env/bin/python -m pytest tests/test_qe_relax_io.py -v`  
+Run: `PYTHONPATH=. TensorSpec_env/bin/python -m pytest tests/test_qe_relax_io.py -v`  
 Expected: FAIL (module missing)
 
 - [ ] **Step 3: Implement `qe_relax_io.py`**
@@ -290,7 +290,7 @@ Prefer shipping a small script `tensorspec/core/dft/sync_after_relax.py` invoked
 "$PYTHON" -m tensorspec.core.dft.sync_after_relax --out-dir . --template-cif structure_template.cif
 ```
 
-On Generate, also write `structure_template.cif` from the current structure so the remote pipeline can reload lattice/tags without pymatgen GUI deps issues — **or** embed JSON of lattice + species. Simplest robust approach for Einstein:
+On Generate, also write `structure_template.cif` from the current structure so the remote pipeline can reload lattice/tags without pymatgen GUI deps issues — **or** embed JSON of lattice + species. Simplest robust approach for remote host:
 
 1. On Generate, write `structure_template.cif` from `engine.crystal_structure`.
 2. Pipeline after relax: `python -m tensorspec.core.dft.sync_after_relax` which reads `relax.out` + template CIF, writes `relaxed_structure.cif`, regenerates `scf.in`/`nscf.in`/`wannier90.win` via `QEInputGenerator` using the same CLI flags stored in `tensorspec_relax_meta.json` written at Generate time.
@@ -444,14 +444,14 @@ git commit -m "fix(crystal): keep commensurate twist on moiré cell; clarify str
 
 ---
 
-### Task 10: Docs + Einstein D3 smoke note
+### Task 10: Docs + remote host D3 smoke note
 
 **Files:**
 - Modify: spec status already approved
-- Create short note in spec Open points resolution: run on Einstein
+- Create short note in spec Open points resolution: run on the remote host
 
 ```bash
-ssh einstein 'source ... && conda activate qe && grep -i d3 $(which pw.x) || pw.x -h 2>&1 | head'
+ssh <host> 'source ... && conda activate qe && grep -i d3 $(which pw.x) || pw.x -h 2>&1 | head'
 # or one-atom relax.in with vdw_corr to see accept/reject
 ```
 
@@ -473,7 +473,7 @@ ssh einstein 'source ... && conda activate qe && grep -i d3 $(which pw.x) || pw.
 | Selective dynamics | 7 |
 | Isotropic strain UI | 8 |
 | Commensurate moiré preference | 9 |
-| Einstein D3 verify | 10 |
+| Remote host D3 verify | 10 |
 
 ## Execution Handoff
 
