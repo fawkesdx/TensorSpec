@@ -9,7 +9,7 @@
 
 Approach C vacuum-angle Fresnel scales LH `|A|` by `t_p(θ)` only.  
 `Ay/Ax = tan α` unchanged → **Ez/E∥ mix** does not change with `n` or incidence the way H2 needs.  
-Einstein smoke (n=2, Fresnel ON, 55 vs 20, φ=−10 LH) still kills the **wrong** Dirac arm.
+Remote host smoke (n=2, Fresnel ON, 55 vs 20, φ=−10 LH) still kills the **wrong** Dirac arm.
 
 ## Goal
 
@@ -90,7 +90,7 @@ No changes to `chinook_arpes_kmesh` call sites, GUI, or GrizzlyME.
 
 ### Validation (science)
 
-Einstein / local: φ=−10, Full ME, LH, hydrogenic, mfp=5, kz=0.2, Fresnel ON, **n≈2**, photon-q OFF, incidence **55 vs 20**.  
+Remote / local: φ=−10, Full ME, LH, hydrogenic, mfp=5, kz=0.2, Fresnel ON, **n≈2**, photon-q OFF, incidence **55 vs 20**.  
 Judge outer/inner arm weights vs ARPES. If still wrong arm → escalate H0/H1 / LV sweep (out of this spec).
 
 ## Risks

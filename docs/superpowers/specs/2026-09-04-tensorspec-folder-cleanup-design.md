@@ -10,7 +10,7 @@
 
 - Workers still live under the historical name `gui/maestroai/`
 - Dead copy at repo root `/maestroai/` (gitignored)
-- Loose helpers at `gui/` top level (`cluster_utils`, `compute_mode`, `nersc_auth`, `ml_session`)
+- Loose helpers at `gui/` top level (`cluster_utils`, `compute_mode`, `sshproxy_auth`, `ml_session`)
 - Empty stub `gui/components/crystal_tabs/`
 - Engines for PEEM/ML are not yet under `core/<domain>/` (deferred)
 
@@ -49,7 +49,7 @@ tensorspec/
 | B1 | Delete root `/maestroai/`; remove `/maestroai/` from `.gitignore` |
 | B2 | `git mv gui/maestroai → gui/ml`; rewrite imports `tensorspec.gui.maestroai` → `tensorspec.gui.ml` |
 | B3 | Move `ml_session.py` → `gui/ml/session.py` (or keep re-export shim at old path for one release — prefer direct move + rewrite) |
-| B4 | Move `nersc_auth.py`, `compute_mode.py` → `gui/services/`; move `cluster_utils.py` → `gui/services/cluster_utils.py` (callers: DFT suite, panels) |
+| B4 | Move `sshproxy_auth.py`, `compute_mode.py` → `gui/services/`; move `cluster_utils.py` → `gui/services/cluster_utils.py` (callers: DFT suite, panels) |
 | B5 | Delete empty `components/crystal_tabs/` if unused |
 | B6 | Add short `docs/FOLDER_LAYOUT.md` describing the rule |
 

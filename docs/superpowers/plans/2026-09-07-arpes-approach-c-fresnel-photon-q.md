@@ -265,7 +265,7 @@ git commit -m "feat(arpes): GUI knobs for Fresnel and photon momentum"
 
 ---
 
-### Task 5: Docs + checklist + Einstein smoke note
+### Task 5: Docs + checklist + remote host smoke note
 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-07-arpes-approach-c-fresnel-photon-q-design.md` (status → approved/implemented when done)
@@ -275,7 +275,7 @@ git commit -m "feat(arpes): GUI knobs for Fresnel and photon momentum"
 - [x] **Step 1: Update checklist** — Approach C no longer “deferred”; defaults documented
   (Overleaf path outside TensorSpec git: `VTe2 Project/Matrix Element Issue/02_TensorSpec_ApproachB_Rerun_Checklist.md`)
 
-- [x] **Step 2: Record Einstein validation recipe** (in design spec + checklist)
+- [x] **Step 2: Record remote host validation recipe** (in design spec + checklist)
 
 ```text
 φ = −10 single cut, Full ME, LH, hydrogenic, mfp=5, kz=0.2

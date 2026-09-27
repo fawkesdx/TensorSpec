@@ -15,7 +15,7 @@ from pymatgen.core import Structure
 from tensorspec.core.dft.qe_generator import QEInputGenerator, build_if_pos_mask
 from tensorspec.core.compute import cluster_paths as cp
 from tensorspec.core.workspace import global_workspace
-from tensorspec.gui.services.nersc_auth import refresh_sshproxy_login
+from tensorspec.gui.services.sshproxy_auth import refresh_sshproxy_login
 
 RELAXED_CIF = "relaxed_structure.cif"
 _LOCAL_REPO_ROOT = str(Path(__file__).resolve().parents[3])
@@ -323,15 +323,15 @@ class QEGeneratorPanel(QWidget):
         self.spin_pw_cores.setRange(1, 256)
         self.spin_pw_cores.setValue(8)
         self.spin_pw_cores.setToolTip(
-            "MPI ranks for pw.x (scf + nscf). Einstein/Daemon: start ~8. "
-            "NERSC CPU nodes: often up to 128 (auto when Compute Target=SLURM)."
+            "MPI ranks for pw.x (scf + nscf). Workstation / Daemon: start ~8. "
+            "Large HPC CPU nodes: often up to 128 (auto when Compute Target=SLURM)."
         )
         self.spin_wannier_cores = QSpinBox()
         self.spin_wannier_cores.setRange(1, 256)
         self.spin_wannier_cores.setValue(8)
         self.spin_wannier_cores.setToolTip(
             "MPI ranks for pw2wannier90.x only. Must not exceed smallest FFT dimension. "
-            "Einstein: keep ≤8–16. NERSC often ≤36. wannier90.x stays serial."
+            "Workstation: keep ≤8–16. HPC nodes often ≤36. wannier90.x stays serial."
         )
         parallel_layout.addWidget(self.chk_mpi)
         parallel_layout.addWidget(QLabel("pw.x"))
@@ -400,11 +400,11 @@ class QEGeneratorPanel(QWidget):
         qe_form.addRow(self.btn_run_qe)
 
         fetch_row = QHBoxLayout()
-        self.btn_nersc_login = QPushButton("🔑 Refresh NERSC Login")
-        self.btn_nersc_login.setToolTip(
-            "Run sshproxy for NERSC MFA. Hidden for Daemon / local."
+        self.btn_sshproxy_login = QPushButton("🔑 Refresh sshproxy Login")
+        self.btn_sshproxy_login.setToolTip(
+            "Run sshproxy (MFA) for auth: sshproxy clusters. Hidden for Daemon / local."
         )
-        self.btn_nersc_login.clicked.connect(self.refresh_nersc_login)
+        self.btn_sshproxy_login.clicked.connect(self.refresh_sshproxy_login)
         self.btn_fetch_wan = QPushButton("📥 Fetch ARPES Package")
         self.btn_fetch_wan.setStyleSheet("""
             QPushButton { background-color: #17a2b8; color: white; font-weight: bold; padding: 5px; }
@@ -415,7 +415,7 @@ class QEGeneratorPanel(QWidget):
             "Skips .mmn/.amn/wavefunctions."
         )
         self.btn_fetch_wan.clicked.connect(self.fetch_remote_outputs)
-        fetch_row.addWidget(self.btn_nersc_login)
+        fetch_row.addWidget(self.btn_sshproxy_login)
         fetch_row.addWidget(self.btn_fetch_wan)
         qe_form.addRow(fetch_row)
 
@@ -457,15 +457,15 @@ class QEGeneratorPanel(QWidget):
     def _on_cluster_changed(self, _index=None):
         self._adapt_script_to_cluster()
         cluster = self.get_selected_cluster()
-        self.btn_nersc_login.setVisible(cp.uses_sshproxy(cluster))
-        # Einstein / Mac daemon: NERSC-ish 128/36 ranks break FFT (nnr) and OOM.
+        self.btn_sshproxy_login.setVisible(cp.uses_sshproxy(cluster))
+        # Workstation / Mac daemon: HPC-node 128/36 ranks break FFT (nnr) and OOM.
         # Auto-suggest small ranks when switching to non-SLURM (user can still edit).
         if cluster is None or not cp.is_slurm(cluster):
             if self.spin_pw_cores.value() >= 64:
                 self.spin_pw_cores.setValue(8)
             if self.spin_wannier_cores.value() >= 32:
                 self.spin_wannier_cores.setValue(8)
-            # Einstein pw.x is CPU conda build — leave GPU mode off when leaving NERSC.
+            # Daemon pw.x is usually a CPU conda build — leave GPU mode off when leaving SLURM.
             if self.combo_pw_backend.currentData() == "gpu":
                 self.combo_pw_backend.setCurrentIndex(0)
         else:
@@ -474,10 +474,10 @@ class QEGeneratorPanel(QWidget):
             if self.spin_wannier_cores.value() <= 16:
                 self.spin_wannier_cores.setValue(36)
         self._adapt_script_to_cluster()
-    def refresh_nersc_login(self):
+    def refresh_sshproxy_login(self):
         cluster = self.get_selected_cluster()
         if not cluster:
-            QMessageBox.information(self, "Info", "Select a NERSC / sshproxy cluster as Compute Target.")
+            QMessageBox.information(self, "Info", "Select an sshproxy cluster as Compute Target.")
             return
         refresh_sshproxy_login(self, cluster)
 
@@ -601,9 +601,9 @@ class QEGeneratorPanel(QWidget):
         if cp.uses_sshproxy(cluster):
             reply = QMessageBox.question(
                 self,
-                "NERSC Auth",
-                "Fetch needs a valid NERSC key.\n\n"
-                "Refresh NERSC Login first if you have not today.\n\n"
+                "sshproxy Auth",
+                "Fetch needs a valid sshproxy key.\n\n"
+                "Refresh sshproxy Login first if you have not today.\n\n"
                 "Continue fetch now?",
                 QMessageBox.Yes | QMessageBox.No,
             )

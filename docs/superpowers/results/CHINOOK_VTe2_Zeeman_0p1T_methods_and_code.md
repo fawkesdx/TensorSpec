@@ -151,7 +151,7 @@ frame), so it follows the sample azimuth. It lies in the cleave plane in both ge
 
 ### Commands
 
-Bundle `scratch/vte2_zeeman/einstein_bundle/` (runner, kmesh, schedule, fresnel,
+Bundle `scratch/vte2_zeeman/remote_bundle/` (runner, kmesh, schedule, fresnel,
 photon_momentum, 4 physics JSONs, 2 field models, `run_zeeman.sh`) copied to
 `chinook_gui_run/zeeman_0p1T/`; B = 0 uses `../tb_data.npz`.
 
@@ -179,7 +179,7 @@ GPU compute 9.6 s per cut (mean of 40); ~20 s per cut including model load; 40 c
 
 | Output | Location |
 |---|---|
-| Raw cubes (θ, φ, E) | `scratch/vte2_zeeman/cuts_einstein/{B0,B0p1}_{cfg}_defl_{tag}.npz` |
+| Raw cubes (θ, φ, E) | `scratch/vte2_zeeman/cuts_remote/{B0,B0p1}_{cfg}_defl_{tag}.npz` |
 | Viewer npz, per cut + stacked (kx, ky, E) | `scratch/vte2_zeeman/viewer/{B0,B0p1}/cuts_vte2_{cfg}_chinook/` |
 | MATLAB (value[100×5×501], x slit °, y E−E_F, z deflector °) | `scratch/vte2_zeeman/matlab/vte2_cuts_{cfg}_chinook_{B0,B0p1}.mat` |
 

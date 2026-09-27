@@ -168,7 +168,7 @@ def build_nohup_command(cluster: Dict[str, Any], job: JobSpec) -> str:
         for part in (
             cluster_paths.shell_export_tmp(cluster, one_line=True),
             cluster_paths.shell_thread_limits(one_line=True),
-            # Einstein SPR-KKR bins link against the conda qe env libs.
+            # Remote SPR-KKR builds may link against a conda QE env's libs.
             cluster_paths.qe_env_exports(cluster, one_line=True),
         )
         if part
@@ -185,7 +185,7 @@ def build_nohup_command(cluster: Dict[str, Any], job: JobSpec) -> str:
     # The WHOLE chain runs in a background subshell with ALL fds redirected.
     # If only the binary were redirected, the backgrounded `cd && ... &&` subshell
     # would still hold the ssh channel's stdout/stderr and the ssh exec would
-    # block until the job finished (seen on Einstein: wall=0.0s, no live logs).
+    # block until the job finished (seen on a remote Linux host: wall=0.0s, no live logs).
     chain = " && ".join(parts)
     inner = f"( {chain} ) > {log_path} 2>&1 < /dev/null & echo $!"
     return f"nohup bash -c '{inner}'"

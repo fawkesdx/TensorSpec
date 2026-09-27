@@ -18,12 +18,12 @@
 | `.gitignore` `/maestroai/` | Remove rule |
 | `tensorspec/gui/maestroai/` | `git mv` → `tensorspec/gui/ml/` |
 | `tensorspec/gui/ml_session.py` | Move → `tensorspec/gui/ml/session.py` |
-| `tensorspec/gui/nersc_auth.py` | Move → `tensorspec/gui/services/nersc_auth.py` |
+| `tensorspec/gui/sshproxy_auth.py` | Move → `tensorspec/gui/services/sshproxy_auth.py` |
 | `tensorspec/gui/compute_mode.py` | Move → `tensorspec/gui/services/compute_mode.py` |
 | `tensorspec/gui/cluster_utils.py` | Move → `tensorspec/gui/services/cluster_utils.py` |
 | `tensorspec/gui/components/crystal_tabs/` | Delete if unused |
 | `docs/FOLDER_LAYOUT.md` | Create |
-| All `from tensorspec.gui.maestroai…` / `ml_session` / `cluster_utils` / `compute_mode` / `nersc_auth` imports | Rewrite |
+| All `from tensorspec.gui.maestroai…` / `ml_session` / `cluster_utils` / `compute_mode` / `sshproxy_auth` imports | Rewrite |
 
 ---
 
@@ -121,9 +121,9 @@ git commit -m "refactor(gui): move MLSession into gui.ml.session"
 ### Task 4: Park loose helpers in `gui/services/`
 
 **Files:**
-- Move: `nersc_auth.py`, `compute_mode.py`, `cluster_utils.py` → `tensorspec/gui/services/`
+- Move: `sshproxy_auth.py`, `compute_mode.py`, `cluster_utils.py` → `tensorspec/gui/services/`
 - Callers to update (non-exhaustive — re-`rg` after move):
-  - `components/compute_panel.py`, `qe_generator_panel.py` → `nersc_auth`
+  - `components/compute_panel.py`, `qe_generator_panel.py` → `sshproxy_auth`
   - `components/arpes_panel.py`, `dft_panels.py`, `sprkkr_panels.py`, `suites/dft_suite.py`, `cluster_utils`/`compute_mode` mutual imports → new paths
   - `tests/test_compute_mode.py`
 
@@ -145,7 +145,7 @@ print('suite imports ok')
 - [ ] **Step 4:** Commit
 
 ```bash
-git commit -m "refactor(gui): move cluster/compute/nersc helpers into gui.services"
+git commit -m "refactor(gui): move cluster/compute/sshproxy helpers into gui.services"
 ```
 
 ---
@@ -205,7 +205,7 @@ git commit -m "docs: add FOLDER_LAYOUT guide"
 - [ ] **Step 1:**
 
 ```bash
-rg -n "tensorspec\.gui\.maestroai|gui/maestroai|from tensorspec\.gui\.ml_session|from tensorspec\.gui\.cluster_utils|from tensorspec\.gui\.compute_mode|from tensorspec\.gui\.nersc_auth" --glob '*.py' tensorspec tests
+rg -n "tensorspec\.gui\.maestroai|gui/maestroai|from tensorspec\.gui\.ml_session|from tensorspec\.gui\.cluster_utils|from tensorspec\.gui\.compute_mode|from tensorspec\.gui\.sshproxy_auth" --glob '*.py' tensorspec tests
 ```
 
 Expected: no hits.

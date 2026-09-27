@@ -14,7 +14,7 @@ Expose an explicit, editable **QE Fermi (eV)** control, auto-filled when possibl
 
 ## Non-goals
 
-- Changing QE pipeline output format on Perlmutter
+- Changing QE pipeline output format on the HPC cluster
 - Treating `FERMI_ENERGY.txt` as the only or primary standard for TensorSpec-generated runs
 - Using On-site E as a Fermi substitute
 
@@ -72,5 +72,5 @@ Fix any path that currently double-subtracts (parse fold **and** `eigenvalues -=
 
 ## Out of scope for follow-ups
 
-- Syncing Einstein after merge (deploy note only)
-- Perlmutter changes (not required for this path)
+- Syncing remote host after merge (deploy note only)
+- HPC-cluster changes (not required for this path)

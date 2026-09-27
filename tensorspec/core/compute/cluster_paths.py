@@ -172,9 +172,10 @@ def is_slurm(cluster: Optional[Mapping[str, Any]]) -> bool:
 
 
 def uses_sshproxy(cluster: Optional[Mapping[str, Any]]) -> bool:
-    """True for NERSC-style auth (sshproxy), not Daemon password/key hosts.
+    """True for clusters that log in through an ``sshproxy`` (MFA) short-lived key.
 
-    Detect via ``auth: sshproxy`` in cluster JSON, or host containing ``nersc.gov``.
+    Opt-in only: set ``"auth": "sshproxy"`` in the cluster JSON (and usually
+    ``"ssh_key"`` for the key file sshproxy writes). No host-name detection.
     """
     if not cluster:
         return False
@@ -185,10 +186,7 @@ def uses_sshproxy(cluster: Optional[Mapping[str, Any]]) -> bool:
     ).lower()
     if auth == "sshproxy":
         return True
-    if auth in ("password", "key", "none"):
-        return False
-    host = str(cluster.get("host") or "").lower()
-    return "nersc.gov" in host
+    return False
 
 
 # Flat files useful for local ARPES / Chinook / Grizzly after a QE+Wannier run.
@@ -230,18 +228,18 @@ def sshproxy_command(cluster: Mapping[str, Any]) -> list[str]:
     import shutil
 
     if not uses_sshproxy(cluster):
-        raise ValueError("Cluster does not use NERSC sshproxy auth")
+        raise ValueError("Cluster does not use sshproxy auth (set auth: sshproxy)")
     exe = shutil.which("sshproxy")
     if not exe:
         raise FileNotFoundError(
-            "sshproxy not found in PATH. Install NERSC sshproxy, then retry."
+            "sshproxy not found in PATH. Install your site's sshproxy client, then retry."
         )
     user = str(cluster.get("user") or "").strip()
     if not user:
         raise ValueError("Cluster missing user for sshproxy")
-    key = ssh_key_path(cluster) or os.path.expanduser("~/.ssh/nersc")
+    key = ssh_key_path(cluster) or os.path.expanduser("~/.ssh/sshproxy")
     key_dir = os.path.dirname(key) or os.path.expanduser("~/.ssh")
-    key_name = os.path.basename(key) or "nersc"
+    key_name = os.path.basename(key) or "sshproxy"
     return [exe, "-u", user, "-o", key_name, "-k", key_dir]
 
 
@@ -303,7 +301,7 @@ def ssh_key_path(cluster: Mapping[str, Any]) -> Optional[str]:
 
 
 def load_private_key(path: str):
-    """Load PEM/OpenSSH private key for Paramiko (NERSC sshproxy uses RSA PEM)."""
+    """Load PEM/OpenSSH private key for Paramiko (sshproxy keys are typically RSA PEM)."""
     import paramiko
 
     key_path = os.path.expanduser(path)
@@ -338,7 +336,7 @@ def mpi_launch_prefix(
         return f"srun -n {ranks} --cpu-bind=cores "
     # Daemon / local: plain Open MPI. Do NOT use --use-hwthread-cpus or
     # --oversubscribe — those break QE FFT task groups (inconsistent desc%nnr)
-    # on Einstein / Mac Studio Homebrew+OpenMPI builds.
+    # on conda / Homebrew Open MPI builds (Linux workstation and macOS).
     return f"mpirun -np {ranks} "
 
 

@@ -496,7 +496,7 @@ Depends on: Tasks 1-8.
   - every `.inp` has `SPEC_EL` `NT=1`, `NP=1`, bare-scalar `THETA=` and `PHI=` (no `{a,b}`)
   - legacy check: drop `--pointwise`, get back exactly ONE `.inp` with `THETA={-15.0,15.0}` `PHI=-10.3` `NT=40` — the old, wrong-but-unchanged behaviour still reachable
 - [ ] GUI smoke, local, no run: open ARPES panel, pick B3. Manipulator Theta, Azimuth and Tilt are now VISIBLE; "PHI zero offset (UNCALIBRATED)", "Angle reference energy" and the "Point-wise deflector cut" checkbox are present in the SPR-KKR group.
-- [ ] **Sandy runs the one real Einstein job herself.** Do not launch it from an agent.
+- [ ] **Sandy runs the one real remote host job herself.** Do not launch it from an agent.
   - pot `scratch/sprkkr_gui_run/scf_20260909_205106/scf.pot_new`
   - `hkl` ABAS `0 1 -1`, `IQ_AT_SURF 2`, `hv 84`, pol `P`, `theta_ph 45`, `ework 4.5`
   - slit `0`, deflector `-10.3`, manip theta/tilt/azimuth `0`

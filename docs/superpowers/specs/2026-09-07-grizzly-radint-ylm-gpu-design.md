@@ -89,9 +89,9 @@ Move remaining Chinook **CPU setup** work on the Full-ME path into GrizzlyME so 
 |------|--------|
 | Primary code | [GrizzlyME](https://github.com/fawkesdx/GrizzlyME) (`TensorSpec_GUI/GrizzlyME`) |
 | Version | **0.1.5** after Phase B; **0.2.0** after Phase A (or 0.1.5 + A behind flag if preferred at release time) |
-| TensorSpec | Call new API; stop dual-worker radint; bump/pin `grizzlyme` on Einstein |
+| TensorSpec | Call new API; stop dual-worker radint; bump/pin `grizzlyme` on the remote host |
 | Tests | GrizzlyME unit (parity + cache); TensorSpec smoke (single-build log) |
-| Deploy | wheel/PyPI → Einstein `pip install -U grizzlyme` in TensorSpec_env |
+| Deploy | wheel/PyPI → remote host `pip install -U grizzlyme` in TensorSpec_env |
 | Docs | GrizzlyME README note + TensorSpec ARPES checklist (hydrogenic warm cache) |
 
 ## Risks
@@ -102,7 +102,7 @@ Move remaining Chinook **CPU setup** work on the Full-ME path into GrizzlyME so 
 
 ## Implementation order
 
-1. Phase B in GrizzlyME + TensorSpec wire + Einstein bump  
+1. Phase B in GrizzlyME + TensorSpec wire + remote host bump  
 2. Phase A Slater torch + tests  
 3. Phase A hydrogenic + VTe₂ cold-build timing note  
 4. Release 0.2.0 / docs
