@@ -27,6 +27,17 @@ from tensorspec.core.ml.ssl.reference import (
 )
 
 
+def _default_floor_ref_dir() -> Path:
+    """Default folder for saved floor-reference maps.
+
+    Set TENSORSPEC_FLOOR_REF_DIR to use your own folder (e.g. a synced drive).
+    """
+    return Path(
+        os.environ.get("TENSORSPEC_FLOOR_REF_DIR")
+        or Path.home() / "TensorSpec" / "floor_references"
+    ).expanduser()
+
+
 def is_ml_label_layer(layer_name: str) -> bool:
     return (
         layer_name.startswith("domains_")
@@ -963,10 +974,7 @@ class DataViewerPanel(QWidget):
         if mode not in {"sum", "mean"}:
             raise ValueError(f"reduce_mode must be sum or mean, got {mode!r}")
         stem = Path(sid).stem
-        destination = Path(
-            out_dir
-            or "/Users/sandyai/Library/CloudStorage/Dropbox/Apps/SSL_TaS2/references"
-        )
+        destination = Path(out_dir or _default_floor_ref_dir())
         destination.mkdir(parents=True, exist_ok=True)
         path = destination / f"{stem}_floor_{tag}.npz"
         ref = self.build_floor_reference(
@@ -991,11 +999,7 @@ class DataViewerPanel(QWidget):
 
     def _init_ui(self):
         self.main_layout = QVBoxLayout(self)
-        self._last_floor_dir = str(
-            Path(
-                "/Users/sandyai/Library/CloudStorage/Dropbox/Apps/SSL_TaS2/references"
-            )
-        )
+        self._last_floor_dir = str(_default_floor_ref_dir())
 
         top_bar = QHBoxLayout()
         top_bar.addWidget(QLabel("<b>Dynamic Cross-Correlated Dashboard</b>"))
