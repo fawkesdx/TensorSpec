@@ -125,9 +125,9 @@ Metadata must record these so 55/20 maps are auditable (fix Approach B metadata 
 - **GrizzlyME:** no package change; receives corrected `pol` / peaks.  
 - **Slit / azi:** unchanged; photon q and Fresnel use **lab incidence**, then existing manip maps.
 
-## Einstein validation recipe (science smoke — user runs)
+## Remote host validation recipe (science smoke — user runs)
 
-Not a CI gate. Single-cut intensity check after deploy on Einstein (`HTML_einstein_app`):
+Not a CI gate. Single-cut intensity check after deploy on the remote host (`HTML_remote_app`):
 
 ```text
 φ = −10 single cut, Full ME, LH, hydrogenic, mfp=5, kz=0.2

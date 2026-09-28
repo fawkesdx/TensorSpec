@@ -18,9 +18,9 @@ Let ARPES Suite accept either a **single** photon energy or a **start / finish /
 
 - SPR-KKR / three-step hv scan (UI disabled; remember for later)
 - Engine-native batched ME across hv (Approach B deferred)
-- N separate Einstein SSH jobs per hv (rejects GPU session reuse)
+- N separate remote host SSH jobs per hv (rejects GPU session reuse)
 - Explicit kz conversion / Brillouin-zone display (hv axis only for now)
-- HTML_web_app / HTML_einstein_app work
+- HTML_web_app / HTML_remote_app work
 - Changing DataViewer architecture beyond consuming new axis labels
 
 ## Prerequisite (branch)
@@ -38,7 +38,7 @@ Before implementing this feature:
 | `photon_energy_spin` | Scalar `QDoubleSpinBox` only |
 | Chinook kmesh | `hv` → `E_kin` → k-radius → K_bulk; ME shell tied to hv |
 | Dispersion vs cube | Degenerate Θ/Φ in `arpes_panel` |
-| Remote Einstein | One SSH job, one `--hv`, Grizzly CUDA + `--ngpus` |
+| Remote GPU host | One SSH job, one `--hv`, Grizzly CUDA + `--ngpus` |
 | `DataViewerPanel` | Generic N-D (4D/5D OK); no hv cube axis from sim today |
 | Sim push labels | `Energy`, `Θ (Slit)`, `Φ (Deflect)` |
 
@@ -47,7 +47,7 @@ Before implementing this feature:
 **Approach 1 — GUI outer loop + remote one-job hv loop**
 
 - Local: Python loop over existing single-hv Chinook path; stack.
-- Einstein: **one** SSH job; runner loops hv inside; keep TB warm; rebuild ME shell per hv; same CUDA / multi-GPU path.
+- Remote host: **one** SSH job; runner loops hv inside; keep TB warm; rebuild ME shell per hv; same CUDA / multi-GPU path.
 - Not Approach 2 (N submits) or Approach 3 (engine-native batch) for v1.
 
 **Remember:** only **Chinook (Grizzly)** supports photon-energy-dependent scan now. **SPR-KKR later.**
@@ -81,7 +81,7 @@ Reject: `step <= 0`, `finish < start`, empty list. If `len(hv_list) > 64`, warn/
 
 ---
 
-## §2 — Run path (local + Einstein GPU)
+## §2 — Run path (local + remote host GPU)
 
 **Geometry rule (unchanged):**
 
@@ -98,7 +98,7 @@ Reject: `step <= 0`, `finish < start`, empty list. If `len(hv_list) > 64`, warn/
    - Fermi: `(Nhv, E, Θ, Φ)`.
 5. Progress text: `hv i/N (xx eV)`.
 
-**Einstein remote (Range):**
+**Remote host (Range):**
 
 - One SSH job (not N submits).
 - Extend `chinook_remote_runner` with `--hv_start` / `--hv_finish` / `--hv_step` and/or `--hv_list`.
@@ -132,7 +132,7 @@ Reject: `step <= 0`, `finish < start`, empty list. If `len(hv_list) > 64`, warn/
 - Single mode identical to today.
 - Range + dispersion → 3D cube with `Photon Energy` axis; viewable in DataViewer.
 - Range + Fermi → 4D; viewable in DataViewer.
-- Einstein Range run uses **one** GPU job and existing multi-GPU machinery.
+- Remote host Range run uses **one** GPU job and existing multi-GPU machinery.
 - Non-Chinook cannot enable Range; note visible for future SPR-KKR.
 - `main` matches pre-feature `TensorSpec_GUI` tip; HTML branch untouched.
 

@@ -1,4 +1,4 @@
-"""GUI helpers for NERSC sshproxy login (not used for Daemon / password hosts)."""
+"""GUI helpers for sshproxy (MFA short-lived key) login; not used for Daemon / password hosts."""
 
 from __future__ import annotations
 
@@ -13,15 +13,15 @@ from tensorspec.core.compute import cluster_paths as cp
 
 
 def refresh_sshproxy_login(parent: Optional[QWidget], cluster: Mapping[str, Any]) -> bool:
-    """Open NERSC sshproxy for this cluster, then verify Paramiko can connect.
+    """Run sshproxy for this cluster, then verify Paramiko can connect.
 
     Returns True if connection succeeds after the user completes MFA.
     """
     if not cp.uses_sshproxy(cluster):
         QMessageBox.information(
             parent,
-            "Not a NERSC cluster",
-            "This cluster does not use NERSC sshproxy.\n"
+            "Not an sshproxy cluster",
+            "This cluster does not use sshproxy (auth: sshproxy in its config).\n"
             "Use Test Connection (password / SSH key) instead.",
         )
         return False
@@ -33,12 +33,12 @@ def refresh_sshproxy_login(parent: Optional[QWidget], cluster: Mapping[str, Any]
         return False
 
     user = cluster.get("user", "")
-    key = cp.ssh_key_path(cluster) or os.path.expanduser("~/.ssh/nersc")
+    key = cp.ssh_key_path(cluster) or os.path.expanduser("~/.ssh/sshproxy")
     cmd_str = " ".join(cmd)
 
     QMessageBox.information(
         parent,
-        "NERSC Login",
+        "sshproxy Login",
         f"Will run:\n  {cmd_str}\n\n"
         "A browser or Terminal window may open for MFA / OTP.\n"
         "Complete the login, then click OK here to test the connection.",
@@ -51,7 +51,7 @@ def refresh_sshproxy_login(parent: Optional[QWidget], cluster: Mapping[str, Any]
         apple = (
             'tell application "Terminal"\n'
             "  activate\n"
-            f'  do script "{escaped}; echo; echo NERSC login finished — you can close this window.; exit"\n'
+            f'  do script "{escaped}; echo; echo sshproxy login finished — you can close this window.; exit"\n'
             "end tell"
         )
         try:
@@ -71,7 +71,7 @@ def refresh_sshproxy_login(parent: Optional[QWidget], cluster: Mapping[str, Any]
 
     reply = QMessageBox.question(
         parent,
-        "Test NERSC Connection",
+        "Test sshproxy Connection",
         f"Finished MFA for user '{user}'?\n\n"
         f"Key file: {key}\n\n"
         "Click Yes to test Paramiko SSH to this cluster.",
@@ -91,14 +91,14 @@ def refresh_sshproxy_login(parent: Optional[QWidget], cluster: Mapping[str, Any]
         ssh.close()
         QMessageBox.information(
             parent,
-            "NERSC Connected",
+            "sshproxy Connected",
             f"SSH OK to {cluster.get('host')}.\nRemote hostname: {host_out or '(ok)'}",
         )
         return True
     except Exception as exc:
         QMessageBox.critical(
             parent,
-            "NERSC Auth Failed",
+            "sshproxy Auth Failed",
             f"Could not connect after sshproxy.\n\n{exc}\n\n"
             "Complete MFA in Terminal/browser, wait a few seconds, then retry.",
         )

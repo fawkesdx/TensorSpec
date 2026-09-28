@@ -91,7 +91,7 @@ def test_physics_defaults_preserve_legacy():
 - [ ] **Step 2: Run tests — expect FAIL** (new keys missing from `physics_from_experiment_kwargs`)
 
 ```bash
-cd /Users/sandyai/Documents/GitHub/TensorSpec_GUI
+cd <repo_root>
 TensorSpec_env/bin/pytest tests/test_arpes_critic_gaps.py -v
 ```
 

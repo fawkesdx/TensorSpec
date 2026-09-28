@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add Single|Range photon-energy input to ARPES Suite (Chinook/Grizzly only), outer-loop stack into 3D (kz-style dispersion) or 4D (Fermi×hv), with one Einstein GPU job for Range.
+**Goal:** Add Single|Range photon-energy input to ARPES Suite (Chinook/Grizzly only), outer-loop stack into 3D (kz-style dispersion) or 4D (Fermi×hv), with one remote host GPU job for Range.
 
 **Architecture:** Pure helpers build `hv_list` and stack single-hv cubes along axis 0 labeled `Photon Energy`. Local Chinook loops existing single-hv sim. Remote extends `chinook_remote_runner` to loop hv inside one SSH job (keep TB warm, rebuild ME shell per hv, same `--ngpus`/CUDA). `DataViewerPanel` unchanged; panel preview shows one hv slice.
 
@@ -15,7 +15,7 @@
 - `main` already fast-forwarded to TensorSpec_GUI tip at plan start (`96e55bc`); do not force-push main unless user asks again
 - hv-dependent scan = Chinook (Grizzly) only; SPR-KKR later (Range UI disabled for non-Chinook)
 - Never reuse hoisted `me_shell` across different hv values
-- Einstein Range = **one** SSH job (not N submits)
+- Remote host Range = **one** SSH job (not N submits)
 - Axis label for hv: `Photon Energy` (unit `eV`)
 - Finish inclusive on step grid: `np.arange(start, finish + step/2, step)`
 - Warn/confirm if `len(hv_list) > 64`
@@ -110,7 +110,7 @@ def test_is_dispersion_degenerate_phi():
 - [ ] **Step 2: Run tests — expect FAIL** (module missing)
 
 ```bash
-cd /Users/sandyai/Documents/GitHub/TensorSpec_GUI
+cd <repo_root>
 TensorSpec_env/bin/pytest tests/test_photon_energy_scan.py -v
 ```
 
@@ -583,7 +583,7 @@ else:
 # pass into on_simulation_finished
 ```
 
-- [ ] **Step 3: Manual checklist (Einstein)**
+- [ ] **Step 3: Manual checklist (remote host)**
 
 1. Small Range: start=84, finish=90, step=6 → 2 points; tiny θ/φ/E grid.
 2. Hybrid + Grizzly + CUDA + ngpus≥1.
@@ -611,7 +611,7 @@ EOF
 - [ ] **Step 1: Run full related tests**
 
 ```bash
-cd /Users/sandyai/Documents/GitHub/TensorSpec_GUI
+cd <repo_root>
 TensorSpec_env/bin/pytest tests/test_photon_energy_scan.py tests/test_arpes_critic_gaps.py tests/test_grizzly_shell_prewarm.py -v
 ```
 
@@ -639,7 +639,7 @@ Expected: all PASS.
 | Chinook-only gate + SPR-KKR later note | Task 2 |
 | Outer loop local stack | Task 3 |
 | Dispersion 3D / Fermi 4D with Photon Energy | Task 1+3 |
-| One Einstein GPU job loop | Task 4+5 |
+| One remote host GPU job loop | Task 4+5 |
 | DataViewer via TensorData push | Task 3 |
 | Panel preview one hv slice | Task 3 |
 | IO save/load stacked | Task 3 |

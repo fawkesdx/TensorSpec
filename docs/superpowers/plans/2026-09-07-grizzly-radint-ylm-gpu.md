@@ -41,7 +41,7 @@
 2. Disk cache exists at `~/.cache/grizzlyme/radint` keyed by `make_radint_cache_key` (includes `rad_type`) — hydrogenic ≠ Slater.
 3. Chinook `make_radint_pointer` = `define_radial_wavefunctions` → `fill_radint_dic` → `radint_dict_to_arr` (`chinook/radint_lib.py`).
 4. Grizzly already has `ylm_torch` + `tests/test_ylm.py` parity vs Chinook Ylm.
-5. Einstein install: `grizzlyme` 0.1.4 in TensorSpec_env (often under `/mnt/data/sandy/tensorspec_heavy/TensorSpec_env`).
+5. Remote host install: `grizzlyme` 0.1.4 in TensorSpec_env (often under `<heavy_root>/TensorSpec_env`).
 
 ---
 
@@ -293,7 +293,7 @@ Workers still call `build_shell` but should log **cache HIT** (not building). Op
 - [ ] **Step 4: Run tests**
 
 ```bash
-cd /Users/sandyai/Documents/GitHub/TensorSpec_GUI
+cd <repo_root>
 python -m pytest tests/test_grizzly_shell_prewarm.py -v
 cd GrizzlyME && python -m pytest tests/test_me_shell_prepare.py tests/test_radint_cache_lock.py -v
 ```
@@ -307,15 +307,15 @@ cd GrizzlyME && python -m pytest tests/test_me_shell_prepare.py tests/test_radin
 
 ---
 
-### Task 4: Phase B — Einstein install check (manual)
+### Task 4: Phase B — remote host install check (manual)
 
 **Files:** none (ops)
 
-- [ ] **Step 1:** Build/install editable or wheel of GrizzlyME 0.1.5 into Einstein TensorSpec_env
+- [ ] **Step 1:** Build/install editable or wheel of GrizzlyME 0.1.5 into remote host TensorSpec_env
 
 ```bash
 # from Mac after release/commit
-ssh einstein 'cd /path/to/GrizzlyME && /home/sandy/TensorSpec/TensorSpec_env/bin/pip install -U .'
+ssh <host> 'cd /path/to/GrizzlyME && <remote_env>/bin/pip install -U .'
 # or pip install grizzlyme==0.1.5 from PyPI if published
 ```
 
@@ -411,7 +411,7 @@ cd GrizzlyME && python -m pytest tests/ -v --ignore=benchmarks
 
 - [ ] **Step 5: README + version 0.2.0**
 
-- [ ] **Step 6: Einstein `pip install -U`**; cold hydrogenic VTe₂: expect one build ≪ prior 10+ min; log `radint_source=torch` / wall seconds
+- [ ] **Step 6: Remote host `pip install -U`**; cold hydrogenic VTe₂: expect one build ≪ prior 10+ min; log `radint_source=torch` / wall seconds
 
 - [ ] **Step 7: Commit / tag / PyPI** (only if user asks)
 
@@ -441,7 +441,7 @@ Only if Phase B still open: where `all_Y` output can be proven equal to assembli
 | Torch Slater then hydrogenic | 5–6 |
 | `GRIZZLY_RADINT` flag | 5 |
 | Chinook fallback unsupported types | 5–6 |
-| 0.1.5 / 0.2.0 + Einstein deploy | 3–4, 6 |
+| 0.1.5 / 0.2.0 + remote host deploy | 3–4, 6 |
 | Non-goals respected | Global Constraints |
 
 ## Placeholder / consistency scan
