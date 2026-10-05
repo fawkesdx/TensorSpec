@@ -75,6 +75,25 @@ def test_snap_square_pair():
     assert hit["residual"] < 1e-8
 
 
+def test_snap_hex_negative_theta():
+    from tensorspec.core.bernevig_twist import _residual, snap_commensurate
+
+    ab = _hex_ab()
+    hit = snap_commensurate(ab, -7.34, max_cells=217)
+    assert hit["theta_used"] == pytest.approx(-7.340993016630217)
+    assert hit["n_cells"] == 61
+    assert hit["residual"] < 1e-8
+    moire = hit["S"].astype(float) @ ab
+    assert _residual(ab, moire, hit["theta_used"]) < 1e-8
+
+
+def test_snap_hex_no_pair_raises():
+    from tensorspec.core.bernevig_twist import snap_commensurate
+
+    with pytest.raises(ValueError, match="commensurate"):
+        snap_commensurate(_hex_ab(), 7.34, max_cells=1)
+
+
 def test_rect_inexact_angle_raises():
     from tensorspec.core.bernevig_twist import snap_commensurate
 
