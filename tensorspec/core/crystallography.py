@@ -599,7 +599,14 @@ class CrystalEngine:
         return out_s, out_c, out_t
 
     @staticmethod
-    def build_dft_twist_stack(layers: list[dict], vacuum_ang: float, ref_idx: int) -> tuple[Structure, dict]:
+    def build_dft_twist_stack(
+        layers: list[dict],
+        vacuum_ang: float,
+        ref_idx: int,
+        stacking: str = "AA",
+        max_cells: int = 217,
+        valley: str = "K",
+    ) -> tuple[Structure, dict]:
         if len(layers) != 2:
             raise ValueError("Twist DFT rebuild requires exactly 2 layers.")
         for i, layer in enumerate(layers):
@@ -611,75 +618,18 @@ class CrystalEngine:
                     "Set supercell to 1×1 before Push; moiré tiling already expands the cell. "
                     "Aligned (zero-twist) N-layer stacks may still use SC ≠ 1."
                 )
-        suggested, strains = CrystalEngine.suggest_reference_layer(layers)
-        l0, l1 = layers[0], layers[1]
-        moire = CrystalEngine.calculate_moire_superlattice(
-            l0["struct"], l1["struct"], float(l0["twist"]), float(l1["twist"])
-        )
-        status = moire.get("status", "error")
-        info = {"status": status, "suggested_ref": suggested, "strains": strains, "moire": moire}
-        if status == "error":
-            raise ValueError(moire.get("message", "Moiré calculation failed."))
-        if status == "perfect_alignment":
-            return CrystalEngine.build_dft_aligned_stack(layers, vacuum_ang, ref_idx), info
+        from tensorspec.core.bernevig_twist import build_bernevig_bilayer
 
-        if status == "commensurate":
-            # Moiré supercell tiling only — ref_idx is ignored (no forced strain onto ref ab).
-            ab = np.asarray(moire["matrix"], dtype=float)
-            species, carts, tags = [], [], []
-            for idx, layer in enumerate(layers):
-                s, c, t = CrystalEngine._place_layer_atoms(layer, idx, apply_twist=True)
-                layer_ab = CrystalEngine._inplane_2x2(
-                    layer["struct"], layer["sc_x"], layer["sc_y"]
-                )
-                # Rotate layer lattice with the same absolute twist applied to atoms
-                theta = np.radians(float(layer["twist"]))
-                R = np.array([[np.cos(theta), -np.sin(theta)],
-                              [np.sin(theta),  np.cos(theta)]])
-                layer_ab_rot = layer_ab @ R.T
-                s, c, t = CrystalEngine._tile_into_cell(ab, layer_ab_rot, s, c, t)
-                species.extend(s)
-                carts.extend(c)
-                tags.extend(t)
-            if len(species) == 0:
-                raise ValueError("Commensurate tiling produced no atoms — check moiré matrix.")
-            expected = CrystalEngine.expected_commensurate_atom_count(moire, layers)
-            if expected < 1.0 or abs(len(species) - expected) / expected > 0.35:
-                raise ValueError(
-                    f"Commensurate tiling atom count {len(species)} "
-                    f"does not match moiré expectation ~{expected:.0f}."
-                )
-            struct = CrystalEngine._finalize_slab_structure(ab, species, carts, tags, vacuum_ang)
-            return struct, info
-
-        # incommensurate: strain each layer onto ref ab via native fractional xy,
-        # then rotate in-plane. Joint centroid wrap keeps intra-layer bonds intact
-        # (per-atom wrap after centering was tearing C–C / B–N).
-        ab = CrystalEngine._inplane_2x2(
-            layers[ref_idx]["struct"], layers[ref_idx]["sc_x"], layers[ref_idx]["sc_y"]
+        theta = float(layers[1]["twist"]) - float(layers[0]["twist"])
+        struct, info = build_bernevig_bilayer(
+            layers[0]["struct"],
+            layers[1]["struct"],
+            theta_deg=theta,
+            stacking=stacking,
+            z_bottom=float(layers[0]["z_shift"]),
+            z_top=float(layers[1]["z_shift"]),
+            vacuum_ang=float(vacuum_ang),
+            max_cells=int(max_cells),
+            valley=valley,
         )
-        ab_inv = np.linalg.inv(ab)
-        species, carts, tags = [], [], []
-        for idx, layer in enumerate(layers):
-            supercell = layer["struct"] * (layer["sc_x"], layer["sc_y"], 1)
-            theta = np.radians(float(layer["twist"]))
-            cth, sth = np.cos(theta), np.sin(theta)
-            R2 = np.array([[cth, -sth], [sth, cth]])
-            z0 = float(layer["z_shift"]) - 12.5
-            z_mean = float(np.mean(supercell.cart_coords[:, 2]))
-            layer_carts = []
-            for site in supercell:
-                frac_xy = np.asarray(site.frac_coords[:2], dtype=float)
-                frac_xy = frac_xy - np.floor(frac_xy + 1e-12)
-                xy = (frac_xy @ ab) @ R2.T
-                z = float(site.coords[2]) - z_mean + z0
-                layer_carts.append([float(xy[0]), float(xy[1]), z])
-                species.append(site.specie.symbol)
-                tags.append(f"{site.specie.symbol}_L{idx + 1}")
-            layer_xy = np.array([c[:2] for c in layer_carts], dtype=float)
-            mean_frac = np.mean(layer_xy, axis=0) @ ab_inv
-            shift = np.floor(mean_frac + 1e-12) @ ab
-            for c in layer_carts:
-                carts.append([c[0] - shift[0], c[1] - shift[1], c[2]])
-        struct = CrystalEngine._finalize_slab_structure(ab, species, carts, tags, vacuum_ang)
         return struct, info

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from pymatgen.core import Lattice, Structure
 
 from tensorspec.core.crystallography import CrystalEngine
@@ -95,12 +96,12 @@ def test_aligned_mismatch_flag():
 
 
 def test_twist_two_layer_cell_not_dummy():
-    layers = [_layer(_mono(2.46), 0.0, 0.0), _layer(_mono(2.50, ("B", "N")), 3.4, 30.0)]
-    suggested, strains = CrystalEngine.suggest_reference_layer(layers)
-    struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=suggested)
+    g = _mono(2.46)
+    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, 7.34)]
+    struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=0)
     assert struct.lattice.a < 499.0
-    assert struct.lattice.c > 20.0
-    assert info["status"] in ("commensurate", "incommensurate", "perfect_alignment")
+    assert info["status"] == "commensurate"
+    assert info["n_cells"] == 61
     assert "layer_tag" in struct.site_properties
 
 
@@ -130,71 +131,42 @@ def test_twist_rejects_sc_not_1x1():
 
 
 def test_twist_commensurate_fills_moire_cell():
-    """Identical lattices + twist marked commensurate must fill moiré area, not one SC."""
     g = _mono(2.46)
-    twist = 21.5  # calculate_moire_superlattice marks this commensurate (n_cells≈3)
-    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, twist)]
-    moire = CrystalEngine.calculate_moire_superlattice(g, g, 0.0, twist)
-    assert moire["status"] == "commensurate"
-    n_cells = int(moire["n_cells"])
-    assert n_cells >= 2
-
+    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, 7.34)]
     struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=0)
     assert info["status"] == "commensurate"
-
-    ab = np.asarray(moire["matrix"], dtype=float)
-    area_m = abs(np.linalg.det(ab))
-    area_l = abs(np.linalg.det(CrystalEngine._inplane_2x2(g)))
-    # 2 atoms/cell × 2 layers × area ratio
-    expected = 2 * 2 * (area_m / area_l)
-    # Must be far above a single primitive bilayer (4); allow boundary/dedup slack
-    assert len(struct) > 4 * n_cells
-    assert abs(len(struct) - expected) / expected < 0.35
-    # Identical lattices → same fill per layer (no half-open/dedup imbalance)
+    assert len(struct) == 244
     tags = struct.site_properties["layer_tag"]
     n_l1 = sum(1 for t in tags if t.endswith("_L1"))
     n_l2 = sum(1 for t in tags if t.endswith("_L2"))
-    assert n_l1 == n_l2, f"identical-lattice layers unequal: L1={n_l1} L2={n_l2}"
-    assert n_l1 * 2 == len(struct)
+    assert n_l1 == n_l2
 
 
 def test_commensurate_lattice_is_moire_matrix():
-    """Commensurate rebuild must use moiré ab, not reference layer ab."""
     g = _mono(2.46)
-    twist = 21.5
-    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, twist)]
-    moire = CrystalEngine.calculate_moire_superlattice(g, g, 0.0, twist)
-    assert moire["status"] == "commensurate"
-    ab_moire = np.asarray(moire["matrix"], dtype=float)
-    struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=1)
+    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, 7.34)]
+    monolayer_ab = np.asarray(g.lattice.matrix[:2, :2], dtype=float)
+    struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=0)
     assert info["status"] == "commensurate"
-    assert abs(struct.lattice.a - float(np.linalg.norm(ab_moire[0]))) < 0.02
+    S = np.asarray(info["S"], dtype=float)
+    moire_a = float(np.linalg.norm((S @ monolayer_ab)[0]))
+    assert abs(struct.lattice.a - moire_a) < 0.02
 
 
 def test_commensurate_build_matches_expected_atom_count():
     g = _mono(2.46)
-    twist = 21.5
-    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, twist)]
-    moire = CrystalEngine.calculate_moire_superlattice(g, g, 0.0, twist)
-    expected = CrystalEngine.expected_commensurate_atom_count(moire, layers)
+    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, 7.34)]
     struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=0)
     assert info["status"] == "commensurate"
-    assert abs(len(struct) - expected) / expected < 0.35
+    assert len(struct) == 244
 
 
 def test_incommensurate_uses_ref_lattice():
-    """Incommensurate path strains onto ref_idx in-plane cell."""
     g = _mono(2.46)
     bn = _mono(2.50, ("B", "N"))
     layers = [_layer(g, 0.0, 0.0), _layer(bn, 3.4, 30.0)]
-    moire = CrystalEngine.calculate_moire_superlattice(g, bn, 0.0, 30.0)
-    assert moire["status"] == "incommensurate"
-    struct0, info0 = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=0)
-    struct1, info1 = CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=1)
-    assert info0["status"] == "incommensurate"
-    assert info1["status"] == "incommensurate"
-    assert abs(struct0.lattice.a - 2.46) < 0.02
-    assert abs(struct1.lattice.a - 2.50) < 0.02
+    with pytest.raises(ValueError, match="homobilayer"):
+        CrystalEngine.build_dft_twist_stack(layers, vacuum_ang=20.0, ref_idx=0)
 
 
 def test_gr_hbn_30deg_isotropic_not_frobenius_stretch():
@@ -210,17 +182,15 @@ def test_gr_hbn_30deg_isotropic_not_frobenius_stretch():
 
 
 def test_twist_commensurate_empty_tile_raises(monkeypatch):
-    """Keep hard fail if tiling yields no atoms."""
+    import tensorspec.core.bernevig_twist as bt
+
     g = _mono(2.46)
-    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, 21.5)]
+    layers = [_layer(g, 0.0, 0.0), _layer(g, 3.4, 7.34)]
 
     def _empty(*args, **kwargs):
         return [], [], []
 
-    monkeypatch.setattr(CrystalEngine, "_tile_into_cell", staticmethod(_empty))
-    try:
+    monkeypatch.setattr(bt, "tile_layer_unstrained", _empty)
+    with pytest.raises(ValueError, match="atoms"):
         CrystalEngine.build_dft_twist_stack(layers, 20.0, 0)
-        assert False, "expected ValueError"
-    except ValueError as e:
-        assert "no atoms" in str(e).lower() or "tiling" in str(e).lower()
 
