@@ -483,12 +483,11 @@ class CrystalViewerSuite(QWidget):
         layers = [row.get_layer_dict() for row in self.stack_layer_rows]
         kind = CrystalEngine.classify_stack_for_dft(layers)
         if len(layers) == 2:
-            all_row_twists_zero = all(float(layer["twist"]) == 0.0 for layer in layers)
             bernevig_aligned = (
                 float(self.spin_bernevig_theta.value()) == 0.0
                 and self.combo_bernevig_stacking.currentText() == "AA"
             )
-            kind = "aligned" if all_row_twists_zero and bernevig_aligned else "twist"
+            kind = "aligned" if bernevig_aligned else "twist"
 
         if kind == "empty":
             QMessageBox.warning(self, "Warning", "No layers in the stack to push.")
