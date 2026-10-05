@@ -1,6 +1,7 @@
 import math
 import numpy as np
 import pytest
+from pymatgen.core import Lattice, Structure
 
 from tensorspec.core.bernevig_twist import (
     classify_bravais,
@@ -100,3 +101,85 @@ def test_rect_inexact_angle_raises():
     ab = np.array([[3.0, 0.0], [0.0, 5.0]])
     with pytest.raises(ValueError, match="commensurate"):
         snap_commensurate(ab, 10.0, max_cells=20)
+
+
+def _graphene(a=2.46):
+    lat = Lattice.hexagonal(a, 25.0)
+    return Structure(lat, ["C", "C"], [[1 / 3, 2 / 3, 0.5], [2 / 3, 1 / 3, 0.5]])
+
+
+def test_paper_angle_fills_61_cells_per_layer():
+    from tensorspec.core.bernevig_twist import build_bernevig_bilayer
+
+    g = _graphene()
+    struct, info = build_bernevig_bilayer(
+        g, g, theta_deg=7.34, stacking="AA",
+        z_bottom=0.0, z_top=3.4, vacuum_ang=20.0,
+        max_cells=217, valley="M",
+    )
+    assert info["status"] == "commensurate"
+    assert info["n_cells"] == 61
+    assert info["q_lattice"] == "kagome"
+    assert info["theta_used"] == pytest.approx(7.340993016630217)
+    assert len(struct) == 244
+    tags = struct.site_properties["layer_tag"]
+    assert sum(t.endswith("_L1") for t in tags) == 122
+    assert sum(t.endswith("_L2") for t in tags) == 122
+    # unstrained monolayer edge length times |S row|
+    ab = g.lattice.matrix[:2, :2]
+    moire = info["S"].astype(float) @ ab
+    assert struct.lattice.a == pytest.approx(float(np.linalg.norm(moire[0])), abs=1e-6)
+    assert struct.lattice.c == pytest.approx(3.4 + 20.0, abs=2.5)
+    tags = struct.site_properties["layer_tag"]
+    coords = np.array([site.coords for site in struct])
+    c = coords[[i for i, t in enumerate(tags) if t.endswith("_L1")], :2]
+    dmin = min(
+        float(np.linalg.norm(c[i] - c[j]))
+        for i in range(len(c)) for j in range(i + 1, len(c))
+        if np.linalg.norm(c[i] - c[j]) < 0.6 * 2.46
+    )
+    assert dmin == pytest.approx(2.46 / math.sqrt(3), abs=0.02)
+
+
+def test_aa_zero_stacks_on_same_xy():
+    from tensorspec.core.bernevig_twist import build_bernevig_bilayer
+
+    g = _graphene()
+    struct, info = build_bernevig_bilayer(
+        g, g, 0.0, "AA", 0.0, 3.4, 20.0, valley="K",
+    )
+    assert info["status"] == "perfect_alignment"
+    assert len(struct) == 4
+    tags = struct.site_properties["layer_tag"]
+    xy = struct.cart_coords[:, :2]
+    bot = xy[[i for i, t in enumerate(tags) if t.endswith("_L1")]]
+    top = xy[[i for i, t in enumerate(tags) if t.endswith("_L2")]]
+    for p in bot:
+        assert np.min(np.linalg.norm(top - p, axis=1)) < 1e-6
+
+
+def test_ab_zero_is_180_about_origin():
+    from tensorspec.core.bernevig_twist import build_bernevig_bilayer
+
+    g = _graphene()
+    struct, _ = build_bernevig_bilayer(g, g, 0.0, "AB", 0.0, 3.4, 20.0, valley="K")
+    tags = struct.site_properties["layer_tag"]
+    xy = struct.cart_coords[:, :2]
+    bot = xy[[i for i, t in enumerate(tags) if t.endswith("_L1")]]
+    top = xy[[i for i, t in enumerate(tags) if t.endswith("_L2")]]
+    ab = struct.lattice.matrix[:2, :2]
+    inv = np.linalg.inv(ab)
+    for p in top:
+        deltas = (p.reshape(1, 2) + bot) @ inv
+        err = np.min(np.abs(deltas - np.round(deltas)))
+        assert err < 1e-6
+
+
+def test_hetero_and_vacuum_raise():
+    from tensorspec.core.bernevig_twist import build_bernevig_bilayer
+
+    g = _graphene(2.46)
+    with pytest.raises(ValueError, match="homobilayer"):
+        build_bernevig_bilayer(g, _graphene(2.50), 7.34, "AA", 0.0, 3.4, 20.0)
+    with pytest.raises(ValueError, match="15"):
+        build_bernevig_bilayer(g, g, 7.34, "AA", 0.0, 3.4, 15.0)
