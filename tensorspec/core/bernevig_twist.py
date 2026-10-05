@@ -92,7 +92,7 @@ def _search_integer_S(ab: np.ndarray, theta_deg: float, max_cells: int) -> dict:
                         abs(res - best[0]) <= 1e-15 and det < best[1]
                     ):
                         best = (res, det, S)
-    if best is None or best[0] > 1e-6:
+    if best is None or best[0] >= 1e-6:
         shown = best[0] if best else float("inf")
         raise ValueError(
             f"No unstrained commensurate cell for θ={theta_deg}° "
@@ -104,6 +104,32 @@ def _search_integer_S(ab: np.ndarray, theta_deg: float, max_cells: int) -> dict:
         "S": best[2],
         "n_cells": int(best[1]),
         "residual": float(best[0]),
+    }
+
+
+def _pair_snap_result(
+    ab: np.ndarray, kind: str, theta_deg: float, th: float, S_pos: np.ndarray
+) -> dict:
+    n_cells = int(abs(round(np.linalg.det(S_pos))))
+    if theta_deg >= 0:
+        moire = S_pos.astype(float) @ ab
+        return {
+            "bravais": kind,
+            "theta_used": float(th),
+            "S": S_pos,
+            "n_cells": n_cells,
+            "residual": _residual(ab, moire, th),
+        }
+    moire = S_pos.astype(float) @ ab
+    T = np.round((moire @ _rot(th)) @ np.linalg.inv(ab)).astype(int)
+    theta_used = -th
+    moire_t = T.astype(float) @ ab
+    return {
+        "bravais": kind,
+        "theta_used": float(theta_used),
+        "S": T,
+        "n_cells": int(abs(round(np.linalg.det(T)))),
+        "residual": _residual(ab, moire_t, theta_used),
     }
 
 
@@ -136,15 +162,12 @@ def snap_commensurate(ab: np.ndarray, theta_deg: float, max_cells: int = 217) ->
                     abs(err - best[0]) <= 1e-12 and N < best[1]
                 ):
                     best = (err, N, th, S)
-        th, S = best[2], best[3]
-        moire = S.astype(float) @ ab
-        return {
-            "bravais": kind,
-            "theta_used": float(th if theta_deg >= 0 else -th),
-            "S": S,
-            "n_cells": int(abs(round(np.linalg.det(S)))),
-            "residual": _residual(ab, moire, th),
-        }
+        if best is None:
+            raise ValueError(
+                f"No unstrained commensurate cell for θ={theta_deg}° "
+                f"within max_cells={max_cells}."
+            )
+        return _pair_snap_result(ab, kind, theta_deg, best[2], best[3])
     if kind == "square":
         best = None
         m_max = int(math.sqrt(max_cells)) + 2
@@ -159,13 +182,10 @@ def snap_commensurate(ab: np.ndarray, theta_deg: float, max_cells: int = 217) ->
                     abs(err - best[0]) <= 1e-12 and N < best[1]
                 ):
                     best = (err, N, th, S)
-        th, S = best[2], best[3]
-        moire = S.astype(float) @ ab
-        return {
-            "bravais": kind,
-            "theta_used": float(th if theta_deg >= 0 else -th),
-            "S": S,
-            "n_cells": int(abs(round(np.linalg.det(S)))),
-            "residual": _residual(ab, moire, th),
-        }
+        if best is None:
+            raise ValueError(
+                f"No unstrained commensurate cell for θ={theta_deg}° "
+                f"within max_cells={max_cells}."
+            )
+        return _pair_snap_result(ab, kind, theta_deg, best[2], best[3])
     return _search_integer_S(ab, theta_deg, max_cells)
