@@ -41,3 +41,43 @@ def test_hex_and_square_pairs_match_paper_angles():
     assert ths == pytest.approx(53.13010235415598)
     assert abs(int(round(np.linalg.det(Ss)))) == 5
     assert Ss.tolist() == [[2, 1], [-1, 2]]
+
+
+def test_snap_hex_paper_angles_and_rotation_residual():
+    from tensorspec.core.bernevig_twist import snap_commensurate
+
+    ab = _hex_ab()
+    hit = snap_commensurate(ab, 7.34, max_cells=217)
+    assert hit["bravais"] == "hexagonal"
+    assert hit["n_cells"] == 61
+    assert hit["theta_used"] == pytest.approx(7.340993016630217)
+    assert hit["residual"] < 1e-8
+    moire = hit["S"] @ ab
+    th = math.radians(hit["theta_used"])
+    c, s = math.cos(th), math.sin(th)
+    R = np.array([[c, -s], [s, c]])
+    coeffs = (moire @ R) @ np.linalg.inv(ab)
+    assert np.max(np.abs(coeffs - np.round(coeffs))) < 1e-8
+
+    hit98 = snap_commensurate(ab, 3.89, max_cells=217)
+    assert hit98["n_cells"] == 217
+    assert hit98["theta_used"] == pytest.approx(3.8902381690076835)
+
+
+def test_snap_square_pair():
+    from tensorspec.core.bernevig_twist import snap_commensurate
+
+    ab = np.array([[3.0, 0.0], [0.0, 3.0]])
+    hit = snap_commensurate(ab, 53.13, max_cells=30)
+    assert hit["bravais"] == "square"
+    assert hit["n_cells"] == 5
+    assert hit["theta_used"] == pytest.approx(53.13010235415598)
+    assert hit["residual"] < 1e-8
+
+
+def test_rect_inexact_angle_raises():
+    from tensorspec.core.bernevig_twist import snap_commensurate
+
+    ab = np.array([[3.0, 0.0], [0.0, 5.0]])
+    with pytest.raises(ValueError, match="commensurate"):
+        snap_commensurate(ab, 10.0, max_cells=20)
