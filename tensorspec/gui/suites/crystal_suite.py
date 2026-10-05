@@ -481,13 +481,15 @@ class CrystalViewerSuite(QWidget):
             return
 
         layers = [row.get_layer_dict() for row in self.stack_layer_rows]
+        # Row twists decide the path. Bernevig spin is NOT consulted unless the user opted in
+        # (AB stacking or a nonzero row twist); the 7.34 default must not force a twist Push.
         kind = CrystalEngine.classify_stack_for_dft(layers)
-        if len(layers) == 2:
-            bernevig_aligned = (
-                float(self.spin_bernevig_theta.value()) == 0.0
-                and self.combo_bernevig_stacking.currentText() == "AA"
-            )
-            kind = "aligned" if bernevig_aligned else "twist"
+        if (
+            kind == "aligned"
+            and len(layers) == 2
+            and self.combo_bernevig_stacking.currentText() == "AB"
+        ):
+            kind = "twist"
 
         if kind == "empty":
             QMessageBox.warning(self, "Warning", "No layers in the stack to push.")
@@ -781,18 +783,21 @@ class CrystalViewerSuite(QWidget):
         row_widget.deleteLater()
         self.stack_layer_rows.remove(row_widget)
 
+    def _bernevig_opted_in(self) -> bool:
+        """True when a two-layer stack should use the Bernevig builder (not the 7.34 default alone)."""
+        if len(self.stack_layer_rows) != 2:
+            return False
+        if self.combo_bernevig_stacking.currentText() == "AB":
+            return True
+        return any(abs(float(row.spin_twist.value())) > 1e-6 for row in self.stack_layer_rows)
+
     def handle_draw_stack(self):
         if not self.stack_layer_rows: return
-        use_bernevig = (
-            len(self.stack_layer_rows) == 2
-            and (
-                float(self.spin_bernevig_theta.value()) != 0.0
-                or self.combo_bernevig_stacking.currentText() == "AB"
-            )
-        )
-        if use_bernevig:
-            self.handle_bernevig_twist()
-            return
+        if self._bernevig_opted_in():
+            ok, err = self._try_bernevig_build()
+            if ok:
+                return
+            self.lbl_moire.setText(f"Bernevig build failed ({err}); drew plain stack.")
 
         layers_data = [row.get_layer_dict() for row in self.stack_layer_rows]
         
@@ -847,17 +852,17 @@ class CrystalViewerSuite(QWidget):
             self.combo_bernevig_valley.setCurrentText(current)
         self.combo_bernevig_valley.blockSignals(False)
 
-    def handle_bernevig_twist(self):
+    def _try_bernevig_build(self) -> tuple[bool, str]:
+        """Run the Bernevig builder; on success update viewer + row twists. No modal dialogs."""
         if len(self.stack_layer_rows) != 2:
-            self.lbl_moire.setText("Error: Requires exactly 2 stacked layers.")
-            return
+            return False, "Requires exactly 2 stacked layers."
 
         layers = [row.get_layer_dict() for row in self.stack_layer_rows]
         theta = float(self.spin_bernevig_theta.value())
         layers[0]["twist"] = -theta / 2.0
         layers[1]["twist"] = theta / 2.0
-        self._refresh_bernevig_valleys(layers)
         try:
+            self._refresh_bernevig_valleys(layers)
             struct, info = CrystalEngine.build_dft_twist_stack(
                 layers,
                 float(self.spin_stack_vacuum.value()),
@@ -866,10 +871,12 @@ class CrystalViewerSuite(QWidget):
                 max_cells=int(self.spin_bernevig_max_cells.value()),
                 valley=self.combo_bernevig_valley.currentText(),
             )
-        except ValueError as e:
-            self.lbl_moire.setText(str(e))
-            QMessageBox.critical(self, "Bernevig twist build failed", str(e))
-            return
+        except Exception as e:
+            return False, str(e)
+
+        # Later Push follows this twist.
+        self.stack_layer_rows[0].spin_twist.setValue(-theta / 2.0)
+        self.stack_layer_rows[1].spin_twist.setValue(theta / 2.0)
 
         self.active_supercell = struct
         self.current_structure = struct
@@ -881,6 +888,15 @@ class CrystalViewerSuite(QWidget):
             f"N={info['n_cells']}  {info['stacking']}  "
             f"Q={info['q_lattice']}  atoms={len(struct)}"
         )
+        return True, ""
+
+    def handle_bernevig_twist(self, *_args):
+        ok, err = self._try_bernevig_build()
+        if ok:
+            return
+        self.lbl_moire.setText(err if len(self.stack_layer_rows) == 2 else f"Error: {err}")
+        if len(self.stack_layer_rows) == 2:
+            QMessageBox.critical(self, "Bernevig twist build failed", err)
 
     def handle_moire(self):
         self.handle_bernevig_twist()

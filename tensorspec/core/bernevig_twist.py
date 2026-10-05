@@ -76,36 +76,66 @@ def _residual(ab: np.ndarray, moire: np.ndarray, theta_deg: float) -> float:
     return float(np.max(np.abs(coeffs - np.round(coeffs))))
 
 
+_RESIDUAL_TOL = 1e-6
+_MAX_SURVIVORS = 400
+
+
 def _search_integer_S(ab: np.ndarray, theta_deg: float, max_cells: int) -> dict:
+    """Find S (det in 1..max_cells) with rows of S@ab rotating into the layer lattice.
+
+    A row vector v=(i,j)@ab is usable only if its rotation by theta lies in the layer
+    lattice. Filter the O(B^2) coefficient vectors first, then pair the shortest
+    survivors. Total iterations stay well under 200k at max_cells=2000.
+    """
     B = int(math.isqrt(max_cells)) + 1
-    best = None
-    for i1 in range(-B, B + 1):
-        for j1 in range(-B, B + 1):
-            for i2 in range(-B, B + 1):
-                for j2 in range(-B, B + 1):
-                    det = i1 * j2 - j1 * i2
-                    if det <= 0 or det > max_cells:
-                        continue
-                    S = np.array([[i1, j1], [i2, j2]], dtype=int)
-                    moire = S.astype(float) @ ab
-                    res = _residual(ab, moire, theta_deg)
-                    if best is None or res < best[0] - 1e-15 or (
-                        abs(res - best[0]) <= 1e-15 and det < best[1]
-                    ):
-                        best = (res, det, S)
-    if best is None or best[0] >= 1e-6:
-        shown = best[0] if best else float("inf")
+    rng = np.arange(-B, B + 1)
+    ii, jj = np.meshgrid(rng, rng, indexing="ij")
+    coef = np.stack([ii.ravel(), jj.ravel()], axis=1)
+    coef = coef[np.any(coef != 0, axis=1)]
+    vecs = coef.astype(float) @ ab
+    back = (vecs @ _rot(theta_deg)) @ np.linalg.inv(ab)
+    res = np.max(np.abs(back - np.round(back)), axis=1)
+    keep = res < _RESIDUAL_TOL
+    coef, vecs, res = coef[keep], vecs[keep], res[keep]
+    if len(coef) < 2:
         raise ValueError(
             f"No unstrained commensurate cell for θ={theta_deg}° "
-            f"within max_cells={max_cells} (best residual {shown:.3e})."
+            f"within max_cells={max_cells} (coefficient bound {B})."
         )
+    order = np.argsort(np.linalg.norm(vecs, axis=1), kind="stable")[:_MAX_SURVIVORS]
+    coef, res = coef[order], res[order]
+    x, y = coef[:, 0], coef[:, 1]
+    det = x[:, None] * y[None, :] - y[:, None] * x[None, :]
+    ok = (det > 0) & (det <= max_cells)
+    if not np.any(ok):
+        raise ValueError(
+            f"No unstrained commensurate cell for θ={theta_deg}° "
+            f"within max_cells={max_cells} (coefficient bound {B})."
+        )
+    pair_res = np.maximum(res[:, None], res[None, :])
+    cand = np.argwhere(ok)
+    keys = [
+        (int(det[p, q]), float(pair_res[p, q]), p + q, p) for p, q in cand
+    ]
+    best_idx = min(range(len(keys)), key=keys.__getitem__)
+    p, q = cand[best_idx]
+    S = np.array([coef[p], coef[q]], dtype=int)
+    n_cells = int(det[p, q])
     return {
         "bravais": classify_bravais(ab),
         "theta_used": float(theta_deg),
-        "S": best[2],
-        "n_cells": int(best[1]),
-        "residual": float(best[0]),
+        "S": S,
+        "n_cells": n_cells,
+        "residual": _residual(ab, S.astype(float) @ ab, theta_deg),
     }
+
+
+def _require_commensurate(residual: float, theta_deg: float) -> None:
+    if residual >= _RESIDUAL_TOL:
+        raise ValueError(
+            f"No unstrained commensurate cell for θ={theta_deg}° "
+            f"(residual {residual:.3e} >= {_RESIDUAL_TOL:.0e}); lattice is not ideal."
+        )
 
 
 def _pair_snap_result(
@@ -114,23 +144,27 @@ def _pair_snap_result(
     n_cells = int(abs(round(np.linalg.det(S_pos))))
     if theta_deg >= 0:
         moire = S_pos.astype(float) @ ab
+        residual = _residual(ab, moire, th)
+        _require_commensurate(residual, theta_deg)
         return {
             "bravais": kind,
             "theta_used": float(th),
             "S": S_pos,
             "n_cells": n_cells,
-            "residual": _residual(ab, moire, th),
+            "residual": residual,
         }
     moire = S_pos.astype(float) @ ab
     T = np.round((moire @ _rot(th)) @ np.linalg.inv(ab)).astype(int)
     theta_used = -th
     moire_t = T.astype(float) @ ab
+    residual_t = _residual(ab, moire_t, theta_used)
+    _require_commensurate(residual_t, theta_deg)
     return {
         "bravais": kind,
         "theta_used": float(theta_used),
         "S": T,
         "n_cells": int(abs(round(np.linalg.det(T)))),
-        "residual": _residual(ab, moire_t, theta_used),
+        "residual": residual_t,
     }
 
 
@@ -202,7 +236,13 @@ def tile_layer_unstrained(
     """Tile one unstrained layer into a moiré cell and fold to [0, 1)."""
     moire_ab = np.asarray(moire_ab, dtype=float)
     layer_ab = np.asarray(layer_ab, dtype=float)
-    S = np.round(moire_ab @ np.linalg.inv(layer_ab))
+    S_float = moire_ab @ np.linalg.inv(layer_ab)
+    S = np.round(S_float)
+    if not np.allclose(S, S_float, atol=_RESIDUAL_TOL, rtol=0.0):
+        raise ValueError(
+            "Moiré cell is not commensurate with the layer lattice "
+            f"(max deviation {float(np.max(np.abs(S - S_float))):.3e})."
+        )
     det = int(abs(round(np.linalg.det(S))))
     if det < 1:
         return [], [], []
@@ -334,6 +374,12 @@ def build_bernevig_bilayer(
         tiled_species, tiled_carts, tiled_tags = tile_layer_unstrained(
             moire, layer_ab, species, carts, tags
         )
+        expected_layer = len(struct) * int(hit["n_cells"])
+        if len(tiled_carts) != expected_layer:
+            raise ValueError(
+                f"Layer {layer_number} has {len(tiled_carts)} atoms, "
+                f"expected {expected_layer} atoms."
+            )
         all_species.extend(tiled_species)
         all_carts.extend(tiled_carts)
         all_tags.extend(tiled_tags)

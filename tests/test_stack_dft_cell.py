@@ -194,3 +194,93 @@ def test_twist_commensurate_empty_tile_raises(monkeypatch):
     with pytest.raises(ValueError, match="atoms"):
         CrystalEngine.build_dft_twist_stack(layers, 20.0, 0)
 
+
+
+def _crystal_suite_stub(rows_twist=(0.0, 0.0), stacking="AA", max_cells=217):
+    from types import SimpleNamespace as NS
+    from unittest import mock
+
+    pytest.importorskip("PySide6")
+    from tensorspec.gui.suites import crystal_suite as cs
+
+    g = CrystalEngine.generate_template_structure("Graphene")
+
+    class Spin:
+        def __init__(self, v):
+            self.v = v
+
+        def value(self):
+            return self.v
+
+        def setValue(self, v):
+            self.v = v
+
+    rows = []
+    for i, t in enumerate(rows_twist):
+        row = NS(spin_twist=Spin(t), lbl_name=NS(text=lambda: "g"))
+        row.get_layer_dict = (
+            lambda r=row, z=(0.0, 3.4)[i]: {
+                "struct": g, "sc_x": 1, "sc_y": 1, "z_shift": z,
+                "twist": r.spin_twist.v,
+            }
+        )
+        rows.append(row)
+    w = NS(
+        stack_layer_rows=rows,
+        spin_bernevig_theta=Spin(7.34),
+        spin_stack_vacuum=Spin(20.0),
+        spin_bernevig_max_cells=Spin(max_cells),
+        combo_bernevig_stacking=NS(currentText=lambda: stacking),
+        combo_bernevig_valley=NS(currentText=lambda: "K"),
+        lbl_moire=NS(setText=lambda t: None),
+        refresh_render=mock.Mock(),
+        _refresh_bernevig_valleys=lambda layers: None,
+    )
+    S = cs.CrystalViewerSuite
+    w._bernevig_opted_in = lambda: S._bernevig_opted_in(w)
+    w._try_bernevig_build = lambda: S._try_bernevig_build(w)
+    return cs, S, w
+
+
+def test_gui_zero_twist_aa_push_stays_aligned_despite_default_spin():
+    from unittest import mock
+
+    cs, S, w = _crystal_suite_stub()
+    pushed = {}
+    with mock.patch.object(
+        CrystalEngine, "build_dft_twist_stack", side_effect=AssertionError("twist path")
+    ), mock.patch.object(
+        cs.global_workspace, "push_crystal_structure", lambda n, s: pushed.setdefault("s", s)
+    ), mock.patch.object(
+        cs.QInputDialog, "getText", return_value=("x", True)
+    ), mock.patch.object(cs, "QMessageBox"):
+        S.push_current_to_workspace(w)
+    assert len(pushed["s"]) == 4
+    assert not S._bernevig_opted_in(w)
+
+
+def test_gui_build_twisted_writes_row_twists_and_push_follows():
+    from unittest import mock
+
+    cs, S, w = _crystal_suite_stub()
+    ok, err = S._try_bernevig_build(w)
+    assert ok, err
+    assert [r.spin_twist.v for r in w.stack_layer_rows] == [-3.67, 3.67]
+    assert S._bernevig_opted_in(w)
+    pushed = {}
+    with mock.patch.object(
+        cs.global_workspace, "push_crystal_structure", lambda n, s: pushed.setdefault("s", s)
+    ), mock.patch.object(
+        cs.QInputDialog, "getText", return_value=("x", True)
+    ), mock.patch.object(cs, "QMessageBox"):
+        S.push_current_to_workspace(w)
+    assert len(pushed["s"]) == 244
+
+
+def test_gui_bernevig_build_failure_is_nonmodal_result():
+    from unittest import mock
+
+    cs, S, w = _crystal_suite_stub(rows_twist=(0.0, 5.0), max_cells=1)
+    ok, err = S._try_bernevig_build(w)
+    assert not ok and "commensurate" in err
+    assert S._bernevig_opted_in(w)

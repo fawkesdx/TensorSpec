@@ -183,3 +183,76 @@ def test_hetero_and_vacuum_raise():
         build_bernevig_bilayer(g, _graphene(2.50), 7.34, "AA", 0.0, 3.4, 20.0)
     with pytest.raises(ValueError, match="15"):
         build_bernevig_bilayer(g, g, 7.34, "AA", 0.0, 3.4, 15.0)
+
+
+def test_slightly_nonideal_hex_raises_not_strained():
+    from tensorspec.core.bernevig_twist import (
+        build_bernevig_bilayer,
+        classify_bravais,
+        snap_commensurate,
+    )
+
+    lat = Lattice.from_parameters(2.46, 2.46, 25.0, 90.0, 90.0, 120.5)
+    ab = lat.matrix[:2, :2]
+    assert classify_bravais(ab) == "hexagonal"
+    with pytest.raises(ValueError, match="commensurate") as exc:
+        snap_commensurate(ab, 7.34, max_cells=217)
+    assert "residual" in str(exc.value)
+    s = Structure(lat, ["C", "C"], [[1 / 3, 2 / 3, 0.5], [2 / 3, 1 / 3, 0.5]])
+    with pytest.raises(ValueError, match="commensurate"):
+        build_bernevig_bilayer(s, s, 7.34, "AA", 0.0, 3.4, 20.0)
+    g = _graphene()
+    struct, _ = build_bernevig_bilayer(g, g, 7.34, "AA", 0.0, 3.4, 20.0)
+    assert len(struct) == 244
+
+
+def test_tile_layer_unstrained_rejects_noninteger_ratio():
+    from tensorspec.core.bernevig_twist import tile_layer_unstrained
+
+    layer = np.array([[3.0, 0.0], [0.0, 3.0]])
+    moire = np.array([[6.0, 0.0], [0.0, 6.001]])
+    with pytest.raises(ValueError, match="commensurate"):
+        tile_layer_unstrained(moire, layer, ["C"], [[0.0, 0.0, 0.0]], ["C_L1"])
+
+
+def test_search_integer_S_fast_and_bounded_at_max_cells_2000():
+    import time
+
+    from tensorspec.core.bernevig_twist import snap_commensurate
+
+    ab = np.array([[3.0, 0.0], [0.0, 5.0]])
+    t0 = time.time()
+    with pytest.raises(ValueError, match="commensurate"):
+        snap_commensurate(ab, 10.0, max_cells=2000)
+    hit = snap_commensurate(ab, 180.0, max_cells=2000)
+    assert hit["n_cells"] == 1
+    assert hit["residual"] < 1e-6
+    assert time.time() - t0 < 5.0
+
+
+def test_search_integer_S_finds_rect_commensurate_cell():
+    from tensorspec.core.bernevig_twist import snap_commensurate
+
+    # 3x4 oblique-free rectangle: rotating by 180 deg is the only exact rotation
+    ab = np.array([[3.0, 0.0], [0.0, 4.0]])
+    hit = snap_commensurate(ab, 180.0, max_cells=50)
+    assert hit["n_cells"] == 1
+
+
+def test_per_layer_atom_count_mismatch_raises(monkeypatch):
+    import tensorspec.core.bernevig_twist as bt
+
+    g = _graphene()
+    real = bt.tile_layer_unstrained
+    calls = {"n": 0}
+
+    def fake(*args, **kwargs):
+        s, c, t = real(*args, **kwargs)
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return s[:-1], c[:-1], t[:-1]
+        return s, c, t
+
+    monkeypatch.setattr(bt, "tile_layer_unstrained", fake)
+    with pytest.raises(ValueError, match="Layer 1"):
+        bt.build_bernevig_bilayer(g, g, 7.34, "AA", 0.0, 3.4, 20.0)
