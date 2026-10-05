@@ -11,6 +11,7 @@ from pymatgen.core import Structure
 
 # Clean modular imports from our established architecture
 from tensorspec.core.crystallography import CrystalEngine
+from tensorspec.core.bernevig_twist import classify_bravais
 from tensorspec.core.workspace import global_workspace
 import platform
 
@@ -311,6 +312,38 @@ class CrystalViewerSuite(QWidget):
         vac_row.addStretch()
         layout.addLayout(vac_row)
 
+        bernevig_group = QGroupBox("Bernevig twist")
+        bernevig_layout = QGridLayout(bernevig_group)
+
+        bernevig_layout.addWidget(QLabel("θ (°):"), 0, 0)
+        self.spin_bernevig_theta = QDoubleSpinBox()
+        self.spin_bernevig_theta.setRange(-180.0, 180.0)
+        self.spin_bernevig_theta.setDecimals(5)
+        self.spin_bernevig_theta.setValue(7.34)
+        bernevig_layout.addWidget(self.spin_bernevig_theta, 0, 1)
+
+        bernevig_layout.addWidget(QLabel("Stacking:"), 1, 0)
+        self.combo_bernevig_stacking = QComboBox()
+        self.combo_bernevig_stacking.addItems(["AA", "AB"])
+        bernevig_layout.addWidget(self.combo_bernevig_stacking, 1, 1)
+
+        bernevig_layout.addWidget(QLabel("Valley:"), 2, 0)
+        self.combo_bernevig_valley = QComboBox()
+        self.combo_bernevig_valley.addItems(["Γ", "K", "M", "nHSP"])
+        self.combo_bernevig_valley.setCurrentText("K")
+        bernevig_layout.addWidget(self.combo_bernevig_valley, 2, 1)
+
+        bernevig_layout.addWidget(QLabel("Max cells:"), 3, 0)
+        self.spin_bernevig_max_cells = QSpinBox()
+        self.spin_bernevig_max_cells.setRange(1, 2000)
+        self.spin_bernevig_max_cells.setValue(217)
+        bernevig_layout.addWidget(self.spin_bernevig_max_cells, 3, 1)
+
+        self.btn_bernevig = QPushButton("Build twisted bilayer")
+        self.btn_bernevig.clicked.connect(self.handle_bernevig_twist)
+        bernevig_layout.addWidget(self.btn_bernevig, 4, 0, 1, 2)
+        layout.addWidget(bernevig_group)
+
         self.btn_moire = QPushButton("🌀 Calculate Moiré Superlattice")
         self.btn_moire.setStyleSheet("background-color: #8A2BE2; color: white; font-weight: bold; padding: 6px;")
         self.btn_moire.clicked.connect(self.handle_moire)
@@ -449,6 +482,13 @@ class CrystalViewerSuite(QWidget):
 
         layers = [row.get_layer_dict() for row in self.stack_layer_rows]
         kind = CrystalEngine.classify_stack_for_dft(layers)
+        if len(layers) == 2:
+            all_row_twists_zero = all(float(layer["twist"]) == 0.0 for layer in layers)
+            bernevig_aligned = (
+                float(self.spin_bernevig_theta.value()) == 0.0
+                and self.combo_bernevig_stacking.currentText() == "AA"
+            )
+            kind = "aligned" if all_row_twists_zero and bernevig_aligned else "twist"
 
         if kind == "empty":
             QMessageBox.warning(self, "Warning", "No layers in the stack to push.")
@@ -473,16 +513,6 @@ class CrystalViewerSuite(QWidget):
         if kind == "aligned":
             need_dialog = CrystalEngine.aligned_needs_strain_dialog(layers, suggested)
             dialog_status = "lattice mismatch"
-        else:
-            moire = CrystalEngine.calculate_moire_superlattice(
-                layers[0]["struct"], layers[1]["struct"],
-                float(layers[0]["twist"]), float(layers[1]["twist"]),
-            )
-            if moire.get("status") == "error":
-                QMessageBox.critical(self, "Moiré error", moire.get("message", "Failed."))
-                return
-            need_dialog = moire.get("status") == "incommensurate"
-            dialog_status = moire.get("status", "")
 
         if need_dialog:
             names = [
@@ -502,16 +532,9 @@ class CrystalViewerSuite(QWidget):
                 a_native = float(layer["struct"].lattice.a)
                 iso = CrystalEngine.isotropic_match_strain_percent(a_native, a_ref)
                 iso_lines.append(f"Isotropic lattice strain on {name_i}: {iso:+.2f}%")
-            if kind == "twist":
-                suggest_line = (
-                    f"Suggested reference layer: {sug_name} "
-                    "(ranking score includes twist geometry; "
-                    "actual in-plane stretch is the isotropic % above)."
-                )
-            else:
-                suggest_line = (
-                    f"Suggested reference (smallest total strain): {sug_name} (~{sug_pct:.2f}%)."
-                )
+            suggest_line = (
+                f"Suggested reference (smallest total strain): {sug_name} (~{sug_pct:.2f}%)."
+            )
             dialog_text = (
                 f"Status: {dialog_status}.\n\n"
                 "To run DFT, non-reference layer(s) will be stretched/compressed to match the "
@@ -543,7 +566,18 @@ class CrystalViewerSuite(QWidget):
                 dft_struct = CrystalEngine.build_dft_aligned_stack(layers, vacuum, ref_idx)
                 info_note = "aligned"
             else:
-                dft_struct, info = CrystalEngine.build_dft_twist_stack(layers, vacuum, ref_idx)
+                theta = float(self.spin_bernevig_theta.value())
+                layers[0]["twist"] = -theta / 2.0
+                layers[1]["twist"] = theta / 2.0
+                self._refresh_bernevig_valleys(layers)
+                dft_struct, info = CrystalEngine.build_dft_twist_stack(
+                    layers,
+                    vacuum,
+                    0,
+                    stacking=self.combo_bernevig_stacking.currentText(),
+                    max_cells=int(self.spin_bernevig_max_cells.value()),
+                    valley=self.combo_bernevig_valley.currentText(),
+                )
                 info_note = info["status"]
         except Exception as e:
             QMessageBox.critical(self, "DFT cell rebuild failed", str(e))
@@ -750,6 +784,17 @@ class CrystalViewerSuite(QWidget):
 
     def handle_draw_stack(self):
         if not self.stack_layer_rows: return
+        use_bernevig = (
+            len(self.stack_layer_rows) == 2
+            and (
+                float(self.spin_bernevig_theta.value()) != 0.0
+                or self.combo_bernevig_stacking.currentText() == "AB"
+            )
+        )
+        if use_bernevig:
+            self.handle_bernevig_twist()
+            return
+
         layers_data = [row.get_layer_dict() for row in self.stack_layer_rows]
         
         # 1. Build the math supercell
@@ -787,30 +832,59 @@ class CrystalViewerSuite(QWidget):
         if hasattr(self.renderer, 'set_camera_preset'):
             self.renderer.set_camera_preset('z')
 
-    def handle_moire(self):
+    def _refresh_bernevig_valleys(self, layers):
+        current = self.combo_bernevig_valley.currentText()
+        bravais = classify_bravais(layers[0]["struct"].lattice.matrix[:2, :2])
+        items = {
+            "hexagonal": ["Γ", "K", "M", "nHSP"],
+            "square": ["Γ", "X", "M", "nHSP"],
+            "rectangular": ["HSP", "nHSP"],
+            "oblique": ["HSP", "nHSP"],
+        }[bravais]
+        self.combo_bernevig_valley.blockSignals(True)
+        self.combo_bernevig_valley.clear()
+        self.combo_bernevig_valley.addItems(items)
+        if current in items:
+            self.combo_bernevig_valley.setCurrentText(current)
+        self.combo_bernevig_valley.blockSignals(False)
+
+    def handle_bernevig_twist(self):
         if len(self.stack_layer_rows) != 2:
             self.lbl_moire.setText("Error: Requires exactly 2 stacked layers.")
             return
-        
-        l1, l2 = self.stack_layer_rows[0].get_layer_dict(), self.stack_layer_rows[1].get_layer_dict()
-        result = CrystalEngine.calculate_moire_superlattice(l1['struct'], l2['struct'], l1['twist'], l2['twist'])
-        
-        z_vals = [r.spin_z.value() for r in self.stack_layer_rows]
-        
-        if result["status"] == "commensurate":
-            self.lbl_moire.setText(f"🟢 Commensurate! Periodicity: {result['periodicity']:.2f} Å ({result['n_cells']}×{result['n_cells']})")
-            self.renderer.draw_moire_envelope(result["matrix"], min(z_vals)-1.5, max(z_vals)+1.5)
-            self.renderer.plotter.render()
-        else:
-            self.lbl_moire.setText(f"🟡 Incommensurate: Showing forced strain supercell boundaries.")
-            if self.active_supercell:
-                # FIX: Pass result["matrix"] instead of the 500A dummy lattice
-                self.renderer.draw_moire_envelope(result["matrix"], min(z_vals)-1.5, max(z_vals)+1.5)
-                
-                if hasattr(self.renderer, 'plotter') and hasattr(self.renderer.plotter, 'render'):
-                    self.renderer.plotter.render()
-                elif hasattr(self.renderer, 'canvas'):
-                    self.renderer.canvas.draw_idle()
+
+        layers = [row.get_layer_dict() for row in self.stack_layer_rows]
+        theta = float(self.spin_bernevig_theta.value())
+        layers[0]["twist"] = -theta / 2.0
+        layers[1]["twist"] = theta / 2.0
+        self._refresh_bernevig_valleys(layers)
+        try:
+            struct, info = CrystalEngine.build_dft_twist_stack(
+                layers,
+                float(self.spin_stack_vacuum.value()),
+                0,
+                stacking=self.combo_bernevig_stacking.currentText(),
+                max_cells=int(self.spin_bernevig_max_cells.value()),
+                valley=self.combo_bernevig_valley.currentText(),
+            )
+        except ValueError as e:
+            self.lbl_moire.setText(str(e))
+            QMessageBox.critical(self, "Bernevig twist build failed", str(e))
+            return
+
+        self.active_supercell = struct
+        self.current_structure = struct
+        self.current_filename = "Bernevig_Twisted_Bilayer"
+        self.refresh_render()
+        self.lbl_moire.setText(
+            f"Commensurate θ={info['theta_used']:.5f}° "
+            f"(asked {info['theta_requested']:.2f}°)  "
+            f"N={info['n_cells']}  {info['stacking']}  "
+            f"Q={info['q_lattice']}  atoms={len(struct)}"
+        )
+
+    def handle_moire(self):
+        self.handle_bernevig_twist()
 
     def handle_draw_bz(self):
         if not getattr(self, 'current_structure', None): return
