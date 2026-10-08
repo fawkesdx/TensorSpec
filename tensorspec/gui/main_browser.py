@@ -678,16 +678,30 @@ class TensorSpecMainBrowser(QMainWindow):
             print(f"Failed to launch ML Suite: {e}")
     
     def launch_crystal_suite(self):
-        if hasattr(self, 'crystal_window'):
-            try:
-                self.crystal_window.close()
-            except RuntimeError:
-                pass 
+        win_id = "Crystal Suite"
+        if win_id in self.active_windows:
+            items = self.window_tracker_list.findItems(win_id, Qt.MatchExactly)
+            if items:
+                self.bring_window_to_front(items[0])
+            return
 
-        self.crystal_window = CrystalViewerSuite(workspace_manager=self.workspace_data)
-        self.crystal_window.resize(1100, 700)
-        self.crystal_window.setWindowTitle("TensorSpec - Crystal Suite")
-        self.crystal_window.show()
+        crystal_widget = CrystalViewerSuite(workspace_manager=self.workspace_data)
+        wrapper = FloatingViewerWindow(
+            win_id=win_id,
+            title="TensorSpec - Crystal Suite",
+            inner_widget=crystal_widget,
+            parent=None,
+        )
+        wrapper.setWindowTitle("TensorSpec - Crystal Suite")
+        wrapper.window_closed.connect(self.unregister_window)
+        wrapper.resize(1100, 700)
+        wrapper.setMinimumSize(640, 480)
+        self.active_windows[win_id] = wrapper
+        self.window_tracker_list.addItem(win_id)
+        self.crystal_window = wrapper
+        wrapper.show()
+        wrapper.raise_()
+        wrapper.activateWindow()
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

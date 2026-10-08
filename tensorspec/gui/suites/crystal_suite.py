@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
                                QComboBox, QColorDialog, QTabWidget, QCheckBox, 
                                QGroupBox, QGridLayout, QSlider, QSplitter, 
                                QInputDialog, QMessageBox, QFrame, QScrollArea,
-                               QDialog, QDialogButtonBox)
+                               QDialog, QDialogButtonBox, QSizePolicy)
 from PySide6.QtCore import Qt
 from pymatgen.core import Structure
 
@@ -97,6 +97,8 @@ class CrystalViewerSuite(QWidget):
 
         self.setAttribute(Qt.WA_DeleteOnClose)
         self._is_closing = False  # NEW: Kill-switch to prevent ghost rendering
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(640, 480)
 
         self.workspace = workspace_manager
         
@@ -112,6 +114,7 @@ class CrystalViewerSuite(QWidget):
     def init_layout(self):
         main_layout = QHBoxLayout(self)
         splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
         main_layout.addWidget(splitter)
 
         #1. Left Control Panel (Tabs)
@@ -147,8 +150,13 @@ class CrystalViewerSuite(QWidget):
         from tensorspec.plotting.backends.pyvista_engine import PyVistaCrystalBackend
         
         self.viewer_stack = QStackedWidget()
+        self.viewer_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.renderer_cpu = MatplotlibCrystalBackend(parent=self)
         self.renderer_gpu = PyVistaCrystalBackend(parent=self)
+
+        for plotter in (self.renderer_cpu.plotter, self.renderer_gpu.plotter):
+            if hasattr(plotter, "setSizePolicy"):
+                plotter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
         self.viewer_stack.addWidget(self.renderer_cpu.plotter) # Index 0: Matplotlib
         self.viewer_stack.addWidget(self.renderer_gpu.plotter) # Index 1: PyVista
@@ -156,6 +164,8 @@ class CrystalViewerSuite(QWidget):
         # Hook the camera sync to mouse release
         self.renderer_gpu.plotter.iren.add_observer("EndInteractionEvent", self.tab_view.sync_ui_to_camera)
         splitter.addWidget(self.viewer_stack)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
         
         # Auto-detect default based on hardware, but allow manual switching
         if is_legacy_mac:

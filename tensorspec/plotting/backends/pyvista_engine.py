@@ -56,6 +56,12 @@ class PyVistaCrystalBackend:
         # Initialize the hardware QtInteractor canvas
         self.plotter = QtInteractor(parent=parent)
         self.plotter.set_background("#1e1e24")
+        try:
+            from PySide6.QtWidgets import QSizePolicy
+            self.plotter.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            self.plotter.setMinimumSize(200, 200)
+        except Exception:
+            pass
         
         # Internal state tracking for fast eraser picking and toggles
         self.atom_tree = None
