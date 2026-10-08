@@ -38,3 +38,6 @@ patch_*.py
 check_*.py
 verify_*.py
 einstein_*.py
+
+# Local docs / agent plans (never push)
+/docs/
