@@ -17,3 +17,25 @@ currentproblem2
 
 # Streamlit local configuration and cache
 .streamlit/
+
+# Local-only / private (never push)
+SPRKKR/
+GrizzlyME/
+AGENT_HANDOFF.md
+ML_local/
+docs/ml_local/
+scripts/tensorspec-remote.env
+
+# Demo / scratch artifacts (never push)
+/Claude outputs/
+/LEGACY.md
+/patch.py
+/generate_mock_data.py
+/qe_dryrun_*/
+/scratch/
+/test_*.py
+/test*.png
+patch_*.py
+check_*.py
+verify_*.py
+einstein_*.py
