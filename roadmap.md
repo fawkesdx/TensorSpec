@@ -50,38 +50,34 @@ Grand App
 			- [x] B1: Tight-Binding + Free Electron Final State (Chinook Engine integration)
 			- [ ] B2: Real-space DFT Orbitals + Plane Wave Final State (kMap FFT tomography integration)
 			- [x] B3: Full Multiple Scattering & Time-Reversed LEED (SPR-KKR `kkrspec` wrapper: native θ×φ grid, MPI, energy/hv fan-out, local or remote; `.spc` → DataTree). Code done 2026-09-09; real-run check on the remote host pending (Gate D).
-	- [ ] Data Loader from various beamlines (MAESTRO, i05 Diamond, SIS SLS, etc.)
-	- [ ] Linked Crosshair Data Viewer (Interactive EDC and MDC extraction)
-	- [ ] data loader from various beamline
-		- [ ] MAESTRO
+	- [x] Hierarchical Data Container (`xarray.DataTree` / NeXus-aligned) via `core/data_tree.py` + `workspace.py` (`/raw`, `/processed`, `/analysis`, `/history`; motors under `/raw/motors` when present).
+	- [x] Universal Data Viewer (`gui/components/data_viewer_panel.py`): N-D slices, Δx/Δy integration, linked crosshairs, ML `domains_*` overlay layers; launchable from Workspace Browser and ML suite.
+	- [ ] Data Loader from various beamlines (beyond MAESTRO)
+		- [x] MAESTRO (partial): kinds under `core/io/loaders/maestro/kinds/` (e.g. `xy_fine_4d`, `focus_xy_fine_5d`, `fermi_defl_3d`, `defl_x_line_4d`)
 		- [ ] i05 Diamond
 		- [ ] SIS SLS
 		- [ ] ADRESS SLS
 		- [ ] Lorea Alba
 		- [ ] Bloch MaxIV
-	- [ ] Implement the `TensorSpec` Hierarchical Data Container (`xarray.DataTree` / NeXus model) to store measurement arrays and comprehensive beamline metadata (`attrs`).
-	- [ ] Structure tree hierarchy into standardized functional nodes:
-		- [ ] `/raw`: Raw analyzer intensity array (`data.value`) bound to angular/energy coordinates (`data.energy`, `data.slitangle`).
-		- [ ] `/raw/motors`: Log multi-axis manipulator variables (`motor1` e.g., polar deflection/theta map, `motor2` e.g., fine piezo scan X/Y, or photon energy $h\nu$ for $k_z$ scans).
-		- [ ] `/processed`: Store transformed coordinate cubes (e.g., interpolated $E, k_x, k_y$ volumes, curvature analysis, or normalization).
-		- [ ] `/analysis`: Attach mathematical model outputs (e.g., `/analysis/mdc_peakfit` or `/analysis/edc_peakfit` containing Lorentzian parameters and residuals).
-		- [ ] `/history`: Append sequential audit trail logs of every functional transformation applied to the dataset.
-	- [ ] once the data is loaded, there is option to launch a general viewer where it will plot the data according to the kind of data
-		- [ ] it will display the data.energy, data.slitangle, data.value of the dispersion
-			- [ ] I want to have the option to toggle to plot the EDC and MDC on the right and lower panel
-			- [ ] I want the cross hair to have option to define delta x and delta y to integrate the EDC and MDC
-		- [ ] if it has data.motor1, then I want the middle panel to show the data.value along the data.slitangle (x axis), data.motor1 (y axis), then the lower panel show the dispersion of the data.slitangle (x axis), data.energy (y axis), the right panel will show the data.motor1 (x axis), data.energy (y axis).
-			- [ ] I want each panel to have crosshair that will dynamically update the display on the other panel
-			- [ ] I want the crosshair to also have option to define delta x and delta y so that the other panel can update the view accordingly
-		- [ ] if it also has data.motor2, then I want to be able to view all of the panel accordingly where each panel has crosshair and it has option to integrate too.
+	- [ ] Full motor1/motor2 multi-panel ARPES layout parity with the original multi-motor viewer spec (DataViewer covers the general case; suite-specific layouts still evolving).
 
-- [ ] PEEM Suite
-	- [ ] loader of tif file stacks
-	- [ ] loader of sequences of series of tif files from a folder
-	- [ ] stack the CP and CM together or LH and LV together depending on the files
-	- [ ] once stacked, built a drift correction options
-	- [ ] separate those CP and CM or LH and LV
-	- [ ] make the background subtraction button to be applied to all
-	- [ ] perform sum rule analysis if it is CP and CM data
-- [ ] XAS Suite
-- [ ] Transport Suite
+- [x] PEEM Suite (`core/peem/`, `gui/services/peem_service.py`, `gui/components/peem_panel.py`, `gui/suites/peem_suite.py`)
+	- [x] loader of tif file stacks (`core/io/peem_loaders.py`, needs `tifffile`)
+	- [x] loader of sequences / ZIP / folder stacks
+	- [x] stack / pair CP+CM or LH+LV
+	- [x] drift correction
+	- [x] separate CP/CM or LH/LV into processed children
+	- [x] background subtraction (shared BG core) applied across stack / channels
+	- [x] XMCD sum-rule analysis for CP/CM (and related pairs)
+- [x] XAS Suite (`core/io/xas_loaders.py`, `gui/services/xas_service.py`, `gui/components/xas_panel.py`)
+	- [x] 1D CSV/TXT load (single spectrum or paired CP/CM·LH/LV)
+	- [x] background subtraction + XMCD sum rule via **shared PEEM BG / sum-rule core** (no separate `xas_engine.py` yet)
+- [ ] Transport Suite (`gui/suites/transport_suite.py` shell only)
+	- [x] PEEM-style split panel + demo R(H) / Hall / R(T) curves
+	- [ ] `core/transport_engine.py` (load PPMS/csv, symmetrize, Hall BG, parameter extraction)
+- Machine Learning Suite (`gui/suites/ml_suite.py`, `gui/ml/`, `core/ml/`)
+	- [x] Workspace browser + middle shared `DataViewerPanel`
+	- [x] SSL training queue / embeddings
+	- [x] Clustering → `domains_*` written to dataset and synced into DataViewer layers
+	- [x] Active learning / alignment / supervised tabs (modular panels)
+	- [x] Model warehouse / pipeline / train tabs (local warehouse workflows)
