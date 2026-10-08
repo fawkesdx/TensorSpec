@@ -20,7 +20,7 @@ source TensorSpec_env/bin/activate   # Windows: TensorSpec_env\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Optional remote GPU / GrizzlyME CUDA ARPES: see **[docs/REMOTE_GPU_SETUP.md](docs/REMOTE_GPU_SETUP.md)** and `docs/tensorspec_clusters.example.json`.
+Optional remote GPU / GrizzlyME CUDA ARPES: configure a local cluster JSON (example kept in the maintainer-only local `docs/` tree, not shipped on GitHub).
 
 ## Launch
 
