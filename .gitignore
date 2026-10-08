@@ -19,8 +19,10 @@ currentproblem2
 GrizzlyME/
 AGENT_HANDOFF.md
 ML_local/
-docs/ml_local/
 scripts/tensorspec-remote.env
+
+# Local docs / agent plans (never push) — keep on disk for maintainers only
+/docs/
 
 # Demo / scratch artifacts (never push)
 /Claude outputs/
@@ -60,7 +62,6 @@ bottom.py
 /test_*.py
 /test*.png
 /scratch/
-/docs/REMOTE_GPU_SETUP.md
 
 # Agent scratch (never push)
 .superpowers/
@@ -76,6 +77,5 @@ graphify-out/
 .graphifyignore
 OSKI/
 
-# OSKI docs + build tarballs — OSKI is its own repo (fawkesdx/oski), keep out of TensorSpec
-docs/OSKI_*
+# OSKI build tarballs — OSKI is its own repo (fawkesdx/oski)
 oski_*.tar.gz
