@@ -1,5 +1,6 @@
 # File: tensorspec/plotting/backends/matplotlib_engine.py
 import matplotlib
+import matplotlib.patches
 matplotlib.use('qtagg')
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -221,3 +222,148 @@ class MatplotlibCrystalBackend:
         # Safely fall back to ball-and-stick rendering
         self.draw_atoms(supercell, active_colors, scale_mod=0.5, is_shiny=is_shiny)
         self.draw_bonds(supercell, active_colors, is_shiny=is_shiny)
+
+# ===========================================================================
+# ARPES peak-fit explorer renderers (pure matplotlib on a given Axes; no Qt)
+# ===========================================================================
+#: Band colours, indexed by Band.colour (or the band's own index when colour < 0).
+BAND_PALETTE = ("#C8322B", "#1F5FBF", "#2E8B57", "#E07B00", "#7B3FA0", "#00838F",
+                "#AD1457", "#5D4037", "#558B2F", "#3949AB")
+
+
+def band_colours(dataset) -> list:
+    """One colour per band of a peak-fit Dataset (``attrs['band_model']``)."""
+    from tensorspec.core.arpes.products import band_model_of
+
+    try:
+        bands = band_model_of(dataset).bands
+    except Exception:
+        n = int(dataset.sizes.get("band", 0)) if dataset is not None else 0
+        return [BAND_PALETTE[j % len(BAND_PALETTE)] for j in range(n)]
+    return [BAND_PALETTE[(b.colour if b.colour >= 0 else j) % len(BAND_PALETTE)]
+            for j, b in enumerate(bands)]
+
+
+def orient_cut(tensor):
+    """``(x, y, image[y, x], x_label, y_label, x_unit, y_unit)`` of a 2-D cut with the energy
+    axis vertical (the ARPES convention); any other 2-D tensor keeps axis 0 horizontal."""
+    value = np.asarray(tensor.value, dtype=float)
+    if value.ndim != 2:
+        raise ValueError("the peak-fit explorer shows 2-D cuts only")
+    labels = [str(lab) for lab in tensor.labels]
+    units = [str(u) for u in tensor.units]
+    energy_first = "energy" in labels[0].casefold() and "energy" not in labels[1].casefold()
+    if energy_first:
+        return (np.asarray(tensor.axes[1], float), np.asarray(tensor.axes[0], float), value,
+                labels[1], labels[0], units[1], units[0])
+    return (np.asarray(tensor.axes[0], float), np.asarray(tensor.axes[1], float), value.T,
+            labels[0], labels[1], units[0], units[1])
+
+
+def _axis_label(label: str, unit: str) -> str:
+    return f"{label} ({unit})" if unit else label
+
+
+def draw_cut_with_tracks(ax, tensor, dataset=None, crosshair=None, *, direction: str = "mdc",
+                         show_fit: bool = True, vmax_percentile: float = 99.5,
+                         cmap: str = "gray_r") -> dict:
+    """The E-k image with the fitted peak centres per band, the fit window (dashed box), the
+    E = 0 line and a crosshair on the line axis: horizontal at an energy for an MDC series,
+    vertical at a momentum for an EDC series.
+
+    Returns ``{'crosshair': Line2D, 'image': AxesImage, 'xlim', 'ylim'}`` so the caller can move
+    the crosshair with ``set_ydata`` / ``set_xdata`` without redrawing the image.
+    """
+    ax.clear()
+    x, y, image, x_label, y_label, x_unit, y_unit = orient_cut(tensor)
+    finite = image[np.isfinite(image)]
+    vmax = float(np.percentile(finite, vmax_percentile)) if finite.size else None
+    extent = [x[0], x[-1], y[0], y[-1]]
+    im = ax.imshow(image, origin="lower", aspect="auto", extent=extent, cmap=cmap,
+                   vmin=0.0 if finite.size and finite.min() >= 0 else None, vmax=vmax,
+                   interpolation="nearest")
+    ax.set_xlabel(_axis_label(x_label, x_unit))
+    ax.set_ylabel(_axis_label(y_label, y_unit))
+    if y.min() < 0 < y.max():
+        ax.axhline(0.0, ls="--", lw=0.6, color="0.4")
+
+    if dataset is not None and show_fit:
+        colours = band_colours(dataset)
+        line_axis = str(dataset.attrs.get("line_axis"))
+        fit_axis = str(dataset.attrs.get("fit_axis"))
+        positions = np.asarray(dataset.coords[line_axis].values, float)
+        along = np.asarray(dataset.coords[fit_axis].values, float)
+        centres = np.asarray(dataset["centre"].values, float)
+        for j in range(centres.shape[1]):
+            good = np.isfinite(centres[:, j])
+            if direction == "mdc":
+                ax.plot(centres[good, j], positions[good], ".", ms=2.5, color=colours[j], mew=0)
+            else:
+                ax.plot(positions[good], centres[good, j], ".", ms=2.5, color=colours[j], mew=0)
+        if positions.size and along.size:
+            if direction == "mdc":
+                x0, x1, y0, y1 = along.min(), along.max(), positions.min(), positions.max()
+            else:
+                x0, x1, y0, y1 = positions.min(), positions.max(), along.min(), along.max()
+            ax.add_patch(matplotlib.patches.Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False,
+                                                      ls=(0, (3, 3)), lw=0.7, ec="0.4"))
+
+    if crosshair is None:
+        crosshair = float(y[len(y) // 2]) if direction == "mdc" else float(x[len(x) // 2])
+    if direction == "mdc":
+        cross = ax.axhline(float(crosshair), color="#E07B00", lw=1.4)
+    else:
+        cross = ax.axvline(float(crosshair), color="#E07B00", lw=1.4)
+    ax.set_xlim(extent[0], extent[1])
+    ax.set_ylim(extent[2], extent[3])
+    return {"crosshair": cross, "image": im, "xlim": (extent[0], extent[1]),
+            "ylim": (extent[2], extent[3])}
+
+
+def draw_line_fit(ax, dataset, index: int = None, *, show_fit: bool = True, raw_line=None,
+                  direction: str = "mdc", title: str = None) -> list:
+    """One MDC / EDC with its fit: data points, the total model (black), the background
+    (dashed grey) and each band's component in its colour, recomputed from the stored
+    parameters. With ``raw_line=(x, y, label)`` and no ``index`` only the data is drawn.
+
+    Returns the table rows ``(band, centre, centre_err, fwhm, height)`` of the line shown.
+    """
+    from tensorspec.core.arpes.products import line_components, line_table
+
+    ax.clear()
+    rows = []
+    kind = "MDC" if direction == "mdc" else "EDC"
+    if dataset is not None and index is not None:
+        fit_axis = str(dataset.attrs.get("fit_axis"))
+        line_axis = str(dataset.attrs.get("line_axis"))
+        x = np.asarray(dataset.coords[fit_axis].values, float)
+        data = np.asarray(dataset["data"].values[index], float)
+        position = float(dataset.coords[line_axis].values[index])
+        chi2 = float(dataset["chi2"].values[index])
+        unit = str(dataset.coords[fit_axis].attrs.get("units", ""))
+        line_unit = str(dataset.coords[line_axis].attrs.get("units", ""))
+        if show_fit:
+            colours = band_colours(dataset)
+            for name, j, component in line_components(dataset, index):
+                ax.plot(x, component, "-", lw=1.1, color=colours[j], label=name)
+            ax.plot(x, dataset["background"].values[index], "--", lw=0.9, color="0.55")
+            ax.plot(x, dataset["model"].values[index], "-", lw=1.6, color="black")
+            rows = line_table(dataset, index)
+            if len(rows) <= 8:
+                ax.legend(fontsize=7, frameon=False, loc="upper right")
+        ax.plot(x, data, ".", ms=3, color="0.25", zorder=3)
+        ax.set_xlabel(_axis_label(fit_axis, unit))
+        if title is None:
+            title = (f"{kind} at {line_axis} = {position:+.4f} {line_unit}"
+                     + (f"   reduced χ² = {chi2:.3g}" if show_fit else "   fit hidden"))
+    elif raw_line is not None:
+        x, data, label = raw_line
+        ax.plot(np.asarray(x, float), np.asarray(data, float), ".", ms=3, color="0.25")
+        ax.set_xlabel(label)
+        if title is None:
+            title = f"{kind}: no fit at this position"
+    ax.set_ylabel("intensity")
+    if x is not None and len(x) and np.nanmin(x) < 0 < np.nanmax(x):
+        ax.axvline(0.0, ls=":", lw=0.6, color="0.5")
+    ax.set_title(title or "", fontsize=9)
+    return rows
