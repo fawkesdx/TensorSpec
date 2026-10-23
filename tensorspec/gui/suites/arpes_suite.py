@@ -10,7 +10,9 @@ from tensorspec.gui.components.arpes_panel import ARPESPanel
 from PySide6.QtWidgets import QStackedWidget, QGroupBox
 from tensorspec.gui.components.data_viewer_panel import DataViewerPanel
 from tensorspec.core.io.arpes_loader import ARPESLoader
+from tensorspec.core.io.matlab_arpes import list_arpes_matlab_vars, load_arpes_matlab
 from tensorspec.core.workspace import global_workspace
+from tensorspec.gui.components.arpes_tabs.peakfit_explorer_panel import PeakfitExplorerPanel
 
 from tensorspec.core.io.simulated_loader import SimulatedARPESLoader
 
@@ -41,8 +43,17 @@ class ARPESSuite(QWidget):
         
         # Tab 2: Experimental Data Viewer & Loader
         self.init_data_viewer_tab()
-        
+
+        # Tab 3: MDC / EDC peak-fit explorer (reads the same workspace trees)
+        self.peakfit_panel = PeakfitExplorerPanel()
+        self.tabs.addTab(self.peakfit_panel, "Peak-fit Explorer")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
         self.layout.addWidget(self.tabs)
+
+    def _on_tab_changed(self, index: int):
+        if self.tabs.widget(index) is self.peakfit_panel:
+            self.peakfit_panel.refresh_datasets()
 
     def init_data_viewer_tab(self):
         """Builds the Data Viewer tab with a Fetcher sidebar and Universal Dashboard."""
@@ -90,7 +101,7 @@ class ARPESSuite(QWidget):
     def load_arpes_files(self):
         """Allows multi-selection of experimental HDF5 and simulated NPZ files."""
         # Update the file filter to include .npz
-        paths, _ = QFileDialog.getOpenFileNames(self, "Load ARPES Data", "", "ARPES Data (*.h5 *.hdf5 *.npz)")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Load ARPES Data", "", "ARPES Data (*.h5 *.hdf5 *.npz *.mat)")
         if not paths: return
         
         success_count = 0
@@ -100,6 +111,12 @@ class ARPESSuite(QWidget):
                 # Route the file to the appropriate loader based on its extension
                 if path.endswith('.npz'):
                     tensor_data = SimulatedARPESLoader.load(path)
+                elif path.lower().endswith('.mat'):
+                    var = self._pick_matlab_variable(path)
+                    if var is None:
+                        continue
+                    tensor_data = load_arpes_matlab(path, var)
+                    var_name = var
                 else:
                     tensor_data = ARPESLoader.load(path)
                 
@@ -111,7 +128,20 @@ class ARPESSuite(QWidget):
         
         if success_count > 0:
             self.refresh_fetcher_list()
+            self.peakfit_panel.refresh_datasets()
             QMessageBox.information(self, "Load Complete", f"Successfully loaded {success_count} dataset(s) into the Workspace.")
+
+    def _pick_matlab_variable(self, path: str):
+        """The struct to load from a MATLAB file: asked for when the file holds several."""
+        from PySide6.QtWidgets import QInputDialog
+        names = list_arpes_matlab_vars(path)
+        if not names:
+            raise ValueError("no struct with a 'value' field in this file")
+        if len(names) == 1:
+            return names[0]
+        var, ok = QInputDialog.getItem(self, "Load MATLAB ARPES", f"Variable in {os.path.basename(path)}:",
+                                       names, 0, False)
+        return var if ok else None
 
     def refresh_fetcher_list(self):
         """Scans the global workspace and lists only ARPES-compatible data."""
