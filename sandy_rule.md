@@ -33,6 +33,7 @@ tensorspec/
 │   │   ├── uview_loaders.py  # Elmitec UView .dat (BNL ESM)
 │   │   ├── p3b_loaders.py    # ALS 11.0.1 PEEM-3 .P3B frames
 │   │   ├── xas_loaders.py    # 1D XAS/XMCD CSV/TXT (single or paired channels)
+│   │   ├── matlab_arpes.py   # save_arpes_matlab / load_arpes_matlab (v7 + v7.3 ARPES structs)
 │   │   ├── raman_loaders.py  # LabRAM/LabSpec maps, single spectra, .h5, spot folders
 │   │   └── loaders/
 │   │       └── maestro/      # MAESTRO HDF5 kinds (xy_fine_4d, focus_xy_fine_5d, …)
@@ -45,6 +46,8 @@ tensorspec/
 │   ├── arpes/                # Nested folder for separated physics engines
 │   │   ├── __init__.py
 │   │   ├── three_step.py     # Option A: Classic 3-step phenomenological calculations
+│   │   ├── peakfit.py        # MDC/EDC peak fitting (BandModel, FitSettings, fit_line, fit_series); no Qt
+│   │   ├── products.py       # /analysis/mdc_peakfit · edc_peakfit Datasets (peakfit_dataset, line_components)
 │   │   └── one_step/         # Option B: Advanced 1-step solver submodules
 │   │       ├── __init__.py
 │   │       ├── chinook_wrapper.py  # B1: Chinook TB + free-electron final state
@@ -71,7 +74,7 @@ tensorspec/
 │   ├── __init__.py
 │   ├── backends/              # Low-level rendering engines
 │   │   ├── __init__.py
-│   │   ├── matplotlib_engine.py # Safe CPU rendering for 1D lines & static 2D maps
+│   │   ├── matplotlib_engine.py # Safe CPU rendering for 1D lines & static 2D maps (+ draw_cut_with_tracks / draw_line_fit)
 │   │   ├── pyvista_engine.py    # Fast GPU rendering for 3D crystal structures & volumes
 │   │   ├── pyqtgraph_engine.py  # High-speed real-time 2D image rendering (optional)
 │   │   ├── raman_matplotlib_engine.py  # Raman figure style + shared map helpers
@@ -91,6 +94,7 @@ tensorspec/
     │   ├── crystal_panel.py      # Crystal View tab body: Structure | Camera | Export sub-tabs
     │   ├── dft_panels.py / qe_generator_panel.py / sprkkr_panels.py
     │   ├── arpes_panel.py
+    │   ├── arpes_tabs/            # peakfit_explorer_panel.py (ARPES suite tab 3: Peak-fit Explorer)
     │   ├── peem_panel.py / xas_panel.py  # PEEM: Load/Pair/Drift/BG/Map(PCD·PLD)/Sum Rule; Frame=DataViewer
     │   ├── raman_panel.py / raman_tabs/  # Spectra | Map | Analysis (widgets only → RamanService)
     │   ├── data_viewer_panel.py   # N-D viewer; chrome = axes + display + Δ rows
@@ -101,7 +105,7 @@ tensorspec/
     └── suites/               # Independent roadmap suites + ML
         ├── crystal_suite.py      # Tabs: View | CDW | Stack | BZ (+ 3D viewer splitter)
         ├── dft_suite.py          # Tabs: Structure | DFT/Wannier | Tight Binding (+ band canvas)
-        ├── arpes_suite.py
+        ├── arpes_suite.py        # Tabs: Simulations | Data Viewer | Peak-fit Explorer
         ├── peem_suite.py         # Single PEEM panel (Load beamline… + Pair/Drift/BG/Sum Rule)
         ├── xas_suite.py
         ├── raman_suite.py        # Tabs: 1 · Spectra | 2 · Map | 3 · Analysis
