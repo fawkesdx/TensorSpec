@@ -324,3 +324,24 @@ def arpes_metadata_number(metadata: dict, *keys: str, default=None):
             return default
         node = node[key]
     return _scalar(node, default)
+
+
+def list_arpes_matlab_vars(path: str) -> list:
+    """Names of the structs with a ``value`` field in a MATLAB file (v7 or v7.3)."""
+    path = str(path)
+    if _is_hdf5(path):
+        import h5py
+
+        with h5py.File(path, "r") as file:
+            return _h5_candidates(file)
+    from scipy.io import loadmat
+
+    raw = loadmat(path, squeeze_me=False, struct_as_record=False, variable_names=None)
+    out = []
+    for key, val in raw.items():
+        if key.startswith("__"):
+            continue
+        item = _mat_value(val)
+        if isinstance(item, dict) and "value" in item:
+            out.append(key)
+    return out
