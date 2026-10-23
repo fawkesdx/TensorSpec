@@ -68,6 +68,12 @@ Grand App
 		- [ ] Lorea Alba
 		- [ ] Bloch MaxIV
 	- [ ] Full motor1/motor2 multi-panel ARPES layout parity with the original multi-motor viewer spec (DataViewer covers the general case; suite-specific layouts still evolving).
+	- [x] MDC / EDC peak-fit explorer tab (**Peak-fit Explorer**, third tab of the ARPES suite, after Data Viewer). Draft and data mapping: `docs/DRAFT_MDC_EDC_FIT_EXPLORER.md` (local docs). Products go to `/analysis/mdc_peakfit` / `edc_peakfit` (any node name; `attrs['kind']` tells them apart).
+		- [x] `core/io/matlab_arpes.py` `load_arpes_matlab()` (v7 via scipy, v7.3 via h5py; writer's labelled struct or `value/x/y[/z]/info[/para]`) + `.mat` in the suite's **Load ARPES Data…**
+		- [x] `core/arpes/peakfit.py` (port of ARPES-data-browser `tools.peaks`: Seed/Band/BandModel, FitSettings, `fit_line`, `fit_series`, `peak_profile`) · `core/arpes/products.py` (`peakfit_dataset`, components recomputed from the stored parameters)
+		- [x] `plotting/backends/matplotlib_engine.py` `draw_cut_with_tracks` / `draw_line_fit`
+		- [x] `gui/components/arpes_tabs/peakfit_explorer_panel.py`: dataset (`/raw`, `/processed/*`) + fit-node pickers, MDC/EDC, Show fit, draggable crosshair + arrow keys, parameter table, **Fit…** dialog (seeds as text) running in a QThread
+		- [ ] Click-to-place seeds on the image, zoom of the left image to the fit window, linked crosshair with the DataViewer, multi-dataset (temperature series) comparison
 
 - [x] PEEM Suite (`core/peem/`, `gui/services/peem_service.py`, `gui/components/peem_panel.py`, `gui/suites/peem_suite.py`)
 	- [x] loader of tif file stacks (`core/io/peem_loaders.py`, needs `tifffile`)
