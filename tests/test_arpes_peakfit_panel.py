@@ -29,6 +29,25 @@ def _model():
 
 
 @pytest.fixture
+def make_panel(qapp):
+    """Panels built here are flushed and deleted before the test ends, so no canvas redraw
+    timer fires on an already-deleted widget during a later test's processEvents()."""
+    made = []
+
+    def build():
+        from tensorspec.gui.components.arpes_tabs.peakfit_explorer_panel import PeakfitExplorerPanel
+        panel = PeakfitExplorerPanel()
+        made.append(panel)
+        return panel
+
+    yield build
+    qapp.processEvents()
+    for panel in made:
+        panel.deleteLater()
+    qapp.processEvents()
+
+
+@pytest.fixture
 def workspace_cut():
     name = "peakfit_test_cut"
     cut = _cut()
@@ -42,11 +61,11 @@ def workspace_cut():
     global_workspace.remove(name)
 
 
-def test_panel_pickers_crosshair_and_table(qapp, workspace_cut):
-    from tensorspec.gui.components.arpes_tabs.peakfit_explorer_panel import NO_FIT, PeakfitExplorerPanel
+def test_panel_pickers_crosshair_and_table(qapp, workspace_cut, make_panel):
+    from tensorspec.gui.components.arpes_tabs.peakfit_explorer_panel import NO_FIT
 
     name, cut = workspace_cut
-    panel = PeakfitExplorerPanel()
+    panel = make_panel()
     assert panel.select_dataset(name, "raw")
     assert panel.current_source() == (name, "raw")
     # the stored MDC fit is listed and picked up by default
@@ -118,11 +137,11 @@ def test_dialog_prefills_from_stored_fit_and_parses_seeds(qapp, workspace_cut):
     assert edc.options()["node"] == "edc_peakfit"
 
 
-def test_worker_and_store_series(qapp, workspace_cut):
-    from tensorspec.gui.components.arpes_tabs.peakfit_explorer_panel import FitWorker, PeakfitExplorerPanel
+def test_worker_and_store_series(qapp, workspace_cut, make_panel):
+    from tensorspec.gui.components.arpes_tabs.peakfit_explorer_panel import FitWorker
 
     name, cut = workspace_cut
-    panel = PeakfitExplorerPanel()
+    panel = make_panel()
     assert panel.select_dataset(name, "raw")
     settings = pf.FitSettings(resolution=0.002)
     options = {"direction": "mdc", "bounds": (-0.1, -0.05), "step": 1, "combine": 3, "refine": False,
@@ -158,4 +177,6 @@ def test_arpes_suite_has_the_tab_next_to_the_data_viewer(qapp):
     titles = [suite.tabs.tabText(i) for i in range(suite.tabs.count())]
     assert titles == ["Simulations (Chinook/SPRKKR)", "Data Viewer", "Peak-fit Explorer"]
     assert suite.tabs.widget(2) is suite.peakfit_panel
-    suite.close()
+    qapp.processEvents()
+    suite.close()                      # WA_DeleteOnClose: flush the deletion here, not later
+    qapp.processEvents()
