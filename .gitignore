@@ -83,3 +83,21 @@ OSKI/
 
 # OSKI build tarballs — OSKI is its own repo (fawkesdx/oski)
 oski_*.tar.gz
+
+# --- secrets and credentials: never commit (added 2026-10-28) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*.token
+.netrc
+.pypirc
+credentials*.json
+*secrets*.json
+service-account*.json
+.tensorspec_clusters.json
