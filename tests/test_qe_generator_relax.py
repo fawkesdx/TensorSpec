@@ -10,7 +10,7 @@ def test_write_relax_ions_fixed_cell(tmp_path, monkeypatch):
     monkeypatch.setattr(
         gen,
         "_generate_atomic_species",
-        lambda out_dir, use_soc=False: " C  12.01  C.upf",
+        lambda out_dir, use_soc=False, magnetic=None: " C  12.01  C.upf",
     )
     path = gen.write_relax_input(
         str(tmp_path), ecutwfc=40, kmesh=(4, 4, 1), vdw_dft_d3=True
@@ -38,7 +38,7 @@ def test_write_vc_relax_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(
         gen,
         "_generate_atomic_species",
-        lambda out_dir, use_soc=False: " C  12.01  C.upf",
+        lambda out_dir, use_soc=False, magnetic=None: " C  12.01  C.upf",
     )
     path = gen.write_relax_input(
         str(tmp_path),
@@ -64,7 +64,7 @@ def test_relax_if_pos_fix_first_two(tmp_path, monkeypatch):
     monkeypatch.setattr(
         gen,
         "_generate_atomic_species",
-        lambda out_dir, use_soc=False: " C  12.01  C.upf\n B  10.81  B.upf\n N  14.01  N.upf",
+        lambda out_dir, use_soc=False, magnetic=None: " C  12.01  C.upf\n B  10.81  B.upf\n N  14.01  N.upf",
     )
     if_pos = [(0, 0, 0), (0, 0, 0), (1, 1, 1), (1, 1, 1)]
     path = gen.write_relax_input(str(tmp_path), ecutwfc=40, kmesh=(4, 4, 1), if_pos=if_pos)
@@ -110,7 +110,7 @@ def test_scf_nscf_vdw_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(
         gen,
         "_generate_atomic_species",
-        lambda out_dir, use_soc=False: " C  12.01  C.upf",
+        lambda out_dir, use_soc=False, magnetic=None: " C  12.01  C.upf",
     )
     scf_path = gen.write_scf_input(str(tmp_path), vdw_dft_d3=True)
     nscf_path = gen.write_nscf_input(str(tmp_path), vdw_dft_d3=True)
@@ -125,7 +125,7 @@ def _hex_carbon_gen(monkeypatch):
     monkeypatch.setattr(
         gen,
         "_generate_atomic_species",
-        lambda out_dir, use_soc=False: " C  12.01  C.upf",
+        lambda out_dir, use_soc=False, magnetic=None: " C  12.01  C.upf",
     )
     return gen, s
 

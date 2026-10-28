@@ -4,6 +4,12 @@ import unittest
 import zipfile
 from pathlib import Path
 
+import pytest
+
+# The FastAPI backend lives only on branches that ship ``tensorspec.web``
+# (e.g. ``main``); skip the whole module elsewhere instead of erroring at collection.
+pytest.importorskip("tensorspec.web")
+
 import numpy as np
 import tifffile
 from fastapi import HTTPException
