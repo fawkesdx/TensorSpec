@@ -56,7 +56,7 @@ shiboken6<6.10.0
 QtPy==2.4.3
 pyvista==0.46.5
 pyvistaqt==0.11.3
-vtk==9.3.0
+vtk==9.7.1
 psutil==5.9.8
 
 # --- PEEM / imaging ---
