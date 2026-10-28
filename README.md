@@ -62,3 +62,15 @@ The Workspace Browser ribbon opens independent suites (Crystal, DFT, ARPES, PEEM
 * **Plotting** (`tensorspec/plotting/`): Matplotlib / PyVista backends
 
 Agent / modularity rules: `sandy_rule.md`. Checklist roadmap: `roadmap.md`.
+
+## Privacy guard
+
+This repository is public. `scripts/privacy_check.sh` blocks personal home paths, cluster logins,
+personal e-mails and credentials from being committed or pushed (`.privacy-denylist`, with
+placeholders allowed by `.privacy-allowlist`). Enable the hooks once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Audit the whole tree at any time with `scripts/privacy_check.sh --tree`.

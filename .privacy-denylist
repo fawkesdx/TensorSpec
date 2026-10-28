@@ -1,0 +1,24 @@
+# Extended regexes (grep -E), one per line. Lines matching any of these are blocked
+# unless they also match .privacy-allowlist. Scanned by scripts/privacy_check.sh.
+
+# personal home directories and cluster scratch paths
+/Users/[A-Za-z][A-Za-z0-9._-]*/
+/home/[A-Za-z][A-Za-z0-9._-]*/
+[A-Z]:\\Users\\[A-Za-z]
+/mnt/data/[A-Za-z][A-Za-z0-9._-]*/
+# cloud storage and Overleaf folders
+Dropbox/Apps|CloudStorage/|Dropbox/Apps/Overleaf
+# ssh logins and lab / HPC hostnames
+[A-Za-z0-9._-]+@[A-Za-z0-9.-]+\.(gov|edu|ch|de|org)([^A-Za-z]|$)
+\.(lbl|nersc|anl|ornl|bnl)\.gov|\.psi\.ch|\.cmu\.edu
+# personal e-mail addresses
+[A-Za-z0-9._%+-]+@(gmail|yahoo|outlook|hotmail|icloud)\.com
+# credentials
+-----BEGIN [A-Z ]*PRIVATE KEY
+sk-(ant-)?[A-Za-z0-9_-]{20,}
+gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{20,}
+AKIA[0-9A-Z]{16}
+hf_[A-Za-z0-9]{30,}
+xox[baprs]-[A-Za-z0-9-]{10,}
+pypi-AgEI[A-Za-z0-9_-]{20,}
+AIza[0-9A-Za-z_-]{35}
