@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from typing import Any, Literal
 
@@ -30,13 +31,47 @@ def _shift_plane(plane: np.ndarray, dx: int, dy: int) -> np.ndarray:
     return plane[np.ix_(source_y, source_x)]
 
 
+def _ncc_score_map(
+    ref_plane: np.ndarray,
+    mov_plane: np.ndarray,
+    mask: np.ndarray,
+    search_radius: int,
+) -> np.ndarray:
+    """Masked NCC for every shift at once (FFT); scores[r - dy, r - dx], NaN where the moving window
+    is flat. Same score as the per-shift loop in _ncc_best_shift, up to rounding."""
+    from scipy.signal import fftconvolve
+
+    r = search_radius
+    ys, xs = np.nonzero(mask)
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    m = mask[y0:y1, x0:x1].astype(float)
+    n = m.sum()
+    t = np.asarray(ref_plane[y0:y1, x0:x1], dtype=float)
+    t = (t - t[m > 0].mean()) * m
+    # edge-clamped moving plane = np.clip of the indices in the loop
+    region = np.pad(np.asarray(mov_plane, dtype=float), r, mode="edge")[y0:y1 + 2 * r, x0:x1 + 2 * r]
+    region = region - region.mean()  # NCC ignores offsets; keeps the window variance accurate
+    corr = fftconvolve(region, t[::-1, ::-1], mode="valid")
+    s1 = fftconvolve(region, m[::-1, ::-1], mode="valid")
+    s2 = fftconvolve(region * region, m[::-1, ::-1], mode="valid")
+    var = s2 - s1 * s1 / n
+    with np.errstate(invalid="ignore", divide="ignore"):
+        score = corr / (np.linalg.norm(t) * np.sqrt(var))
+    score[~(var > 1e-9 * max(float(np.abs(s2).max()), 1e-300))] = np.nan
+    return score
+
+
 def _ncc_best_shift(
     ref_plane: np.ndarray,
     mov_plane: np.ndarray,
     mask: np.ndarray,
     search_radius: int,
 ) -> tuple[int, int]:
-    """Return the integer shift that maximizes masked normalized correlation."""
+    """Return the integer shift that maximizes masked normalized correlation.
+
+    All shifts are scored at once with FFTs (_ncc_score_map); the shifts within 1e-6 of the best
+    are then scored exactly, in the original order and with the original tie rule, so the result
+    is the same as trying every shift one by one (only much faster on large frames)."""
     mask_y, mask_x = np.nonzero(mask)
     template = np.asarray(ref_plane[mask], dtype=float)
     template_centered = template - template.mean()
@@ -44,12 +79,20 @@ def _ncc_best_shift(
     if not np.isfinite(template_norm) or template_norm <= np.finfo(float).eps:
         raise ValueError("reference ROI template must have non-zero variance")
 
+    r = search_radius
+    candidates = None
+    scores = _ncc_score_map(ref_plane, mov_plane, mask, r)
+    if np.isfinite(scores).any():
+        top = np.nanmax(scores)
+        near = np.argwhere(scores >= top - 1e-6)  # rows r - dy, cols r - dx; row-major = loop order
+        candidates = [(r - int(a), r - int(b)) for a, b in near]  # (dy, dx)
     ny, nx = ref_plane.shape
-    best_score = -np.inf
-    best_shift: tuple[int, int] | None = None
-    for dy in range(-search_radius, search_radius + 1):
-        source_y = np.clip(mask_y - dy, 0, ny - 1)
-        for dx in range(-search_radius, search_radius + 1):
+
+    def pick(shifts):
+        best_score = -np.inf
+        best_shift: tuple[int, int] | None = None
+        for dy, dx in shifts:
+            source_y = np.clip(mask_y - dy, 0, ny - 1)
             source_x = np.clip(mask_x - dx, 0, nx - 1)
             candidate = np.asarray(mov_plane[source_y, source_x], dtype=float)
             candidate_centered = candidate - candidate.mean()
@@ -77,7 +120,12 @@ def _ncc_best_shift(
             elif scores_tie and (best_rank is None or shift_rank < best_rank):
                 best_score = max(best_score, score)
                 best_shift = (dx, dy)
+        return best_shift
 
+    every = [(dy, dx) for dy in range(-r, r + 1) for dx in range(-r, r + 1)]
+    best_shift = pick(candidates) if candidates else None
+    if best_shift is None:  # no usable FFT candidate: try every shift
+        best_shift = pick(every)
     if best_shift is None:
         raise ValueError("no valid NCC shift found in search range")
     return best_shift
@@ -116,12 +164,21 @@ def drift_correct(
     roi: dict,
     search_radius: int,
     track_channel: int = 0,
+    smooth_px: float = 0.0,
+    per_channel: bool = False,
 ) -> TensorData:
     """
     Correct integer translational drift using masked ROI NCC against a reference.
 
     Paired tensors estimate drift on one channel and apply each shift to all
     channels. Exposed borders use edge-clamp fill.
+
+    smooth_px: Gaussian sigma (px) applied to the planes used for tracking only (the shifts are
+    applied to the unsmoothed data). A detector's fixed pixel pattern (e.g. a TPX3 without its
+    flat field) otherwise correlates best at zero shift and hides the real drift; 2 px removes it.
+    per_channel: paired tensors only; every frame of every channel is tracked on its own against
+    the reference frame of track_channel. Needed when the two channels were not recorded together
+    (UE49: the CP and CM frames of a pair come from different scans, minutes apart).
     """
     ref_index = _require_integer(ref_index, "ref_index")
     search_radius = _require_integer(search_radius, "search_radius")
@@ -143,28 +200,45 @@ def drift_correct(
     if bbox_area < 9:
         raise ValueError("ROI bounding box area must be at least 9 pixels")
 
-    ref_plane = tracking_planes[ref_index]
+    if smooth_px < 0:
+        raise ValueError("smooth_px must be >= 0")
+
+    def prep(plane: np.ndarray) -> np.ndarray:
+        if not smooth_px:
+            return plane
+        from scipy.ndimage import gaussian_filter
+        return gaussian_filter(np.asarray(plane, dtype=float), smooth_px)
+
+    ref_plane = prep(tracking_planes[ref_index])
     # Validate template variance even when this is a one-item stack.
     ref_values = np.asarray(ref_plane[mask], dtype=float)
     ref_norm = np.linalg.norm(ref_values - ref_values.mean())
     if not np.isfinite(ref_norm) or ref_norm <= np.finfo(float).eps:
         raise ValueError("reference ROI template must have non-zero variance")
 
-    shifts: list[tuple[int, int]] = []
-    for index, moving_plane in enumerate(tracking_planes):
-        if index == ref_index:
-            shifts.append((0, 0))
-        else:
-            shifts.append(
-                _ncc_best_shift(ref_plane, moving_plane, mask, search_radius)
-            )
+    from concurrent.futures import ThreadPoolExecutor  # frames are independent; the FFTs release the GIL
+
+    channels = list(range(tensor.value.shape[1])) if (paired and per_channel) else [track_channel]
+
+    def frame_shift(item: tuple[int, int]) -> tuple[int, int]:
+        index, channel = item
+        if index == ref_index and channel == track_channel:
+            return (0, 0)
+        plane = tensor.value[index, channel] if paired else tracking_planes[index]
+        return _ncc_best_shift(ref_plane, prep(plane), mask, search_radius)
+
+    items = [(i, c) for i in range(n_items) for c in channels]
+    with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as pool:
+        found = dict(zip(items, pool.map(frame_shift, items)))
+    shifts: list[tuple[int, int]] = [found[(i, track_channel)] for i in range(n_items)]
 
     corrected = np.empty_like(tensor.value)
     for index, (dx, dy) in enumerate(shifts):
         if paired:
             for channel in range(tensor.value.shape[1]):
+                cdx, cdy = found.get((index, channel), (dx, dy))
                 corrected[index, channel] = _shift_plane(
-                    tensor.value[index, channel], dx, dy
+                    tensor.value[index, channel], cdx, cdy
                 )
         else:
             corrected[index] = _shift_plane(tensor.value[index], dx, dy)
@@ -177,6 +251,11 @@ def drift_correct(
             "drift_roi": deepcopy(roi),
             "drift_search_radius": search_radius,
             "drift_track_channel": track_channel,
+            "drift_smooth_px": float(smooth_px),
+            "drift_per_channel": bool(paired and per_channel),
+            **({"drift_channel_shifts": [
+                [{"dx": found[(i, c)][0], "dy": found[(i, c)][1]} for c in channels]
+                for i in range(n_items)]} if paired and per_channel else {}),
             "drift_shifts": [
                 {"index": index, "dx": dx, "dy": dy}
                 for index, (dx, dy) in enumerate(shifts)
@@ -377,3 +456,42 @@ def separate_pairs(tensor: TensorData) -> dict[str, TensorData]:
             metadata=meta,
         )
     return out
+
+
+def average_by_energy(
+    frames: np.ndarray,
+    pol: list[str],
+    energy: np.ndarray | None,
+    tags: tuple[str, str],
+    energy_bin_eV: float | None = None,
+) -> tuple[np.ndarray, list[str], list[float], list[list[int]], float | None]:
+    """Average drift-corrected frames per photon energy and polarization: A(E1), B(E1), A(E2), ...
+
+    Frames are grouped in energy bins of ``energy_bin_eV`` (None = the larger median energy step
+    of the two polarizations, so separate A / B sweeps on different energy points still pair up);
+    bins without both polarizations are dropped. ``energy`` None = no energy axis (one bin).
+    Returns (stack, pol tags, bin energies, [n_A, n_B] per bin, bin width used or None).
+    Moved from the PEEM service's to_peem_stack (gui/services/peem_steps/drift_stack.py)."""
+    has_e = energy is not None
+    ta, tb = tags
+    ekey = np.zeros(len(pol))
+    if has_e:
+        if energy_bin_eV is None:
+            uniq = [np.unique(energy[[i for i, t in enumerate(pol) if t == tg]]) for tg in tags]
+            steps = [float(np.median(np.diff(u))) for u in uniq if len(u) > 1]  # one energy: no step
+            energy_bin_eV = max(steps) if steps else 0.01
+        energy_bin_eV = max(float(energy_bin_eV), 1e-3)
+        ekey = np.floor((energy - energy.min()) / energy_bin_eV + 0.5)
+    points, imgs, pol_out, counts = [], [], [], []
+    for e in np.unique(ekey):
+        ia = [i for i, t in enumerate(pol) if t == ta and ekey[i] == e]
+        ib = [i for i, t in enumerate(pol) if t == tb and ekey[i] == e]
+        if not ia or not ib:
+            continue
+        points.append(float(np.mean(energy[ia + ib])) if has_e else 0.0)
+        imgs += [frames[ia].mean(axis=0), frames[ib].mean(axis=0)]
+        pol_out += [ta, tb]
+        counts.append([len(ia), len(ib)])
+    if not points:
+        raise ValueError(f"no energy has both {ta} and {tb} frames")
+    return np.stack(imgs), pol_out, points, counts, energy_bin_eV

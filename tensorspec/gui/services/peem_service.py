@@ -1,6 +1,8 @@
 """Direct PEEM core access for the Qt GUI (no HTTP)."""
 from __future__ import annotations
 
+import csv
+import json
 import math
 import re
 from collections import Counter
@@ -8,6 +10,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
+import xarray as xr
 
 from tensorspec.core.data_models import TensorData
 from tensorspec.core.io import peem_beamline_loaders
@@ -28,6 +31,8 @@ from tensorspec.core.peem.bg import (
     resolve_energy,
 )
 from tensorspec.core.peem import dichroism, products
+from tensorspec.core.peem import domain_analysis as da
+from tensorspec.core.peem.products import _coords, _flat_attrs
 from tensorspec.core.peem.engine import drift_correct, pair_stack, separate_pairs
 from tensorspec.core.peem.roi import roi_to_mask
 from tensorspec.core.peem.sumrule import (
@@ -39,6 +44,17 @@ from tensorspec.core.peem.sumrule import (
     pick_source_kind,
 )
 from tensorspec.core.workspace import global_workspace
+# XPEEM map tab: its steps are mixins (gui/services/peem_steps/); the stack / BG / sum-rule methods
+# below are unchanged
+from tensorspec.gui.services.peem_steps.annotations import PeemAnnotationSteps
+from tensorspec.gui.services.peem_steps.cleanup import PeemCleanupSteps
+from tensorspec.gui.services.peem_steps.drift_stack import PeemDriftStackSteps
+from tensorspec.gui.services.peem_steps.image_analysis import PeemImageAnalysisSteps
+from tensorspec.gui.services.peem_steps.load import PeemLoadSteps
+from tensorspec.gui.services.peem_steps.maps_domains import PeemMapsDomainsSteps
+from tensorspec.gui.services.peem_steps.channels import PeemChannelSteps
+from tensorspec.gui.services.peem_steps.compare import PeemCompareSteps
+from tensorspec.gui.services.peem_steps.common import _mask as _roi_mask, _record as _step_record
 
 MAX_PEEM_BYTES = 512 * 1024 * 1024
 MAX_PEEM_FRAMES = 10_000
@@ -77,6 +93,14 @@ def _tif_paths(source_path: Path) -> list[Path]:
     if source_path.suffix.lower() in (".tif", ".tiff"):
         return [source_path]
     raise ValueError("Path must be a TIF file or directory.")
+
+
+def _is_beamline_folder(path: Path) -> bool:
+    try:
+        peem_beamline_loaders.detect_format(path)
+        return True
+    except ValueError:
+        return False
 
 
 def _float64_bytes_for_shape(shape: tuple[int, ...] | list[int]) -> int:
@@ -746,8 +770,421 @@ def _load_summary(
     }
 
 
-class PeemService:
-    """Qt-facing PEEM operations via global_workspace."""
+# ------------------------------------------------------------------ spatial domain analysis
+# Maps pushed from the Map view (raw values or as shown, with ROI and background region) -> one node
+# each, /analysis/domains_<n>: the pushed map, roi / bg masks and, after a run, the steps of
+# core/peem/domain_analysis (the SDA toolkit pipeline) with the numbers in attrs.
+DOMAIN_PREFIX = "domains_"
+DOMAIN_PUSH_ATTRS = ("source_kind", "source_var", "mode", "gamma", "vmin", "vmax", "cmap", "um_per_px",
+                     "roi_region", "bg_region")
+DOMAIN_TABLE_KEYS = (  # (column, metric): pixel counts without / with the m0 threshold, then shape numbers
+    ("pixels", "n_px"), ("up_px", "n_up_px"), ("down_px", "n_down_px"), ("mz", "mz"),
+    ("m0", "m0"), ("up_px (m0)", "n_up_px_m0"), ("neutral_px (m0)", "n_neutral_px_m0"),
+    ("down_px (m0)", "n_down_px_m0"), ("mz (m0)", "mz_three_state"),
+    ("domains_up", "n_domains_up"), ("domains_down", "n_domains_down"), ("mean_domain_area_um2", "mean_domain_area_um2"),
+    ("width_up", "width_up"), ("width_down", "width_down"), ("period", "period"),
+    ("wall_length_um", "wall_length_um"), ("wall_density_per_um", "wall_density_per_um"),
+    ("stripe_angle_deg", "stripe_angle_deg"), ("alignment", "alignment"), ("flake_area_um2", "flake_area_um2"))
+
+
+class PeemDomainAnalysisSteps:
+    # ------------------------------------------------------------------ push / list
+    def push_to_domains(self, name: str, kind: str, var: str = "data", mode: str = "raw",
+                        vmin: float | None = None, vmax: float | None = None, gamma: float = 1.0,
+                        use_roi: bool = True, use_bg: bool = False, cmap: str | None = None) -> dict[str, Any]:
+        """Send a map to the domain analysis. mode 'raw': its values; 'shown': with the Map view's
+        colour range (vmin, vmax) and gamma. The dataset's ROI and (use_bg) background region go along.
+        The look (vmin, vmax, gamma, cmap) is kept either way, so the pushed map is shown as it was."""
+        if mode not in ("raw", "shown"):
+            raise ValueError("mode must be 'raw' or 'shown'")
+        if mode == "shown" and (vmin is None or vmax is None or not vmax > vmin):
+            raise ValueError("'as shown' needs the colour range of the Map view")
+        a = np.asarray(self.get_map(name, kind, var), float)
+        if a.ndim != 2:
+            raise ValueError("only 2-D maps can be pushed")
+        rois = self.get_rois(name)
+        roi = rois["roi"] if use_roi else None
+        bg = rois["bg"] if use_bg else None
+        if use_bg and bg is None:
+            raise ValueError("Background region is ticked but none is drawn")
+        used = [int(k[len(DOMAIN_PREFIX):]) for k in global_workspace.list_analysis_children(name)
+                if k.startswith(DOMAIN_PREFIX) and k[len(DOMAIN_PREFIX):].isdigit()]
+        label = f"{DOMAIN_PREFIX}{max(used, default=0) + 1}"
+        extra = {}
+        if roi is not None:
+            extra["roi"] = _roi_mask(a.shape, roi).astype(np.uint8)
+        if bg is not None:
+            extra["bg"] = _roi_mask(a.shape, bg).astype(np.uint8)
+        attrs = {"source_kind": kind, "source_var": var, "mode": mode, "gamma": float(gamma or 1.0),
+                 "vmin": vmin, "vmax": vmax, "cmap": cmap, "analysed": 0, "um_per_px": self._um_per_px(name),
+                 "roi_region": json.dumps(roi) if roi is not None else None,
+                 "bg_region": json.dumps(bg) if bg is not None else None}
+        self._write_domains(name, label, a, extra, attrs)
+        out = {"name": name, "label": label, "source": self.layer_for(name, kind, var), "mode": mode,
+               "has_roi": roi is not None, "has_bg": bg is not None}
+        _step_record(name, "push to domain analysis", out)
+        return out
+
+    def _write_domains(self, name: str, label: str, data: np.ndarray, extra: dict, attrs: dict) -> None:
+        coords = _coords(data.shape, attrs.get("um_per_px"))
+        variables = {"data": xr.DataArray(np.asarray(data), dims=("y", "x"), coords=coords)}
+        for k, v in extra.items():
+            variables[k] = xr.DataArray(np.asarray(v), dims=("y", "x"), coords=coords)
+        if not global_workspace.write_analysis_data(name, label, xr.Dataset(variables, attrs=_flat_attrs(attrs))):
+            raise ValueError(f"PEEM data '{name}' not found.")
+
+    def _domains(self, name: str, label: str) -> xr.Dataset:
+        ds = global_workspace.pull_analysis_data(name, label)
+        if ds is None or not label.startswith(DOMAIN_PREFIX):
+            raise ValueError(f"no pushed map {label!r} in '{name}'")
+        return ds
+
+    def domain_inputs(self) -> list[dict[str, Any]]:
+        """Every pushed map of every loaded dataset, in push order."""
+        out = []
+        for name in self.list_datasets():
+            for label in sorted((k for k in global_workspace.list_analysis_children(name) if k.startswith(DOMAIN_PREFIX)),
+                                key=lambda k: int(k[len(DOMAIN_PREFIX):]) if k[len(DOMAIN_PREFIX):].isdigit() else 0):
+                at = dict(self._domains(name, label).attrs)
+                src = self.layer_name(at.get("source_kind", "?"), at.get("source_var", "data"))
+                out.append({"name": name, "label": label, "source": src, "mode": at.get("mode", "raw"),
+                            "analysed": bool(at.get("analysed", 0)), "title": f"{name} · {src} ({at.get('mode')})"})
+        return out
+
+    def remove_domain_input(self, name: str, label: str) -> None:
+        self._domains(name, label)
+        global_workspace.remove_analysis_data(name, label)
+
+    # ------------------------------------------------------------------ run
+    def run_domain_analysis(self, name: str, label: str, **params) -> dict[str, Any]:
+        """Steps a-l on one pushed map (params: core/peem/domain_analysis.DEFAULTS; flake 'pushed' uses
+        the pushed ROI, background 'region' the pushed background region). Returns the numbers."""
+        ds = self._domains(name, label)
+        at = dict(ds.attrs)
+        a = np.asarray(ds["data"].values, float)
+        roi = np.asarray(ds["roi"].values, bool) if "roi" in ds else None
+        bg = np.asarray(ds["bg"].values, bool) if "bg" in ds else None
+        um = at.get("um_per_px")
+        res = da.analyze(a, um_per_px=um if um and np.isfinite(um) else None, roi=roi, bg_mask=bg,
+                         normalize_mode=at.get("mode", "raw"), vmin=at.get("vmin"), vmax=at.get("vmax"),
+                         gamma=at.get("gamma", 1.0), **params)
+        extra = {k: ds[k].values for k in ("roi", "bg") if k in ds}
+        extra.update(res["layers"])
+        keep = {k: at[k] for k in DOMAIN_PUSH_ATTRS if k in at}
+        p = {**da.DEFAULTS, **params}
+        attrs = {**keep, "analysed": 1, **{f"param_{k}": v for k, v in p.items()},
+                 **{k: v for k, v in res["metrics"].items()},
+                 "areas_unit": res["areas"]["unit"], "areas_up": [float(v) for v in res["areas"]["up"]],
+                 "areas_down": [float(v) for v in res["areas"]["down"]]}
+        self._write_domains(name, label, a, extra, attrs)
+        out = {"name": name, "label": label, **res["metrics"]}
+        _step_record(name, f"domain analysis {label}", {k: v for k, v in out.items() if np.isscalar(v)})
+        return out
+
+    # ---------------------------------------------------------------- map offset (zero of the colour scale)
+    def map_offset(self, name: str, kind: str, var: str = "data", how: str = "median",
+                   region: dict | None = None) -> dict[str, Any]:
+        """The offset of a map: the median or mean (how) inside a region, or, without a region, of the map
+        without the drift strips at the field's edges. how='region' = the mean in the region."""
+        a = np.asarray(self.get_map(name, kind, var), float)
+        if how == "region":
+            if region is None:
+                raise ValueError("draw the region first (Sym ± → Region)")
+            how = "mean"
+        if how not in ("median", "mean"):
+            raise ValueError("how must be 'median', 'mean' or 'region'")
+        if region is not None:
+            vals = a[_roi_mask(a.shape, region) & np.isfinite(a)]
+            source = f"{how} in the region"
+        else:
+            vals = a[da.edge_strips(a) & np.isfinite(a)]
+            source = f"{how} of the map without drift strips"
+        if not vals.size:
+            raise ValueError("no finite pixels to take the offset from")
+        value = float(np.median(vals) if how == "median" else vals.mean())
+        return {"offset": value, "source": source, "n_px": int(vals.size)}
+
+    def subtract_map_offset(self, name: str, kind: str, var: str = "data", how: str = "median",
+                            region: dict | None = None) -> dict[str, Any]:
+        """Map minus its offset (map_offset) -> variable 'offset_removed' (the map is kept), so 0 is the
+        magnetic zero and a colour scale symmetric about 0 is meaningful."""
+        off = self.map_offset(name, kind, var, how, region)
+        a = np.asarray(self.get_map(name, kind, var), float)
+        out = self._map_variant(name, kind, var or "data", "offset_removed", a - off["offset"],
+                                f"offset {off['offset']:+.6g} removed ({off['source']})")
+        return {**out, **off}
+
+    # ---------------------------------------------------------------- regions of a pushed map
+    def domain_regions(self, name: str, label: str) -> dict[str, dict | None]:
+        """{"roi": ..., "bg": ...} of a pushed map (rect / polygon / ellipse in px), None where not set."""
+        at = dict(self._domains(name, label).attrs)
+        return {w: (json.loads(at[f"{w}_region"]) if at.get(f"{w}_region") else None) for w in ("roi", "bg")}
+
+    def set_domain_region(self, name: str, label: str, which: str, region: dict | None) -> dict[str, dict | None]:
+        """Set (None: clear) the ROI ('roi') or background region ('bg') of a pushed map. Earlier results of
+        that map are dropped (run it again)."""
+        if which not in ("roi", "bg"):
+            raise ValueError("which must be 'roi' or 'bg'")
+        if region is not None and region.get("kind") not in ("rect", "polygon", "ellipse"):
+            raise ValueError("region kind must be rect, polygon or ellipse")
+        ds = self._domains(name, label)
+        a = np.asarray(ds["data"].values)
+        at = {k: v for k, v in ds.attrs.items() if k in DOMAIN_PUSH_ATTRS}
+        extra = {k: ds[k].values for k in ("roi", "bg") if k in ds and k != which}
+        if region is not None:
+            extra[which] = _roi_mask(a.shape, region).astype(np.uint8)
+            at[f"{which}_region"] = json.dumps(region)
+        else:
+            at.pop(f"{which}_region", None)
+        self._write_domains(name, label, a, extra, {**at, "analysed": 0})
+        _step_record(name, f"domain {which} {label}", {"region": json.dumps(region)})
+        return self.domain_regions(name, label)
+
+    def domain_auto_flake(self, name: str, label: str, tv_weight: float = 0.20, min_px: int = 800) -> dict[str, Any]:
+        """Find the flake on a pushed map (denoise, local std, Otsu, closing, largest region; not the drift
+        strips at the edges) and set it as that map's ROI (a polygon, to save and reuse)."""
+        a = np.asarray(self._domains(name, label)["data"].values, float)
+        img, _ = da.normalize(a, "raw")
+        mask = da.auto_flake(da.local_std(da.denoise(img, "tv", tv_weight)), min_px=min_px, valid=da.edge_strips(a))
+        roi = {"kind": "polygon", "points": da.flake_outline(mask)}
+        self.set_domain_region(name, label, "roi", roi)
+        return roi
+
+    def save_domain_region(self, name: str, label: str, path: str | Path, which: str = "roi") -> str:
+        """A pushed map's ROI / background region as JSON (same format as save_roi), to reuse."""
+        region = self.domain_regions(name, label)[which]
+        if region is None:
+            raise ValueError(f"no {'ROI' if which == 'roi' else 'background region'} to save")
+        Path(path).write_text(json.dumps({"tensorspec_roi": 1, "which": which, "roi": region, "source": name,
+                                          "um_per_px": self._um_per_px(name)}, indent=1))
+        return str(path)
+
+    def load_domain_region(self, name: str, label: str, path: str | Path, which: str = "roi") -> dict[str, Any]:
+        d = json.loads(Path(path).read_text())
+        region = d.get("roi", d) if isinstance(d, dict) else None
+        if not isinstance(region, dict) or region.get("kind") not in ("rect", "polygon", "ellipse"):
+            raise ValueError("not a saved TensorSpec ROI (.json)")
+        self.set_domain_region(name, label, which, region)
+        return region
+
+    def domain_roi_statistics(self, name: str, label: str, use_bg: bool = False) -> dict[str, Any]:
+        """Of the pushed map's values in its ROI: f_up / f_down split at zero (the background region's mean
+        with use_bg), <m_z> = f_up - f_down, and the mean."""
+        from tensorspec.core.peem import roi_stats
+
+        ds = self._domains(name, label)
+        a = np.asarray(ds["data"].values, float)
+        roi = np.asarray(ds["roi"].values, bool) if "roi" in ds else None
+        bg = 0.0
+        if use_bg:
+            if "bg" not in ds:
+                raise ValueError("Background region is ticked but none is drawn")
+            bg = roi_stats.background_level(a, np.asarray(ds["bg"].values, bool))["bg"]
+        avg = roi_stats.roi_average(a, roi, bg=bg)
+        v = (a[roi] if roi is not None else a.ravel()) - bg
+        v = v[np.isfinite(v)]
+        n_up, n_down = int((v > 0).sum()), int((v < 0).sum())
+        return {"n_px": int(v.size), "n_up_px": n_up, "n_down_px": n_down,
+                "mz": (n_up - n_down) / v.size if v.size else float("nan"), "mean": avg["mean"],
+                "zero": bg, "zero_from": "background region" if use_bg else "0", "in_roi": roi is not None}
+
+    # ---------------------------------------------------------------- save / load an analysis
+    def save_domain_analysis(self, name: str, label: str, path: str | Path) -> str:
+        """One pushed map with everything about it (map, ROI / background masks and outlines, Map-view look,
+        step settings, results and pipeline steps) as a NetCDF file, to load and analyse again later."""
+        ds = self._domains(name, label).copy()
+        attrs = {k: (int(v) if isinstance(v, (bool, np.bool_)) else v) for k, v in ds.attrs.items()}
+        ds.attrs = {**attrs, "tensorspec_domain_analysis": 1, "source_dataset": name}
+        ds.to_netcdf(path)
+        return str(path)
+
+    def load_domain_analysis(self, path: str | Path) -> dict[str, Any]:
+        """Load a saved analysis as a pushed map (its dataset is added when not loaded: the map as a one-frame
+        stack). Returns {name, label, params}: the step settings used, to run again or change."""
+        with xr.open_dataset(path) as f:
+            ds = f.load()
+        if not ds.attrs.get("tensorspec_domain_analysis"):
+            raise ValueError("not a saved TensorSpec domain analysis (.nc)")
+        attrs = {k: v for k, v in ds.attrs.items() if k not in ("tensorspec_domain_analysis", "source_dataset")}
+        name = re.sub(r"[^A-Za-z0-9_.-]", "_", str(ds.attrs.get("source_dataset") or Path(path).stem))[:64]
+        a = np.asarray(ds["data"].values, float)
+        if name not in self.list_datasets():
+            ny, nx = a.shape
+            global_workspace.push_spectroscopy_data(name, TensorData(
+                value=a[None].astype(np.float32), axes=[np.zeros(1), np.arange(ny, dtype=float), np.arange(nx, dtype=float)],
+                labels=["frame", "y", "x"], units=["", "px", "px"], data_type="Experimental PEEM",
+                metadata={"um_per_px": attrs.get("um_per_px"), "source": str(path), "loader": "domain_analysis_file",
+                          "pol": []}))
+        used = [int(k[len(DOMAIN_PREFIX):]) for k in global_workspace.list_analysis_children(name)
+                if k.startswith(DOMAIN_PREFIX) and k[len(DOMAIN_PREFIX):].isdigit()]
+        label = f"{DOMAIN_PREFIX}{max(used, default=0) + 1}"
+        extra = {k: ds[k].values for k in ds.data_vars if k != "data"}
+        self._write_domains(name, label, a, extra, attrs)
+        _step_record(name, "load domain analysis", {"file": Path(path).name, "label": label})
+        return {"name": name, "label": label,
+                "params": {k[len("param_"):]: v for k, v in attrs.items() if k.startswith("param_")}}
+
+    def domain_look(self, name: str, label: str) -> dict[str, Any]:
+        """How the pushed map looked in the Map view: cmap, vmin, vmax, gamma, um_per_px, ROI / background masks."""
+        ds = self._domains(name, label)
+        at = dict(ds.attrs)
+        um = at.get("um_per_px")
+        return {"cmap": at.get("cmap"), "vmin": at.get("vmin"), "vmax": at.get("vmax"), "gamma": at.get("gamma", 1.0),
+                "um_per_px": um if um and np.isfinite(um) else None,
+                "roi": np.asarray(ds["roi"].values, bool) if "roi" in ds else None,
+                "bg": np.asarray(ds["bg"].values, bool) if "bg" in ds else None}
+
+    def domain_result(self, name: str, label: str) -> dict[str, Any]:
+        """The numbers of one analysed map ({} before a run)."""
+        at = dict(self._domains(name, label).attrs)
+        return {k: v for k, v in at.items() if np.isscalar(v) and not k.startswith("param_")} if at.get("analysed") else {}
+
+    def domain_layer(self, name: str, label: str, step: str) -> np.ndarray:
+        """One pipeline step of an analysed map (core/peem/domain_analysis.STEPS), or 'input'."""
+        ds = self._domains(name, label)
+        var = "data" if step == "input" else step
+        if var not in ds:
+            raise ValueError(f"run the domain analysis on {label} first" if step in da.STEPS else f"unknown step {step!r}")
+        return np.asarray(ds[var].values)
+
+    def domain_areas(self, name: str, label: str) -> dict[str, Any]:
+        """Areas of the single domains (domain-size distribution): {"up", "down", "unit"}."""
+        at = dict(self._domains(name, label).attrs)
+        if not at.get("analysed"):
+            raise ValueError(f"run the domain analysis on {label} first")
+        return {"up": np.asarray(at.get("areas_up", []), float), "down": np.asarray(at.get("areas_down", []), float),
+                "unit": at.get("areas_unit", "px2")}
+
+    def domain_table(self, items: list[tuple[str, str]] | None = None) -> list[dict[str, Any]]:
+        """One row per analysed map: dataset, map, mode and the numbers (widths / period in nm or px)."""
+        rows = []
+        for it in self.domain_inputs():
+            if items is not None and (it["name"], it["label"]) not in items:
+                continue
+            r = self.domain_result(it["name"], it["label"])
+            if not r:
+                continue
+            unit = r.get("width_unit", "px")
+            row = {"dataset": it["name"], "map": it["source"], "push": it["mode"], "label": it["label"]}
+            for col, k in DOMAIN_TABLE_KEYS:
+                v = r.get(f"{k}_{unit}", r.get(k))
+                row[f"{col} ({unit})" if k in ("width_up", "width_down", "period") else col] = v
+            rows.append(row)
+        return rows
+
+    def export_domain_table(self, path: str | Path, items: list[tuple[str, str]] | None = None) -> str:
+        rows = self.domain_table(items)
+        if not rows:
+            raise ValueError("no analysed maps to export")
+        with open(path, "w", newline="") as fh:
+            w = csv.DictWriter(fh, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows(rows)
+        return str(path)
+
+    def export_domain_areas(self, path: str | Path, name: str, label: str) -> str:
+        ar = self.domain_areas(name, label)
+        with open(path, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(["state", f"area ({ar['unit']})"])
+            w.writerows([("up", v) for v in ar["up"]] + [("down", v) for v in ar["down"]])
+        return str(path)
+
+    def domain_size_fits(self, name: str, label: str) -> dict[str, Any]:
+        """Log-normal vs Gaussian fits of the domain widths and local periods, up and down separately
+        (core/peem/domain_analysis.size_fits), from the analysed three-state map. Computed on request."""
+        at = dict(self._domains(name, label).attrs)
+        if not at.get("analysed"):
+            raise ValueError(f"run the domain analysis on {label} first")
+        um = at.get("um_per_px")
+        return da.size_fits(self.domain_layer(name, label, "three_states"),
+                            um if um and np.isfinite(um) else None, int(at.get("param_min_px", da.DEFAULTS["min_px"])))
+
+    def export_domain_size_fits(self, path: str | Path, name: str, label: str) -> list[str]:
+        """The fits as an editable PDF (2 x 2: width / period, up / down) and their numbers as
+        <stem>_fits.csv. Returns both paths."""
+        from tensorspec.plotting import peem_plots
+
+        fits = self.domain_size_fits(name, label)
+        at = dict(self._domains(name, label).attrs)
+        path = Path(path).with_suffix(".pdf")
+        title = f"{name} · {self.layer_name(at.get('source_kind', '?'), at.get('source_var', 'data'))}"
+        peem_plots.save_size_fits_pdf(path, fits, title)
+        u = fits["unit"]
+        cols = ["quantity", "state", "n", f"lognormal_median ({u})", "lognormal_sigma_log", f"lognormal_mode ({u})",
+                "lognormal_aic", "lognormal_bic", "lognormal_ks_stat", "lognormal_ks_p", f"gaussian_mean ({u})",
+                f"gaussian_sd ({u})", "gaussian_aic", "gaussian_bic", "gaussian_ks_stat", "gaussian_ks_p",
+                "delta_aic", "delta_bic", "preferred"]
+        csv_path = path.with_name(path.stem + "_fits.csv")
+        with open(csv_path, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(cols)
+            for q in ("width", "period"):
+                for state in ("up", "down"):
+                    f = fits[q][state]
+                    ln, ga = f["lognormal"] or {}, f["gaussian"] or {}
+                    w.writerow([q, state, int(np.size(f["samples"])), ln.get("median"), ln.get("sigma_log"), ln.get("mode"),
+                                ln.get("aic"), ln.get("bic"), ln.get("ks_stat"), ln.get("ks_p"), ga.get("mean"),
+                                ga.get("sd"), ga.get("aic"), ga.get("bic"), ga.get("ks_stat"), ga.get("ks_p"),
+                                f["delta_aic"], f["delta_bic"], f["preferred"]])
+        return [str(path), str(csv_path)]
+
+    def export_domain_figure(self, path: str | Path, name: str, label: str, step: str = "three_states") -> str:
+        """Editable PDF (TrueType text) of one step with axes in um, titled with the dataset and numbers."""
+        from tensorspec.plotting import peem_plots
+
+        at = dict(self._domains(name, label).attrs)
+        img = self.domain_layer(name, label, step)
+        um = at.get("um_per_px")
+        title = f"{name} · {self.layer_name(at.get('source_kind', '?'), at.get('source_var', 'data'))}"
+        if step == "input":
+            title += " (pushed map)"
+        ds = self._domains(name, label)
+        flake = np.asarray(ds["flake"].values) if "flake" in ds else None
+        peem_plots.save_domain_step_pdf(path, img, step, um if um and np.isfinite(um) else None, title,
+                                        self.domain_result(name, label), flake, self.domain_look(name, label))
+        return str(path)
+
+    # ------------------------------------------------------------------ ROI helpers
+    def auto_flake_roi(self, name: str, kind: str, var: str = "data", tv_weight: float = 0.20,
+                       min_px: int = 800) -> dict[str, Any]:
+        """Find the flake on a map (denoise, local std, Otsu, closing, largest region) and set it as
+        the dataset's ROI (a polygon, so it can be saved, edited and reused)."""
+        a = np.asarray(self.get_map(name, kind, var), float)
+        img, _ = da.normalize(a, "raw")
+        mask = da.auto_flake(da.local_std(da.denoise(img, "tv", tv_weight)), min_px=min_px,
+                             valid=da.edge_strips(a))  # not the drift strips at the field's edges
+        roi = {"kind": "polygon", "points": da.flake_outline(mask)}
+        self.set_roi(name, "roi", roi)
+        return roi
+
+    def save_roi(self, name: str, path: str | Path, which: str = "roi") -> str:
+        """The ROI (or background region) as JSON, with the pixel size and map shape, to reuse later."""
+        roi = self.get_rois(name)[which]
+        if roi is None:
+            raise ValueError(f"no {'ROI' if which == 'roi' else 'background region'} to save")
+        Path(path).write_text(json.dumps({"tensorspec_roi": 1, "which": which, "roi": roi, "source": name,
+                                          "um_per_px": self._um_per_px(name)}, indent=1))
+        return str(path)
+
+    def load_roi(self, name: str, path: str | Path, which: str = "roi") -> dict[str, Any]:
+        """Set a saved ROI / background region on this dataset (pixel coordinates are kept as saved)."""
+        d = json.loads(Path(path).read_text())
+        roi = d.get("roi", d) if isinstance(d, dict) else None
+        if not isinstance(roi, dict) or roi.get("kind") not in ("rect", "polygon", "ellipse"):
+            raise ValueError("not a saved TensorSpec ROI (.json)")
+        self.set_roi(name, which, roi)
+        return roi
+
+
+class PeemService(PeemLoadSteps, PeemCleanupSteps, PeemDriftStackSteps, PeemImageAnalysisSteps,
+                  PeemMapsDomainsSteps, PeemAnnotationSteps, PeemChannelSteps, PeemCompareSteps,
+                  PeemDomainAnalysisSteps):
+    """Qt-facing PEEM operations via global_workspace.
+
+    The XPEEM map tab's steps (drift_correct, stack, asymmetry, maps, ROIs ...) and the Sum Rule
+    window's ROI spectra come from the mixins in gui/services/peem_steps/ (contract:
+    peem_steps/__init__.py)."""
 
     def load_path(
         self,
@@ -856,27 +1293,18 @@ class PeemService:
         for p in resolved:
             if not p.exists():
                 raise ValueError(f"Path not found: {p}")
-            # Size gate for TIF stacks / folders only (.dat / .P3B / .txt skip it).
-            if p.is_dir() or p.suffix.lower() in (".tif", ".tiff"):
+            # Size gate for TIF stacks / folders only (.dat / .P3B / .txt skip it); a folder that is
+            # a UE49 scan, UView or P3B acquisition is beamline data (loaded as float32), not a TIF stack
+            if p.suffix.lower() in (".tif", ".tiff") or (p.is_dir() and not _is_beamline_folder(p)):
                 _enforce_peem_size(p)
 
-        tensor = peem_beamline_loaders.load_beamline(
-            resolved,
-            i0_normalize=i0_normalize,
-            allow_mixed_fov=allow_mixed_fov,
-            tpx3=tpx3,
-            drop_bad_frames=drop_bad_frames,
-            pol=pol,
-        )
-        md = tensor.metadata or {}
-        scans = md.get("scans") or []
-        fallback = "_".join(str(s) for s in scans[:3]) if scans else "beamline"
-        fallback = re.sub(r"[^A-Za-z0-9_.-]+", "_", fallback).strip("_") or "beamline"
-        label = _safe_label(name, fallback) if name else _safe_label(fallback, "beamline")
-        global_workspace.push_spectroscopy_data(label, tensor)
-        summary = _load_summary(label, tensor, csv_prompt=False, csv_candidates=[])
-        summary["format"] = md.get("format")
-        summary["beamline"] = md.get("beamline")
+        # one loader for both PEEM tabs (peem_steps/load.py): UE49 detector maps, /history, automatic name
+        loaded = PeemLoadSteps.load_beamline(
+            self, resolved, name, pol=pol, i0_normalize=i0_normalize, tpx3=tpx3,
+            drop_bad_frames=drop_bad_frames, allow_mixed_fov=allow_mixed_fov)
+        tensor = _require_tensor(loaded["name"])
+        summary = _load_summary(loaded["name"], tensor, csv_prompt=False, csv_candidates=[])
+        summary.update(loaded)  # + format, beamline, pol_counts, fov_um, um_per_px, energy_range ...
         return summary
 
     def pair(self, name: str, mode: str) -> dict[str, Any]:
@@ -924,7 +1352,11 @@ class PeemService:
         search_radius: int,
         track_channel: int = 0,
         source: str = "raw",
+        smooth_px: float = 0.0,
+        per_channel: bool = False,
     ) -> dict[str, Any]:
+        """smooth_px / per_channel: see core.peem.engine.drift_correct (the PEEM panel uses 2 px and
+        per-channel tracking: TPX3 fixed pattern, UE49 CP / CM pairs from different scans)."""
         if source == "raw":
             tensor = _require_tensor(name)
         else:
@@ -938,11 +1370,15 @@ class PeemService:
             roi=roi_dict,
             search_radius=search_radius,
             track_channel=track_channel,
+            smooth_px=smooth_px,
+            per_channel=per_channel,
         )
         if not global_workspace.write_processed_data(name, corrected):
             raise ValueError(f"PEEM data '{name}' not found.")
 
         shifts = corrected.metadata.get("drift_shifts", [])
+        if corrected.metadata.get("drift_channel_shifts"):  # every channel's own shift
+            shifts = [c for per in corrected.metadata["drift_channel_shifts"] for c in per]
         return {
             "name": name,
             "source": source,
@@ -1371,7 +1807,9 @@ class PeemService:
             if vmax <= 0:
                 vmax = 1.0
             fig, ax = plt.subplots(figsize=(4, 4), dpi=120)
-            im = ax.imshow(arr, cmap="bwr", vmin=-vmax, vmax=vmax, origin="upper")
+            from tensorspec.plotting.peem_plots import SIGNED_CMAP
+
+            im = ax.imshow(arr, cmap=SIGNED_CMAP, vmin=-vmax, vmax=vmax, origin="upper")  # positive blue
             ax.set_title(f"{name} / {kind}")
             ax.axis("off")
             fig.colorbar(im, ax=ax, fraction=0.046)
