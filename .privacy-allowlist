@@ -1,0 +1,6 @@
+# Placeholders that are allowed even though they match .privacy-denylist (grep -E).
+/Users/user/|/(home|mnt/data)/(user|alice|claude|YOUR_USER)/|/mnt/data/<user>/
+/scratch/(alice|user|ts|YOUR_USER|YOUR_HPC_USER)/
+user@cluster\.example\.org|cluster\.example\.org
+x\.lbl\.gov|login\.nersc\.gov
+zeller4@purdue\.edu
