@@ -109,8 +109,10 @@ import numpy as np
 # ----------------------------------------------------------------------------
 # 0. Defaults (edit here or override on the command line)
 # ----------------------------------------------------------------------------
-DEFAULT_QE_ROOT = "/Users/user/Documents/VTe2/qe_outputs/NEW_QE"
-DEFAULT_TENSORSPEC_ROOT = "/Users/user/Documents/GitHub/TensorSpec_GUI"
+# VTE2_QE_ROOT: folder with one sub-folder per temperature (or pass --qe-root)
+DEFAULT_QE_ROOT = os.environ.get("VTE2_QE_ROOT", "")
+# TENSORSPEC_ROOT: the TensorSpec_GUI repo (default: two levels above this script)
+DEFAULT_TENSORSPEC_ROOT = os.environ.get("TENSORSPEC_ROOT", str(Path(__file__).resolve().parents[2]))
 OUT_SUBDIR = os.path.join("scratch", "vte2_temperature_dependent_chinook")
 
 K_PER_SQRT_EV = 0.512316  # 1/A per sqrt(eV)
@@ -789,7 +791,8 @@ def make_all_figures(out_root: Path, temps, cfgs, deflectors, args):
 # ----------------------------------------------------------------------------
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--qe-root", default=DEFAULT_QE_ROOT, help="folder with one sub-folder per temperature")
+    ap.add_argument("--qe-root", default=DEFAULT_QE_ROOT or None, required=not DEFAULT_QE_ROOT,
+                help="folder with one sub-folder per temperature (or set VTE2_QE_ROOT)")
     ap.add_argument("--tensorspec-root", default=None, help="TensorSpec_GUI repo (auto-detected)")
     ap.add_argument("--out-root", default=None, help=f"default <tensorspec-root>/{OUT_SUBDIR}")
     ap.add_argument("--temps", default="", help="comma list of temperature labels to run (substring match)")

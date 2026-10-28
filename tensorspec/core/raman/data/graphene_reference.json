@@ -14,8 +14,8 @@
   {
    "label": "1L",
    "name": "ML_hBN_RuCl3_532nm_map1_2__X_-2372",
-   "path": "/Users/user/Downloads/ML_hBN_RuCl3_532nm_map1_2__X_-2372",
-   "output": "/Users/user/Github/Raman_Classifier/reference/1L_ML_hBN_RuCl3",
+   "path": "ML_hBN_RuCl3_532nm_map1_2__X_-2372",
+   "output": "reference/1L_ML_hBN_RuCl3",
    "n_spectra": 192,
    "n_fitted": 141,
    "n_matching": 30,
@@ -1148,8 +1148,8 @@
   {
    "label": "2L",
    "name": "BL_hBN_RuCl3_532nm_map1_7__X_-2367",
-   "path": "/Users/user/Downloads/BL_hBN_RuCl3_532nm_map1_7__X_-2367",
-   "output": "/Users/user/Github/Raman_Classifier/reference/2L_BL_hBN_RuCl3",
+   "path": "BL_hBN_RuCl3_532nm_map1_7__X_-2367",
+   "output": "reference/2L_BL_hBN_RuCl3",
    "n_spectra": 288,
    "n_fitted": 143,
    "n_matching": 104,

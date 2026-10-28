@@ -1,8 +1,9 @@
 #!/bin/bash
 set -e
 export OMP_NUM_THREADS=1
-export PYTHON="/Users/user/Documents/GitHub/TensorSpec_GUI/TensorSpec_env/bin/python"
-export PYTHONPATH="/Users/user/Documents/GitHub/TensorSpec_GUI:${PYTHONPATH}"
+REPO_ROOT="${TENSORSPEC_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+export PYTHON="${PYTHON:-$REPO_ROOT/TensorSpec_env/bin/python}"
+export PYTHONPATH="$REPO_ROOT:${PYTHONPATH}"
 
 # ==================================================================
 # ADVANCED: HSE HYBRID FUNCTIONAL SWITCH
