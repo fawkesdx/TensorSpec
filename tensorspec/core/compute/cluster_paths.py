@@ -25,8 +25,13 @@ Cluster JSON (optional ``paths`` block — omit for LBL-style defaults):
         "nodes": 1
       },
       "qe_module": "espresso/7.5-libxc-7.0.0-cpu",
-      "ssh_key": "~/.ssh/cluster_key"
+      "ssh_key": "~/.ssh/cluster_key",
+      "trust_new_host_key": false
     }
+
+``trust_new_host_key`` (default false): accept and save an SSH host key that is
+not yet in ~/.ssh/known_hosts without asking (headless use only). See the
+"SSH host-key validation" section below.
 
 Legacy top-level keys ``heavy_root``, ``tmp_dir``, ``repo_root``, ``python`` are
 also accepted for backward compatibility.
@@ -458,6 +463,208 @@ def ssh_connect(client, cluster: Mapping[str, Any], *, timeout: int = 10) -> Non
         kwargs["allow_agent"] = False
         kwargs["look_for_keys"] = False
     client.connect(**kwargs)
+
+
+# ---------------------------------------------------------------------------
+# SSH host-key validation
+#
+# Every paramiko client in TensorSpec must come from ``new_ssh_client`` so the
+# server's host key is checked against ~/.ssh/known_hosts (OpenSSH format).
+# A host that is not there raises ``UnknownHostKeyError`` instead of being
+# silently trusted (CodeQL py/paramiko-missing-host-key-validation).  GUI code
+# catches that error once, shows host + SHA256 fingerprint and, on Yes, calls
+# ``trust_host_key`` and retries (tensorspec.gui.services.host_key_prompt).
+# Headless use may opt in per cluster with ``"trust_new_host_key": true``.
+# ---------------------------------------------------------------------------
+
+
+class UnknownHostKeyError(Exception):
+    """The server presented a host key that is not in known_hosts.
+
+    ``hostname`` is paramiko's known_hosts name (``host`` or ``[host]:port``),
+    ``key`` the paramiko ``PKey``, ``fingerprint`` its ``SHA256:...`` digest.
+    """
+
+    def __init__(self, hostname: str, key, *, known_hosts: Optional[str] = None):
+        self.hostname = hostname
+        self.key = key
+        self.key_type = key.get_name()
+        self.fingerprint = host_key_fingerprint(key)
+        self.known_hosts = known_hosts or known_hosts_path()
+        super().__init__(
+            f"Unknown SSH host key for {hostname}: {self.key_type} {self.fingerprint}. "
+            f"The host is not in {self.known_hosts}. Verify the fingerprint with the "
+            "cluster documentation, then accept it via Compute Manager > Test "
+            'Connection, or set "trust_new_host_key": true in the cluster entry '
+            "for headless use."
+        )
+
+
+def host_key_fingerprint(key) -> str:
+    """OpenSSH-style ``SHA256:<base64, no padding>`` fingerprint of a paramiko key."""
+    import base64
+    import hashlib
+
+    digest = hashlib.sha256(key.asbytes()).digest()
+    return "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
+
+
+def known_hosts_path() -> str:
+    return os.path.expanduser("~/.ssh/known_hosts")
+
+
+SYSTEM_KNOWN_HOSTS = "/etc/ssh/ssh_known_hosts"
+
+
+def host_key_name(cluster: Mapping[str, Any]) -> str:
+    """known_hosts name paramiko uses for this cluster (``[host]:port`` off port 22)."""
+    host = str(cluster["host"])
+    port = int(cluster.get("port", 22))
+    return host if port == 22 else f"[{host}]:{port}"
+
+
+def trusts_new_host_key(cluster: Optional[Mapping[str, Any]]) -> bool:
+    """Opt-in: cluster JSON ``"trust_new_host_key": true`` accepts and saves unknown keys."""
+    return bool(cluster and cluster.get("trust_new_host_key"))
+
+
+def load_known_hosts(path: Optional[str] = None):
+    """``paramiko.HostKeys`` loaded from ``path`` (default ~/.ssh/known_hosts); empty if absent.
+
+    Tolerant replacement for ``HostKeys.load`` / ``SSHClient.load_system_host_keys``,
+    which abort the whole file on one line they cannot decode. ``@cert-authority``
+    and ``@revoked`` markers (common at HPC centres) and malformed lines are
+    skipped; every ordinary entry, hashed or plain, is kept.
+    """
+    import paramiko
+    from paramiko.hostkeys import HostKeyEntry
+
+    keys = paramiko.HostKeys()
+    path = path or known_hosts_path()
+    if not os.path.isfile(path):
+        return keys
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for lineno, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line or line[0] in "#@":
+                continue
+            try:
+                entry = HostKeyEntry.from_line(line, lineno)
+            except Exception:
+                continue
+            if entry is None:
+                continue
+            for name in entry.hostnames:
+                keys.add(name, entry.key.get_name(), entry.key)
+    return keys
+
+
+def lookup_host_key(cluster: Mapping[str, Any], *, path: Optional[str] = None):
+    """Known host keys for ``cluster`` (``{key_type: key}``) or None if not in known_hosts."""
+    return load_known_hosts(path).lookup(host_key_name(cluster))
+
+
+def trust_host_key(hostname: str, key, *, path: Optional[str] = None, client=None) -> None:
+    """Append ``hostname key`` to known_hosts and (optionally) to ``client``'s in-memory keys.
+
+    Appends one OpenSSH-format line rather than rewriting the file with
+    ``HostKeys.save`` so that entries paramiko cannot parse (``@cert-authority``,
+    comments, unknown key types) are preserved.
+    """
+    from paramiko.hostkeys import HostKeyEntry
+
+    path = path or known_hosts_path()
+    line = HostKeyEntry([hostname], key).to_line()
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+    existed = os.path.isfile(path)
+    needs_newline = False
+    if existed and os.path.getsize(path) > 0:
+        with open(path, "rb") as fh:
+            fh.seek(-1, os.SEEK_END)
+            needs_newline = fh.read(1) != b"\n"
+    with open(path, "a", encoding="utf-8") as fh:
+        if needs_newline:
+            fh.write("\n")
+        fh.write(line)
+    if not existed:
+        try:
+            os.chmod(path, 0o600)
+        except OSError:
+            pass
+    if client is not None:
+        client.get_host_keys().add(hostname, key.get_name(), key)
+
+
+class RejectUnknownHostKeyPolicy:
+    """paramiko missing-host-key policy: raise ``UnknownHostKeyError``.
+
+    With ``trust_new_host_key=True`` (cluster opt-in) the key is appended to
+    known_hosts and accepted instead -- trust on first use, verified afterwards.
+    Duck-typed like ``paramiko.MissingHostKeyPolicy`` so paramiko is not
+    imported at module load.
+    """
+
+    def __init__(self, *, trust_new_host_key: bool = False, known_hosts: Optional[str] = None):
+        self.trust_new_host_key = bool(trust_new_host_key)
+        self.known_hosts = known_hosts or known_hosts_path()
+
+    def missing_host_key(self, client, hostname: str, key) -> None:
+        if not self.trust_new_host_key:
+            raise UnknownHostKeyError(hostname, key, known_hosts=self.known_hosts)
+        trust_host_key(hostname, key, path=self.known_hosts, client=client)
+
+
+def new_ssh_client(
+    cluster: Optional[Mapping[str, Any]] = None,
+    *,
+    known_hosts: Optional[str] = None,
+):
+    """``paramiko.SSHClient`` with known_hosts loaded and unknown hosts rejected.
+
+    Replaces bare ``paramiko.SSHClient()`` + auto-accept policies everywhere. Pass the
+    cluster dict so its ``trust_new_host_key`` opt-in is honoured. ``known_hosts``
+    overrides the file (tests); otherwise /etc/ssh/ssh_known_hosts and
+    ~/.ssh/known_hosts are loaded (tolerantly, see ``load_known_hosts``).
+    """
+    import paramiko
+
+    client = paramiko.SSHClient()
+    path = known_hosts or known_hosts_path()
+    sources = [path] if known_hosts else [SYSTEM_KNOWN_HOSTS, path]
+    target = client.get_host_keys()
+    for source in sources:
+        loaded = load_known_hosts(source)
+        for hostname in loaded.keys():
+            for key_type, key in loaded[hostname].items():
+                target.add(hostname, key_type, key)
+    client.set_missing_host_key_policy(
+        RejectUnknownHostKeyPolicy(
+            trust_new_host_key=trusts_new_host_key(cluster), known_hosts=path
+        )
+    )
+    return client
+
+
+def fetch_host_key(cluster: Mapping[str, Any], *, timeout: float = 10):
+    """Server host key from a key exchange only (no authentication).
+
+    Used by the GUI to show host + fingerprint before a worker thread connects.
+    """
+    import socket
+
+    import paramiko
+
+    sock = socket.create_connection(
+        (str(cluster["host"]), int(cluster.get("port", 22))), timeout=timeout
+    )
+    transport = paramiko.Transport(sock)
+    try:
+        transport.start_client(timeout=timeout)
+        return transport.get_remote_server_key()
+    finally:
+        transport.close()
 
 
 def provision_script(cluster: Mapping[str, Any]) -> str:

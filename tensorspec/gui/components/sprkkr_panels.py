@@ -17,22 +17,23 @@ from tensorspec.gui.services.cluster_utils import (
     populate_compute_target_combo,
     selected_cluster,
 )
+from tensorspec.gui.services.host_key_prompt import connect_cluster, ensure_host_key_trusted
 
 
 def _connect_cluster(cluster):
-    import paramiko
-
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    """Main-thread paramiko connect; an unknown host key (known_hosts) asks once."""
     pwd = cluster.get("password", "") or None
-    ssh.connect(
-        cluster["host"],
-        port=cluster.get("port", 22),
-        username=cluster["user"],
-        password=pwd,
-        timeout=30,
-    )
-    return ssh
+
+    def _connect(ssh):
+        ssh.connect(
+            cluster["host"],
+            port=cluster.get("port", 22),
+            username=cluster["user"],
+            password=pwd,
+            timeout=30,
+        )
+
+    return connect_cluster(None, cluster, connect=_connect)
 
 
 def remote_latest_scf_dir(cluster, scratch_root: Optional[str] = None) -> Optional[str]:
@@ -413,6 +414,9 @@ class SPRKKRDftPanel(QWidget):
                         "Error",
                         "No remote cluster configured. Add one in Compute Manager.",
                     )
+                    return
+                # ScfRunnerThread connects in the background; confirm the host key here.
+                if not ensure_host_key_trusted(self, cluster):
                     return
                 from tensorspec.core.compute import cluster_paths
                 remote_workdir = f"{cluster_paths.job_dir(cluster, 'sprkkr')}/scf_{ts}"

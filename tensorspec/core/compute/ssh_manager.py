@@ -1,11 +1,14 @@
-import paramiko
 import subprocess
 import os
 
+from tensorspec.core.compute.cluster_paths import new_ssh_client
+
+
 class ConnectionManager:
-    def __init__(self):
-        self.ssh = paramiko.SSHClient()
-        self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    def __init__(self, trust_new_host_key: bool = False):
+        # Host key verified against ~/.ssh/known_hosts; unknown hosts raise
+        # cluster_paths.UnknownHostKeyError unless trust_new_host_key is set.
+        self.ssh = new_ssh_client({"trust_new_host_key": trust_new_host_key})
         self.sftp = None
         self.port_forward_process = None
 
