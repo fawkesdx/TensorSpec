@@ -81,11 +81,9 @@ def refresh_sshproxy_login(parent: Optional[QWidget], cluster: Mapping[str, Any]
         return False
 
     try:
-        import paramiko
+        from tensorspec.gui.services.host_key_prompt import connect_cluster
 
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        cp.ssh_connect(ssh, cluster, timeout=15)
+        ssh = connect_cluster(parent, cluster, timeout=15)
         _, stdout, _ = ssh.exec_command("hostname", timeout=10)
         host_out = stdout.read().decode().strip()
         ssh.close()

@@ -270,10 +270,8 @@ class RemoteLauncher:
             self._ssh = self._ssh_factory()
             return self._ssh
 
-        import paramiko
-
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        # known_hosts-checked client; unknown host -> UnknownHostKeyError.
+        client = cluster_paths.new_ssh_client(self.cluster)
         cluster_paths.ssh_connect(client, self.cluster)
         self._ssh = client
         return self._ssh

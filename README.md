@@ -30,7 +30,7 @@ Optional remote GPU / GrizzlyME CUDA ARPES: configure a local cluster JSON (exam
 | Quantum ESPRESSO / Wannier90 | Install binaries on your PATH (or remote cluster). |
 | SPR-KKR | Install locally or on your cluster; not vendored in this repo. |
 | GrizzlyME (optional CUDA ARPES) | Separate install; not required for core GUI. |
-| Cluster SSH | Create **your** local `tensorspec_clusters.json` (gitignored). Never commit passwords/hosts. |
+| Cluster SSH | Create **your** local `tensorspec_clusters.json` (gitignored). Never commit passwords/hosts. Host keys are verified against `~/.ssh/known_hosts`: the first connection to a cluster not listed there shows its SHA256 fingerprint and asks before saving it (headless: `"trust_new_host_key": true` per cluster). |
 
 A fresh clone has **no** UPF library and **no** lab servers — that is intentional.
 
