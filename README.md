@@ -74,3 +74,11 @@ git config core.hooksPath .githooks
 ```
 
 Audit the whole tree at any time with `scripts/privacy_check.sh --tree`.
+
+To guard every clone and worktree on a machine at once, whatever branch each has checked out, run once per machine and list every clone path (other repos such as GrizzlyME or ARPESeed too):
+
+```bash
+scripts/install_privacy_guard.sh /path/to/TensorSpec /path/to/GrizzlyME /path/to/ARPESeed
+```
+
+It copies the checker and pattern files to `~/.privacy-guard` and points each repo's `core.hooksPath` there; a branch that ships its own `scripts/privacy_check.sh` still uses it.
