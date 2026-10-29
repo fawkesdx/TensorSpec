@@ -20,7 +20,7 @@ packaging==26.2
 palettable==3.3.3
 pandas==2.3.3
 pillow==13.0.0
-platformdirs==4.4.0
+platformdirs==4.13.5
 plotly==6.7.0
 pooch==1.9.0
 pybtex==0.26.1
