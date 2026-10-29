@@ -1865,24 +1865,30 @@ cd {remote_dir}
         return combo_cluster(self.target_dropdown)
 
     def _ssh_connect(self, cluster):
-        """Paramiko connect with longer banner/kex timeouts (slow remote hosts)."""
-        import paramiko
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        """Paramiko connect with longer banner/kex timeouts (slow remote hosts).
+
+        Host key is checked against ~/.ssh/known_hosts; an unknown host asks
+        once (main thread only).
+        """
+        from tensorspec.gui.services.host_key_prompt import connect_cluster
+
         pwd = cluster.get('password', '') or None
-        # banner_timeout / auth_timeout matter more than connect timeout for kex stalls
-        ssh.connect(
-            cluster['host'],
-            port=cluster.get('port', 22),
-            username=cluster['user'],
-            password=pwd,
-            timeout=30,
-            banner_timeout=90,
-            auth_timeout=60,
-            allow_agent=True,
-            look_for_keys=True,
-        )
-        return ssh
+
+        def _connect(ssh):
+            # banner_timeout / auth_timeout matter more than connect timeout for kex stalls
+            ssh.connect(
+                cluster['host'],
+                port=cluster.get('port', 22),
+                username=cluster['user'],
+                password=pwd,
+                timeout=30,
+                banner_timeout=90,
+                auth_timeout=60,
+                allow_agent=True,
+                look_for_keys=True,
+            )
+
+        return connect_cluster(self, cluster, connect=_connect)
 
     @staticmethod
     def _axis_degenerate(axis) -> bool:
@@ -1906,6 +1912,11 @@ cd {remote_dir}
             return
         
         from tensorspec.gui.components.compute_panel import LiveMonitorThread
+        from tensorspec.gui.services.host_key_prompt import ensure_host_key_trusted
+
+        # The monitor thread connects in the background; confirm the host key here.
+        if not ensure_host_key_trusted(self, active_cluster):
+            return
 
         model_choice = self.engine_dropdown.currentData() if hasattr(self, "engine_dropdown") else None
         if model_choice == "B3":
@@ -2016,7 +2027,7 @@ cd {remote_dir}
         vault_name = self.vault_combo.currentText()
         model_choice = self.engine_dropdown.currentData()
 
-        import json, os, paramiko
+        import json, os
         config_file = os.path.expanduser('~/.tensorspec_clusters.json')
         with open(config_file, 'r') as f:
             clusters = json.load(f)
@@ -2696,13 +2707,9 @@ cd {remote_dir}
             
             # SSH and delete
             try:
-                import json, paramiko, os
                 cluster = self.get_selected_cluster()
                 if cluster:
-                    ssh = paramiko.SSHClient()
-                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                    pwd = cluster.get('password', '') or None
-                    ssh.connect(cluster['host'], port=cluster.get('port', 22), username=cluster['user'], password=pwd, timeout=10)
+                    ssh = self._ssh_connect(cluster)
                     
                     cmd = f"rm -rf {remote_dir}"
                     ssh.exec_command(cmd)

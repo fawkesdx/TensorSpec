@@ -10,7 +10,13 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 import numpy as np
 
-from tensorspec.core.compute.cluster_paths import heavy_root, job_dir, python_bin as cluster_python_bin, repo_root
+from tensorspec.core.compute.cluster_paths import (
+    heavy_root,
+    job_dir,
+    new_ssh_client,
+    python_bin as cluster_python_bin,
+    repo_root,
+)
 from tensorspec.core.dft.w90_tb_cache import (
     REMOTE_CACHE_NAME,
     cache_key,
@@ -52,10 +58,9 @@ def remote_run_dir(cluster: Dict[str, Any]) -> str:
 
 
 def _connect(cluster: Dict[str, Any]):
-    import paramiko
-
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    # Host key is checked against ~/.ssh/known_hosts; unknown hosts raise
+    # cluster_paths.UnknownHostKeyError (accept via Compute Manager first).
+    ssh = new_ssh_client(cluster)
     pwd = cluster.get("password") or None
     ssh.connect(
         cluster["host"],

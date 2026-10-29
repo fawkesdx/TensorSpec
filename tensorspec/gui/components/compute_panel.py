@@ -14,6 +14,7 @@ from matplotlib.figure import Figure
 from tensorspec.core.compute.cluster_live_monitor import fetch_cluster_snapshot
 from tensorspec.core.compute import cluster_paths as cp
 from tensorspec.gui.services.sshproxy_auth import refresh_sshproxy_login
+from tensorspec.gui.services.host_key_prompt import connect_cluster, ensure_host_key_trusted
 
 CONFIG_FILE = os.path.expanduser('~/.tensorspec_clusters.json')
 
@@ -30,11 +31,7 @@ class LiveMonitorThread(QThread):
 
     def run(self):
         try:
-            import paramiko
-            self.ssh = paramiko.SSHClient()
-            self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            pwd = self.cluster.get('password', '')
-            if not pwd: pwd = None
+            self.ssh = cp.new_ssh_client(self.cluster)
             cp.ssh_connect(self.ssh, self.cluster, timeout=15)
             
             while self.running:
@@ -328,12 +325,7 @@ class StatusFetchThread(QThread):
 
     def run(self):
         try:
-            import paramiko
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            pwd = self.cluster.get('password', '')
-            if not pwd:
-                pwd = None
+            ssh = cp.new_ssh_client(self.cluster)
             cp.ssh_connect(ssh, self.cluster, timeout=15)
             
             output_text = f"=== Status for {self.cluster['host']} ===\n\n"
@@ -565,6 +557,8 @@ class ComputeManagerPanel(QDialog):
             except RuntimeError:
                 pass
             
+        if not ensure_host_key_trusted(self, cluster):
+            return
         self.live_monitor = LiveClusterMonitor(cluster, parent=None)
         self.live_monitor.show()
 
@@ -660,10 +654,7 @@ class ComputeManagerPanel(QDialog):
         row = selected_rows[0].row()
         cluster = self.clusters[row]
         try:
-            import paramiko
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            cp.ssh_connect(ssh, cluster, timeout=8)
+            ssh = connect_cluster(self, cluster, timeout=8)
             
             # Quick check for python / slurm
             stdin, stdout, stderr = ssh.exec_command("which python3 sbatch", timeout=5)
@@ -700,10 +691,7 @@ class ComputeManagerPanel(QDialog):
             return
             
         try:
-            import paramiko
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            cp.ssh_connect(ssh, cluster, timeout=10)
+            ssh = connect_cluster(self, cluster, timeout=10)
             
             setup_cmd = cp.provision_script(cluster)
             stdin, stdout, stderr = ssh.exec_command(setup_cmd, timeout=60)
@@ -730,6 +718,8 @@ class ComputeManagerPanel(QDialog):
             self.status_display.setText("Cluster config not found.")
             return
             
+        if not ensure_host_key_trusted(self, cluster):
+            return
         self.btn_refresh_status.setEnabled(False)
         self.btn_refresh_status.setText("Connecting...")
         self.status_display.setText(

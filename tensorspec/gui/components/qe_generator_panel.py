@@ -21,6 +21,7 @@ from tensorspec.core.dft.magnetic_spec import (
 from tensorspec.core.compute import cluster_paths as cp
 from tensorspec.core.workspace import global_workspace
 from tensorspec.gui.services.sshproxy_auth import refresh_sshproxy_login
+from tensorspec.gui.services.host_key_prompt import ensure_host_key_trusted
 
 RELAXED_CIF = "relaxed_structure.cif"
 _LOCAL_REPO_ROOT = str(Path(__file__).resolve().parents[3])
@@ -62,11 +63,8 @@ class QEFetchThread(QThread):
 
     def run(self):
         try:
-            import paramiko
-
             self.progress.emit("Connecting...")
-            ssh = paramiko.SSHClient()
-            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh = cp.new_ssh_client(self.cluster)
             cp.ssh_connect(ssh, self.cluster, timeout=20)
             sftp = ssh.open_sftp()
             remote_dir = cp.job_dir(self.cluster, "qe")
@@ -119,7 +117,7 @@ class QERunnerThread(QThread):
         self.mpi_ranks = max(1, int(mpi_ranks))
 
     def run(self):
-        import os, subprocess, paramiko
+        import os, subprocess
         is_win = os.name == 'nt'
         script_name = "run_pipeline.ps1" if is_win else "run_pipeline.sh"
         script_path = os.path.join(self.out_dir, script_name)
@@ -132,8 +130,7 @@ class QERunnerThread(QThread):
             if self.cluster and self.cluster != "local":
                 # --- REMOTE EXECUTION ---
                 self.log_signal.emit(f"Connecting to {self.cluster['host']}...")
-                ssh = paramiko.SSHClient()
-                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh = cp.new_ssh_client(self.cluster)
                 cp.ssh_connect(ssh, self.cluster, timeout=15)
                 
                 remote_dir = cp.job_dir(self.cluster, "qe")
@@ -725,6 +722,8 @@ class QEGeneratorPanel(QWidget):
             if reply != QMessageBox.Yes:
                 return
 
+        if not ensure_host_key_trusted(self, cluster):
+            return
         self.btn_fetch_wan.setEnabled(False)
         self._fetch_progress = QProgressDialog(
             "Fetching ARPES package from remote...", None, 0, 0, self
@@ -1079,7 +1078,10 @@ class QEGeneratorPanel(QWidget):
             return
 
         os.makedirs(out_dir, exist_ok=True)
-        
+
+        if cluster and cluster != "local" and not ensure_host_key_trusted(self, cluster):
+            return
+
         self.btn_run_qe.setEnabled(False)
         self.log_display.clear()
         self.log_display.show()
