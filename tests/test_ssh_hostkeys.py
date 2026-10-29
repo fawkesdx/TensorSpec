@@ -155,7 +155,8 @@ def test_new_ssh_client_loads_known_hosts_and_rejects_by_default(tmp_path):
     assert err.hostname == "other.example.org"
     assert err.key is other
     assert err.fingerprint == cp.host_key_fingerprint(other)
-    assert "other.example.org" in str(err) and err.fingerprint in str(err)
+    # err.hostname is checked against the literal above; CodeQL flags a literal here.
+    assert err.hostname in str(err) and err.fingerprint in str(err)
     assert str(kh) in str(err)
     # nothing written
     assert kh.read_text() == HostKeyEntry(["cluster.example.org"], key).to_line()
