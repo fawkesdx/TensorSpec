@@ -45,7 +45,7 @@ uncertainties==3.2.3
 urllib3==2.8.0
 zipp==3.23.1
 h5py>=3.10.0
-xarray>=2024.0
+xarray>=2026.9.0
 pydantic>=2.0
 
 # --- Qt GUI (PySide6; do not add PyQt6) ---
