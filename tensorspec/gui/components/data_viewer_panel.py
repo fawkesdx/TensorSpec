@@ -19,6 +19,7 @@ from matplotlib.figure import Figure
 import matplotlib.patches as patches
 
 from tensorspec.core.data_models import TensorData
+from tensorspec.gui.components.flow_layout import FlowLayout, group
 from tensorspec.core.ml.ssl.reference import (
     FloorReference,
     build_roi_dict,
@@ -38,9 +39,12 @@ def _default_floor_ref_dir() -> Path:
     ).expanduser()
 
 
-def _mpl_cmap(name: str) -> str:
-    """Menu names with white at low intensity. Matplotlib names pass through."""
-    return {"grey": "gray_r", "blue": "Blues", "terrain": "terrain_r"}.get(name, name)
+def _mpl_cmap(name: str, invert: bool = False) -> str:
+    """Menu names with white at low intensity. Matplotlib names pass through. invert: the reversed map."""
+    name = {"grey": "gray_r", "blue": "Blues", "terrain": "terrain_r"}.get(name, name)
+    if invert:
+        name = name[:-2] if name.endswith("_r") else name + "_r"
+    return name
 
 
 def is_ml_label_layer(layer_name: str) -> bool:
@@ -190,10 +194,7 @@ class SliceWidget(QFrame):
 
         # ROW display: profiles / contrast / sync (was crowding row1)
         self.row_display = QWidget()
-        row_disp = QHBoxLayout(self.row_display)
-        row_disp.setContentsMargins(0, 0, 0, 0)
-
-        row_disp.addWidget(QLabel("Colormap:"))
+        row_disp = FlowLayout(self.row_display)  # wraps to a new line when narrow (no overlapping widgets)
         self.combo_cmap = QComboBox()
         self.combo_cmap.addItems(["magma", "viridis", "plasma", "inferno", "cividis", "hot", "cool", "gray", "twilight",
                                   "bwr", "RdBu_r", "grey", "blue", "terrain"])
@@ -203,7 +204,9 @@ class SliceWidget(QFrame):
         )
         self.combo_cmap.setCurrentText("magma")
         self.combo_cmap.currentIndexChanged.connect(self.redraw)
-        row_disp.addWidget(self.combo_cmap)
+        self.chk_invert = QCheckBox("Invert")
+        self.chk_invert.setToolTip("Reverse the colour map (e.g. bwr: red for negative, blue for positive)")
+        self.chk_invert.toggled.connect(self.redraw)
 
         self.btn_export = QPushButton("Save EPS/PDF")
         self.btn_export.setToolTip(
@@ -211,30 +214,25 @@ class SliceWidget(QFrame):
             "axis letters stay editable text. Cursor lines are left out."
         )
         self.btn_export.clicked.connect(self.export_vector_figure)
-        row_disp.addWidget(self.btn_export)
 
         self.chk_profiles = QCheckBox("XY Profiles")
         self.chk_profiles.stateChanged.connect(self.toggle_profiles)
-        row_disp.addWidget(self.chk_profiles)
 
         self.combo_profile_mode = QComboBox()
         self.combo_profile_mode.addItems(["Raw (Sum)", "Mean", "Normalized to Max"])
         self.combo_profile_mode.currentIndexChanged.connect(self.redraw)
-        row_disp.addWidget(self.combo_profile_mode)
 
-        row_disp.addWidget(QLabel("Contrast %:"))
-        self.sl_contrast = QSlider(Qt.Horizontal)
+        self.sl_contrast = QSpinBox()  # typed, not a slider
         self.sl_contrast.setRange(1, 100)
         self.sl_contrast.setValue(100)
-        self.sl_contrast.setMinimumWidth(80)
-        self.sl_contrast.setMaximumWidth(140)
+        self.sl_contrast.setSuffix(" %")
+        self.sl_contrast.setKeyboardTracking(False)
+        self.sl_contrast.setFixedWidth(70)
         self.sl_contrast.setToolTip(
             "Scale color limits from data min toward max (100% = full range)."
         )
         self.sl_contrast.valueChanged.connect(self.redraw)
-        row_disp.addWidget(self.sl_contrast)
 
-        row_disp.addWidget(QLabel("γ:"))
         self.spin_gamma = QDoubleSpinBox()
         self.spin_gamma.setRange(0.1, 5.0)
         self.spin_gamma.setValue(1.0)
@@ -243,9 +241,7 @@ class SliceWidget(QFrame):
         self.spin_gamma.setFixedWidth(60)
         self.spin_gamma.setToolTip("Gamma for intensity display (1 = linear).")
         self.spin_gamma.valueChanged.connect(self.redraw)
-        row_disp.addWidget(self.spin_gamma)
 
-        row_disp.addWidget(QLabel("Norm:"))
         self.combo_norm = QComboBox()
         self.combo_norm.setMinimumWidth(140)
         self.combo_norm.setToolTip(
@@ -255,21 +251,26 @@ class SliceWidget(QFrame):
             "Each snapped panel has its own Norm."
         )
         self.combo_norm.currentIndexChanged.connect(self.redraw)
-        row_disp.addWidget(self.combo_norm)
 
         self.chk_sym = QCheckBox("Sym ±")
         self.chk_sym.setToolTip("Symmetric colour limits c ± L (white = c with bwr); L = contrast % of the 99th percentile of |v - c|")
         self.chk_sym.toggled.connect(self.redraw)
-        row_disp.addWidget(self.chk_sym)
         self.combo_center = QComboBox()
-        self.combo_center.addItems(["0", "median"])
-        self.combo_center.setToolTip("Centre of the symmetric limits")
+        self.combo_center.addItems(["0", "median", "mean"])
+        self.combo_center.setToolTip("Centre (white) of the symmetric limits: 0, or the median / mean of the shown map\n"
+                                     "(inside the Region when one is drawn)")
         self.combo_center.currentIndexChanged.connect(self.redraw)
-        row_disp.addWidget(self.combo_center)
+        self.btn_center_region = QPushButton("Region")
+        self.btn_center_region.setCheckable(True)
+        self.btn_center_region.setToolTip("Drag a rectangle on the map: the median / mean is taken there (outlined in cyan).\n"
+                                          "Click again to use the whole map.")
+        self.btn_center_region.toggled.connect(self._center_region_toggled)
+        self.sym_bg_box: dict | None = None  # region for the median / mean centre (pixel indices)
+        self.lbl_center = QLabel("")
+        self.lbl_center.setToolTip("Value at the centre (white) of the symmetric colour scale")
         self.chk_image_origin = QCheckBox("Top-left origin")
         self.chk_image_origin.setToolTip("Image convention: first row at the top (PEEM / camera images)")
         self.chk_image_origin.toggled.connect(self.redraw)
-        row_disp.addWidget(self.chk_image_origin)
 
         self.chk_sync = QCheckBox("Sync")
         self.chk_sync.setChecked(False)
@@ -287,41 +288,33 @@ class SliceWidget(QFrame):
             "Only viewers with Sync ON and this same group number share crosshairs."
         )
         self.chk_sync.toggled.connect(self.spin_sync_group.setEnabled)
-        row_disp.addWidget(self.chk_sync)
-        row_disp.addWidget(self.spin_sync_group)
+        self._sync_group_box = group(self.chk_sync, self.spin_sync_group)
+        for widgets in ((QLabel("Colormap:"), self.combo_cmap, self.chk_invert), (self.btn_export,),
+                        (self.chk_profiles, self.combo_profile_mode), (QLabel("Contrast:"), self.sl_contrast),
+                        (QLabel("γ:"), self.spin_gamma), (QLabel("Norm:"), self.combo_norm),
+                        (self.chk_sym, self.combo_center, self.btn_center_region, self.lbl_center), (self.chk_image_origin,)):
+            row_disp.addWidget(group(*widgets))
+        row_disp.addWidget(self._sync_group_box)
         if getattr(self.parent_panel, "_compact", False):  # embedded single view: no sync / close
-            for w in (self.chk_sync, self.spin_sync_group, self.btn_close):
+            for w in (self._sync_group_box, self.btn_close):
                 w.setVisible(False)
-        row_disp.addStretch(1)
 
         # ROW 2 (collapsible via Toggle UI): Δ + ortho
         self.row2_widget = QWidget()
-        row2 = QHBoxLayout(self.row2_widget)
-        row2.setContentsMargins(0, 0, 0, 0)
-
-        row2.addWidget(QLabel("ΔX:"))
+        row2 = FlowLayout(self.row2_widget)
         self.spin_dx = QSpinBox(); self.spin_dx.setRange(0, 100); self.spin_dx.setSuffix(" px")
-        self.slider_dx = QSlider(Qt.Horizontal); self.slider_dx.setRange(0, 100); self.slider_dx.setFixedWidth(50)
-        self.spin_dx.valueChanged.connect(self.slider_dx.setValue)
-        self.slider_dx.valueChanged.connect(self.spin_dx.setValue)
         self.spin_dx.valueChanged.connect(self._on_delta_changed)
-        row2.addWidget(self.spin_dx); row2.addWidget(self.slider_dx)
 
-        row2.addWidget(QLabel("ΔY:"))
         self.spin_dy = QSpinBox(); self.spin_dy.setRange(0, 100); self.spin_dy.setSuffix(" px")
-        self.slider_dy = QSlider(Qt.Horizontal); self.slider_dy.setRange(0, 100); self.slider_dy.setFixedWidth(50)
-        self.spin_dy.valueChanged.connect(self.slider_dy.setValue)
-        self.slider_dy.valueChanged.connect(self.spin_dy.setValue)
         self.spin_dy.valueChanged.connect(self._on_delta_changed)
-        row2.addWidget(self.spin_dy); row2.addWidget(self.slider_dy)
 
-        row2.addWidget(QLabel("  |  "))
         self.chk_ortho = QCheckBox("Extract Orthogonal:")
         self.chk_ortho.stateChanged.connect(self.toggle_profiles)
         self.combo_ortho = QComboBox()
         self.combo_ortho.currentIndexChanged.connect(self.redraw)
-        row2.addWidget(self.chk_ortho)
-        row2.addWidget(self.combo_ortho)
+        for widgets in ((QLabel("ΔX:"), self.spin_dx), (QLabel("ΔY:"), self.spin_dy),
+                        (self.chk_ortho, self.combo_ortho)):
+            row2.addWidget(group(*widgets))
 
         ctrl_layout_v.addLayout(row1)
         ctrl_layout_v.addWidget(self.row_display)
@@ -352,6 +345,10 @@ class SliceWidget(QFrame):
         self.ax_prof_y.set_visible(False)
         self.ax_prof_x.set_visible(False)
         self.ax_prof_ortho.set_visible(False)
+        # line profiles drawn by a host panel (set_line_profiles): under / beside the map
+        self._line_profiles: dict[str, list] = {"bottom": [], "side": []}
+        self._line_profile_artists: list = []
+        self.canvas.mpl_connect("draw_event", self._align_docked_profiles)
 
         self.canvas.mpl_connect('button_press_event', self._on_click)
         self.canvas.mpl_connect('motion_notify_event', self._on_drag) # NEW: Listen for mouse movement
@@ -530,18 +527,10 @@ class SliceWidget(QFrame):
 
     def _sync_delta_spins_from_global(self):
         half = self.parent_panel.global_halfwidths
-        self.spin_dx.blockSignals(True)
-        self.slider_dx.blockSignals(True)
-        self.spin_dy.blockSignals(True)
-        self.slider_dy.blockSignals(True)
-        self.spin_dx.setValue(int(half.get(self.x_idx, 0)))
-        self.slider_dx.setValue(int(half.get(self.x_idx, 0)))
-        self.spin_dy.setValue(int(half.get(self.y_idx, 0)))
-        self.slider_dy.setValue(int(half.get(self.y_idx, 0)))
-        self.spin_dx.blockSignals(False)
-        self.slider_dx.blockSignals(False)
-        self.spin_dy.blockSignals(False)
-        self.slider_dy.blockSignals(False)
+        for sp, dim in ((self.spin_dx, self.x_idx), (self.spin_dy, self.y_idx)):
+            sp.blockSignals(True)
+            sp.setValue(int(half.get(dim, 0)))
+            sp.blockSignals(False)
 
     def _integration_slices(self):
         """Build nd slices: full span on display axes, ±Δ window on hidden axes."""
@@ -581,11 +570,85 @@ class SliceWidget(QFrame):
         self.row2_widget.setVisible(not is_visible)
         self.sliders_widget.setVisible(not is_visible)
 
+    def set_line_profiles(self, bottom: list[dict], side: list[dict]) -> None:
+        """Profiles along drawn lines, docked to the map: ``bottom`` under it on the map's x axis
+        ({'pos': x coords, 'values', 'color'}), ``side`` beside it on the map's y axis ({'pos': y
+        coords, ...}). The axes are shared with the map, so the profiles follow zoom and pan."""
+        for a in self._line_profile_artists:
+            a.remove()
+        self._line_profile_artists = []
+        self._line_profiles = {"bottom": list(bottom or []), "side": list(side or [])}
+        for pr in self._line_profiles["bottom"]:
+            self._line_profile_artists += self.ax_prof_x.plot(pr["pos"], pr["values"], lw=1,
+                                                              color=pr.get("color", "k"), ls=pr.get("ls", "-"))
+        for pr in self._line_profiles["side"]:
+            self._line_profile_artists += self.ax_prof_y.plot(pr["values"], pr["pos"], lw=1,
+                                                              color=pr.get("color", "k"), ls=pr.get("ls", "-"))
+        for ax, axis in ((self.ax_prof_x, "y"), (self.ax_prof_y, "x")):
+            ax.relim()
+            ax.autoscale(enable=True, axis=axis)
+        # the side panel shares the map's y axis: its own y labels would sit on the map's edge
+        self.ax_prof_y.tick_params(axis="y", labelleft=not self._line_profiles["side"])
+        self.toggle_profiles()
+
+    def _align_docked_profiles(self, _event=None):
+        """With an equal-aspect map the map box is smaller than its grid cell; pin the docked profile
+        axes to the map's drawn edges so each pixel column / row lines up with its profile point."""
+        lp = self._line_profiles
+        if not (lp["bottom"] or lp["side"]) or self.chk_profiles.isChecked():
+            return
+        fig = self.canvas.figure
+        m = self.ax_main.get_position()
+        renderer = getattr(_event, "renderer", None) or self.canvas.get_renderer()
+        tb = self.ax_main.get_tightbbox(renderer).transformed(fig.transFigure.inverted())  # map + its labels
+        moved = False
+        for ax, show in ((self.ax_prof_x, lp["bottom"]), (self.ax_prof_y, lp["side"])):
+            if not show or not ax.get_visible():
+                continue
+            ax.set_in_layout(False)  # placed here, not by the layout engine
+            b = ax.get_position()
+            if ax is self.ax_prof_x:   # same x extent as the map, under its x labels, room for own ticks
+                h = max(0.08, min(0.2, tb.y0 - 0.08))
+                want = [m.x0, max(0.06, tb.y0 - 0.015 - h), m.width, h]
+            else:                      # same y extent as the map, right of it
+                w = max(0.08, min(0.18, 0.97 - tb.x1 - 0.02))
+                want = [tb.x1 + 0.015, m.y0, w, m.height]
+            if max(abs(u - v) for u, v in zip(want, (b.x0, b.y0, b.width, b.height))) > 1e-3:
+                ax.set_position(want)
+                moved = True
+        if moved:
+            self.canvas.draw_idle()
+
     def toggle_profiles(self):
-        """Toggles profile visibility and reclaims space for the main canvas."""
+        """Toggles profile visibility and reclaims space for the main canvas. The under-map / beside-map
+        axes also show when a host panel docked line profiles there (set_line_profiles)."""
         vis_xy = self.chk_profiles.isChecked()
         vis_ortho = self.chk_ortho.isChecked()
-        
+        lp = getattr(self, "_line_profiles", {"bottom": [], "side": []})
+        vis_x = vis_xy or bool(lp["bottom"])
+        vis_y = vis_xy or bool(lp["side"])
+        for ax, docked in ((self.ax_prof_x, lp["bottom"]), (self.ax_prof_y, lp["side"])):
+            if not docked or vis_xy:
+                ax.set_in_layout(True)
+        if (vis_x or vis_y) and not vis_xy and not vis_ortho:
+            self.ax_prof_x.set_visible(vis_x)
+            self.ax_prof_y.set_visible(vis_y)
+            self.ax_prof_ortho.set_visible(False)
+            if vis_x and vis_y:
+                gs = self.canvas.figure.add_gridspec(2, 2, width_ratios=[4, 1], height_ratios=[4, 1])
+                self.ax_prof_x.set_subplotspec(gs[1, 0])
+                self.ax_prof_y.set_subplotspec(gs[0, 1])
+            elif vis_x:
+                gs = self.canvas.figure.add_gridspec(2, 1, height_ratios=[4, 1])
+                self.ax_prof_x.set_subplotspec(gs[1, 0])
+            else:
+                gs = self.canvas.figure.add_gridspec(1, 2, width_ratios=[4, 1])
+                self.ax_prof_y.set_subplotspec(gs[0, 1])
+            self.ax_main.set_subplotspec(gs[0, 0])
+            self.gs = gs
+            self.canvas.draw_idle()
+            return
+
         self.ax_prof_x.set_visible(vis_xy)
         self.ax_prof_y.set_visible(vis_xy)
         self.ax_prof_ortho.set_visible(vis_ortho)
@@ -707,14 +770,19 @@ class SliceWidget(QFrame):
             c_scale = max(0.01, float(self.sl_contrast.value()) / 100.0)
             vmax_adj = vmin + (vmax - vmin) * c_scale + 1e-8
             if self.chk_sym.isChecked() and finite.size:
-                c = float(np.median(finite)) if self.combo_center.currentText() == "median" else 0.0
+                c = self.sym_center(sliced)
                 half = float(np.percentile(np.abs(finite - c), 99)) * c_scale or 1.0  # robust to outliers
                 vmin, vmax_adj = c - half, c + half
             if self.fixed_limits is not None:
                 vmin, vmax_adj = self.fixed_limits
+                if self.chk_sym.isChecked() and finite.size:  # a typed range is made symmetric about the centre
+                    c = self.sym_center(sliced)
+                    half = max(abs(vmax_adj - c), abs(vmin - c)) or 1.0
+                    vmin, vmax_adj = c - half, c + half
             self.shown_limits = (float(vmin), float(vmax_adj))
+            self.lbl_center.setText(f"white at {(vmin + vmax_adj) / 2:+.4g}" if self.chk_sym.isChecked() else "")
             gamma = float(self.spin_gamma.value())
-            cmap_name = _mpl_cmap(self.combo_cmap.currentText())
+            cmap_name = _mpl_cmap(self.combo_cmap.currentText(), self.chk_invert.isChecked())
             self.im_main.set_cmap(cmap_name)
             if abs(gamma - 1.0) < 1e-6:
                 self.im_main.set_norm(mcolors.Normalize(vmin=vmin, vmax=vmax_adj))
@@ -838,15 +906,21 @@ class SliceWidget(QFrame):
             return float(a[0]) if a.size else 0.0
         return float(a[0] + idx * (a[-1] - a[0]) / (a.size - 1))
 
-    def start_tool(self, kind: str, callback, color: str = "magenta") -> None:
+    def start_tool(self, kind: str, callback, color: str = "magenta", sticky: bool = False,
+                   on_cancel=None) -> None:
         """Draw a shape on this view: kind 'rect' | 'polygon' | 'line'. ``callback(shape)``
         receives a dict in pixel-index coordinates of the displayed dims:
         rect {kind, x0, x1, y0, y1}; polygon {kind, points: [[x, y], ...]};
-        line {kind, a: (y, x), b: (y, x)}. The crosshair is paused while the tool is active."""
+        line {kind, a: (y, x), b: (y, x)}. The crosshair is paused while the tool is active.
+
+        line: press-drag-release with a rubber band (or click, click); Shift snaps to 0 / 45 / 90 deg;
+        with ``sticky`` the tool stays on: drag again for a new line, drag an end to move it, Esc to stop
+        (``on_cancel()`` is called then)."""
         from matplotlib.widgets import PolygonSelector, RectangleSelector
 
         self.cancel_tool()
         self._tool_cb = callback
+        self._tool_on_cancel = on_cancel
         if kind == "rect":
             def done(press, release):
                 xs = sorted((self._axis_to_index(press.xdata, self.x_idx), self._axis_to_index(release.xdata, self.x_idx)))
@@ -861,18 +935,147 @@ class SliceWidget(QFrame):
                 self._finish_tool({"kind": "polygon", "points": pts})
             self._tool = PolygonSelector(self.ax_main, done, useblit=True)
         elif kind == "line":
-            self._tool_pts = []
-
-            def click(ev):
-                if ev.inaxes is not self.ax_main or ev.xdata is None:
-                    return
-                self._tool_pts.append((self._axis_to_index(ev.ydata, self.y_idx), self._axis_to_index(ev.xdata, self.x_idx)))
-                if len(self._tool_pts) == 2:
-                    a, b = self._tool_pts
-                    self._finish_tool({"kind": "line", "a": a, "b": b})
-            self._tool = ("cid", self.canvas.mpl_connect("button_press_event", click))
+            self._start_line_tool(color, sticky)
         else:
             raise ValueError("tool must be 'rect', 'polygon' or 'line'")
+
+    def sym_center(self, image: np.ndarray | None = None) -> float:
+        """Centre of the symmetric colour limits: 0, the median or mean of the shown map, or the mean of the
+        background region (falls back to the median until one is drawn)."""
+        img = getattr(self, "_last_sliced", None) if image is None else image
+        a = np.asarray(img, float) if img is not None else np.array([])
+        fin = a[np.isfinite(a)] if a.size else a
+        mode = self.combo_center.currentText()
+        if mode == "0" or not fin.size:
+            return 0.0
+        if self.sym_bg_box and a.ndim == 2:  # the drawn region
+            b = self.sym_bg_box
+            sub = a[max(int(b["y0"]), 0):int(b["y1"]) + 1, max(int(b["x0"]), 0):int(b["x1"]) + 1]
+            sub = sub[np.isfinite(sub)]
+            if sub.size:
+                fin = sub
+        return float(fin.mean()) if mode == "mean" else float(np.median(fin))
+
+    def _center_region_toggled(self, on: bool):
+        """Region on: drag a rectangle; the median / mean centre is taken there. Off: the whole map."""
+        if not on:
+            self.cancel_tool()
+            self.sym_bg_box = None
+            self.redraw()
+            self._draw_overlays()
+            self.canvas.draw_idle()
+            return
+        if not self.chk_sym.isChecked():
+            self.chk_sym.setChecked(True)
+        if self.combo_center.currentText() == "0":
+            self.combo_center.setCurrentText("median")
+
+        def done(box):
+            self.sym_bg_box = box
+            self.redraw()
+            self._draw_overlays()
+            self.canvas.draw_idle()
+
+        self.start_tool("rect", done, color="cyan")
+
+    def _start_line_tool(self, color: str, sticky: bool) -> None:
+        """Rubber-band line: press-drag-release (or click, click); Shift snaps the angle to 45 deg steps;
+        sticky: stays on, a drag near an end moves that end, Esc stops."""
+        from matplotlib.lines import Line2D
+
+        st = {"a": None, "b": None, "grab": None, "press_px": None, "two_click": False}
+        band = Line2D([], [], color=color, lw=1.4, marker="o", ms=4, zorder=20)
+        self.ax_main.add_line(band)
+        prev = getattr(self, "_line_ends", None)  # the last line, so its ends can be dragged
+        if sticky and prev:
+            st["a"], st["b"] = prev
+
+        def to_shape(a, b):
+            ya, xa = self._axis_to_index(a[1], self.y_idx), self._axis_to_index(a[0], self.x_idx)
+            yb, xb = self._axis_to_index(b[1], self.y_idx), self._axis_to_index(b[0], self.x_idx)
+            return {"kind": "line", "a": (ya, xa), "b": (yb, xb)}
+
+        def snap(a, b, ev):
+            mods = getattr(ev, "modifiers", None) or set()  # keys held during the mouse event
+            gui = getattr(ev, "guiEvent", None)
+            held = bool(gui is not None and hasattr(gui, "modifiers") and gui.modifiers() & Qt.ShiftModifier)
+            if not held and "shift" not in mods and "shift" not in str(getattr(ev, "key", None) or ""):
+                return b
+            dx, dy = b[0] - a[0], b[1] - a[1]
+            r = float(np.hypot(dx, dy))
+            ang = np.round(np.arctan2(dy, dx) / (np.pi / 4)) * (np.pi / 4)
+            return (a[0] + r * np.cos(ang), a[1] + r * np.sin(ang))
+
+        def show(a, b):
+            band.set_data([a[0], b[0]], [a[1], b[1]])
+            self.canvas.draw_idle()
+
+        def near(ev, pt):
+            px = self.ax_main.transData.transform(pt)
+            return float(np.hypot(px[0] - ev.x, px[1] - ev.y)) < 10
+
+        def press(ev):
+            if ev.inaxes is not self.ax_main or ev.xdata is None or getattr(ev, "button", 1) not in (1, None):
+                return
+            p = (ev.xdata, ev.ydata)
+            if st["two_click"] or (st["grab"] is not None and st["a"] == st["b"]):  # second click of click-click
+                st["b"], st["two_click"], st["grab"] = snap(st["a"], p, ev), False, None
+                return finish()
+            st["press_px"] = (getattr(ev, "x", None), getattr(ev, "y", None))
+            if sticky and st["a"] is not None and st["b"] is not None and (near(ev, st["a"]) or near(ev, st["b"])):
+                st["grab"] = "a" if near(ev, st["a"]) else "b"  # move this end
+            else:
+                st["a"], st["b"], st["grab"] = p, p, "b"
+            show(st["a"], st["b"])
+
+        def move(ev):
+            if st["grab"] is None or ev.inaxes is not self.ax_main or ev.xdata is None:
+                if st["two_click"] and ev.inaxes is self.ax_main and ev.xdata is not None:
+                    show(st["a"], snap(st["a"], (ev.xdata, ev.ydata), ev))
+                return
+            other = st["b"] if st["grab"] == "a" else st["a"]
+            st[st["grab"]] = snap(other, (ev.xdata, ev.ydata), ev)
+            show(st["a"], st["b"])
+
+        def release(ev):
+            if st["grab"] is None:
+                return
+            if ev.inaxes is self.ax_main and ev.xdata is not None:  # end where released (snapped with Shift)
+                other = st["b"] if st["grab"] == "a" else st["a"]
+                st[st["grab"]] = snap(other, (ev.xdata, ev.ydata), ev)
+            st["grab"] = None
+            moved = st["press_px"] is not None and st["press_px"][0] is not None and ev.x is not None and \
+                np.hypot(ev.x - st["press_px"][0], ev.y - st["press_px"][1]) > 3
+            if not moved and st["a"] == st["b"]:
+                st["two_click"] = True  # a click: the next click ends the line
+                return
+            finish()
+
+        def finish():
+            a, b = st["a"], st["b"]
+            if a is None or b is None or a == b:
+                return
+            self._line_ends = (a, b)
+            cb = getattr(self, "_tool_cb", None)
+            if not sticky:
+                self.cancel_tool()
+            else:
+                band.set_data([], [])
+                self.canvas.draw_idle()
+            if cb is not None:
+                cb(to_shape(a, b))
+
+        def key(ev):
+            if ev.key == "escape":
+                on_cancel = getattr(self, "_tool_on_cancel", None)
+                self.cancel_tool()
+                if on_cancel is not None:
+                    on_cancel()
+
+        cids = [self.canvas.mpl_connect(e, f) for e, f in (("button_press_event", press), ("motion_notify_event", move),
+                                                          ("button_release_event", release), ("key_press_event", key))]
+        self.canvas.setFocus()
+        self._tool = ("cids", cids, band)
 
     def _finish_tool(self, shape: dict) -> None:
         cb = getattr(self, "_tool_cb", None)
@@ -882,7 +1085,15 @@ class SliceWidget(QFrame):
 
     def cancel_tool(self) -> None:
         tool = getattr(self, "_tool", None)
-        if isinstance(tool, tuple):
+        if isinstance(tool, tuple) and tool[0] == "cids":
+            for cid in tool[1]:
+                self.canvas.mpl_disconnect(cid)
+            try:
+                tool[2].remove()
+            except (ValueError, NotImplementedError):
+                pass
+            self.canvas.draw_idle()
+        elif isinstance(tool, tuple):
             self.canvas.mpl_disconnect(tool[1])
         elif tool is not None:
             try:
@@ -905,7 +1116,10 @@ class SliceWidget(QFrame):
             except (ValueError, NotImplementedError):
                 pass
         self._overlay_artists = []
-        for ov in getattr(self.parent_panel, "overlays", []) or []:
+        overlays = list(getattr(self.parent_panel, "overlays", []) or [])
+        if self.sym_bg_box and self.combo_center.currentText() != "0":  # the region of the median / mean
+            overlays.append({**self.sym_bg_box, "kind": "rect", "color": "cyan"})
+        for ov in overlays:
             if tuple(ov.get("dims", (self.y_idx, self.x_idx))) != (self.y_idx, self.x_idx):
                 continue
             col = ov.get("color", "yellow")
@@ -1442,8 +1656,13 @@ class DataViewerPanel(QWidget):
         self.global_halfwidths = {i: 0 for i in range(self.tensor_data.ndim)}
         
         self._clear_tree()
+        from tensorspec.gui.components.stack_player import StackPlayer
+        for old in self.views:  # discarded views must go, or their Play timers keep moving the frame
+            for player in old.findChildren(StackPlayer):
+                player.stop()
+            old.deleteLater()
         self.views.clear()
-        
+
         default_x = 1 if self.tensor_data.ndim > 1 else 0
         default_y = 0
         self.spawn_view(default_x, default_y)
@@ -1744,9 +1963,10 @@ class DataViewerPanel(QWidget):
         self.coordsChanged.emit()
 
     # ------------------------------------------------------------- host-panel API
-    def set_layers(self, layers: dict, select: str | None = None) -> None:
+    def set_layers(self, layers: dict, select: str | None = None, show_data: bool = True) -> None:
         """Replace the extra layers (name -> array; 2-D (y, x) maps work for any N-D data) and
-        refresh the layer menus; ``select`` shows that layer ('Intensity' = the data)."""
+        refresh the layer menus; ``select`` shows that layer ('Intensity' = the data). show_data=False
+        leaves 'Intensity' out of the menu (when one of the layers already is the data)."""
         if self.tensor_data is None:
             return
         meta = dict(self.tensor_data.metadata or {})
@@ -1756,7 +1976,8 @@ class DataViewerPanel(QWidget):
             current = select or view.combo_layer.currentText()
             view.combo_layer.blockSignals(True)
             view.combo_layer.clear()
-            view.combo_layer.addItem("Intensity")
+            if show_data:
+                view.combo_layer.addItem("Intensity")
             for name in layers:
                 view.combo_layer.addItem(name)
             i = view.combo_layer.findText(current)
@@ -1767,12 +1988,23 @@ class DataViewerPanel(QWidget):
     def primary_view(self) -> "SliceWidget | None":
         return self.views[0] if self.views else None
 
-    def start_tool(self, kind: str, callback, color: str = "magenta") -> None:
+    def start_tool(self, kind: str, callback, color: str = "magenta", sticky: bool = False,
+                   on_cancel=None) -> None:
         """Draw a shape on the first view (see SliceWidget.start_tool)."""
         view = self.primary_view()
         if view is None:
             raise ValueError("no data shown")
-        view.start_tool(kind, callback, color)
+        view.start_tool(kind, callback, color, sticky=sticky, on_cancel=on_cancel)
+
+    def cancel_tool(self) -> None:
+        for view in self._iter_slice_widgets():
+            view.cancel_tool()
+
+    def set_line_profiles(self, bottom: list[dict], side: list[dict]) -> None:
+        """Line profiles docked to the first view's map (SliceWidget.set_line_profiles)."""
+        view = self.primary_view()
+        if view is not None:
+            view.set_line_profiles(bottom, side)
 
     def set_overlays(self, overlays: list[dict]) -> None:
         """Shapes to draw (pixel-index coords; optional 'dims': (y_idx, x_idx), 'color')."""
@@ -1799,10 +2031,14 @@ class DataViewerPanel(QWidget):
         for v in self._iter_slice_widgets():
             if limits is not None:
                 v.fixed_limits = None if limits == "auto" else (float(limits[0]), float(limits[1]))
-            for w in (v.combo_cmap, v.chk_sym, v.combo_center, v.chk_image_origin, v.combo_aspect):
+            for w in (v.combo_cmap, v.chk_sym, v.combo_center, v.chk_image_origin, v.combo_aspect, v.chk_invert):
                 w.blockSignals(True)
             if cmap is not None and v.combo_cmap.findText(cmap) >= 0:
                 v.combo_cmap.setCurrentText(cmap)
+                v.chk_invert.setChecked(False)
+            elif cmap is not None and cmap.endswith("_r") and v.combo_cmap.findText(cmap[:-2]) >= 0:
+                v.combo_cmap.setCurrentText(cmap[:-2])  # e.g. bwr_r = bwr with Invert ticked
+                v.chk_invert.setChecked(True)
             if symmetric is not None:
                 v.chk_sym.setChecked(symmetric)
             if center is not None:
@@ -1811,7 +2047,7 @@ class DataViewerPanel(QWidget):
                 v.chk_image_origin.setChecked(image_origin)
             if aspect_equal is not None:
                 v.combo_aspect.setCurrentIndex(1 if aspect_equal else 0)
-            for w in (v.combo_cmap, v.chk_sym, v.combo_center, v.chk_image_origin, v.combo_aspect):
+            for w in (v.combo_cmap, v.chk_sym, v.combo_center, v.chk_image_origin, v.combo_aspect, v.chk_invert):
                 w.blockSignals(False)
             v.update_aspect()
             v.redraw()

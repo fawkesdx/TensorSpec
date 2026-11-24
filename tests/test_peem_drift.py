@@ -175,3 +175,128 @@ class TestDriftCorrect(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             drift_correct(_raw_stack(), ref_index=0, roi=ROI, search_radius=3, track_channel=1)
+
+
+def test_fft_ncc_scores_match_shift_by_shift():
+    """The FFT score map equals the masked NCC of each shift (edge-clamped), so the fast search
+    picks the same shift as trying every shift one by one."""
+    from tensorspec.core.peem.engine import _ncc_best_shift, _ncc_score_map
+
+    rng = np.random.default_rng(3)
+    base = rng.random((70, 80)) * 1000 + 5000  # large offset: checks the variance stays accurate
+    ref, mov = base[10:60, 10:70], base[13:63, 8:68]  # moved by 3 rows, -2 columns: correct with dx=-2, dy=3
+    for mask in (np.zeros(ref.shape, bool), None):
+        if mask is None:
+            yy, xx = np.mgrid[: ref.shape[0], : ref.shape[1]]
+            mask = ((yy - 25) / 15) ** 2 + ((xx - 30) / 20) ** 2 < 1  # ellipse
+        else:
+            mask[12:38, 15:45] = True
+        r = 6
+        scores = _ncc_score_map(ref, mov, mask, r)
+        my, mx = np.nonzero(mask)
+        t = ref[mask] - ref[mask].mean()
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                c = mov[np.clip(my - dy, 0, 49), np.clip(mx - dx, 0, 59)]
+                c = c - c.mean()
+                exact = t @ c / (np.linalg.norm(t) * np.linalg.norm(c))
+                assert abs(scores[r - dy, r - dx] - exact) < 1e-9
+        assert _ncc_best_shift(ref, mov, mask, r) == (-2, 3)
+
+
+def _sample_with_detector_pattern(shifts, seed=0, n=128):
+    """A smooth sample translated by (dx, dy) per frame, times a fixed per-pixel detector gain (a TPX3
+    without its flat field): the gain does not move with the sample."""
+    from scipy import ndimage
+    rng = np.random.default_rng(seed)
+    sample = ndimage.gaussian_filter(rng.normal(size=(n, n)), 4)
+    sample = sample / sample.std() * 40 + 200  # contrast like the UE49 frames (std ~40 on ~230)
+    gain = 1 + 0.15 * rng.normal(size=(n, n))
+    frames = [np.roll(sample, (dy, dx), (0, 1)) * gain + rng.normal(0, 2, (n, n)) for dx, dy in shifts]
+    return np.stack(frames)
+
+
+def test_smoothing_finds_drift_under_a_fixed_detector_pattern():
+    """Unsmoothed NCC locks on the fixed pixel pattern (shift 0); smooth_px=2 finds the sample's drift."""
+    shifts = [(0, 0), (4, -3), (-5, 2)]
+    v = _sample_with_detector_pattern(shifts)
+    td = TensorData(value=v, axes=[np.arange(3), np.arange(128), np.arange(128)], labels=["frame", "y", "x"],
+                    units=["", "px", "px"], data_type="Experimental PEEM", metadata={"pol": ["CP"] * 3})
+    roi = {"kind": "rect", "x0": 24, "y0": 24, "x1": 104, "y1": 104}
+    plain = drift_correct(td, ref_index=0, roi=roi, search_radius=8).metadata["drift_shifts"]
+    smooth = drift_correct(td, ref_index=0, roi=roi, search_radius=8, smooth_px=2.0).metadata["drift_shifts"]
+    assert [(s["dx"], s["dy"]) for s in plain] == [(0, 0)] * 3
+    assert [(s["dx"], s["dy"]) for s in smooth] == [(-dx, -dy) for dx, dy in shifts]
+
+
+def test_per_channel_drift_tracks_cp_and_cm_frames_on_their_own():
+    """UE49: the CP and CM frames of a pair come from different scans and drift differently; with
+    per_channel each frame gets its own shift (the default applies the CP shift to its CM partner)."""
+    cp_shifts, cm_shifts = [(0, 0), (2, 1), (3, 2)], [(-4, 3), (-3, 3), (-1, 4)]
+    cp, cm = _sample_with_detector_pattern(cp_shifts), _sample_with_detector_pattern(cm_shifts)
+    td = TensorData(value=np.stack([cp, cm], 1), axes=[np.arange(3), np.arange(2), np.arange(128), np.arange(128)],
+                    labels=["pair", "channel", "y", "x"], units=["", "", "px", "px"],
+                    data_type="Experimental PEEM (paired)", metadata={"channel_tags": ["CP", "CM"]})
+    roi = {"kind": "rect", "x0": 24, "y0": 24, "x1": 104, "y1": 104}
+    out = drift_correct(td, ref_index=0, roi=roi, search_radius=8, smooth_px=2.0, per_channel=True)
+    got = [[(c["dx"], c["dy"]) for c in per] for per in out.metadata["drift_channel_shifts"]]
+    assert got == [[(-a, -b), (-c, -d)] for (a, b), (c, d) in zip(cp_shifts, cm_shifts)]
+    assert [(s["dx"], s["dy"]) for s in out.metadata["drift_shifts"]] == [(-a, -b) for a, b in cp_shifts]
+    same = drift_correct(td, ref_index=0, roi=roi, search_radius=8, smooth_px=2.0)
+    assert "drift_channel_shifts" not in same.metadata  # default unchanged: one shift per pair
+
+
+def _frames(v, groups=None):
+    md = {"pol": ["CP"] * len(v)}
+    return TensorData(value=v, axes=[np.arange(len(v)), np.arange(v.shape[1]), np.arange(v.shape[2])],
+                      labels=["frame", "y", "x"], units=["", "px", "px"], data_type="Experimental PEEM", metadata=md)
+
+
+def test_scan_groups_find_an_offset_beyond_the_search_radius():
+    """UE49: the CP and CM scans of an energy scan sat 17 px apart. Each scan finds its offset once with a wide
+    search; its frames are then tracked within the search radius around it (without groups they stop at the limit)."""
+    shifts = [(0, 0), (1, 0), (0, 1), (15, -4), (16, -4), (15, -3)]
+    td = _frames(_sample_with_detector_pattern(shifts))
+    roi = {"kind": "rect", "x0": 24, "y0": 24, "x1": 104, "y1": 104}
+    kw = dict(ref_index=0, roi=roi, search_radius=5, smooth_px=2.0)
+    plain = [(s["dx"], s["dy"]) for s in drift_correct(td, **kw).metadata["drift_shifts"]]
+    assert all(abs(dx) == 5 for dx, _ in plain[3:])  # stuck at the search limit
+    out = drift_correct(td, groups=["a"] * 3 + ["b"] * 3, **kw)
+    assert [(s["dx"], s["dy"]) for s in out.metadata["drift_shifts"]] == [(-dx, -dy) for dx, dy in shifts]
+    assert out.metadata["drift_group_offsets"] == [{"group": "b", "dx": -15, "dy": 4}]
+
+
+def test_scan_groups_within_the_search_radius_change_nothing():
+    shifts = [(0, 0), (2, 1), (-3, 2), (3, -1)]
+    td = _frames(_sample_with_detector_pattern(shifts))
+    roi = {"kind": "rect", "x0": 24, "y0": 24, "x1": 104, "y1": 104}
+    kw = dict(ref_index=0, roi=roi, search_radius=6, smooth_px=2.0)
+    grouped = drift_correct(td, groups=[0, 0, 1, 1], **kw)
+    assert grouped.metadata["drift_shifts"] == drift_correct(td, **kw).metadata["drift_shifts"]
+    assert grouped.metadata["drift_group_offsets"] == []
+    try:
+        drift_correct(td, groups=[0, 1], **kw)
+    except ValueError as exc:
+        assert "one label per frame" in str(exc)
+    else:
+        raise AssertionError("groups of the wrong length must be refused")
+
+
+def test_edges_track_an_energy_scan_whose_contrast_inverts():
+    """Across an absorption edge a flake turns from brighter to darker than the substrate: matching the
+    intensity to one reference fails, matching the edge strength (edges=True) finds every shift."""
+    rng = np.random.default_rng(3)
+    n = 96
+    yy, xx = np.mgrid[0:n, 0:n]
+    flake = ((xx > 30) & (xx < 70) & (yy > 25) & (yy < 60)) | ((xx > 45) & (xx < 60) & (yy >= 60) & (yy < 75))
+    contrast = np.linspace(1.6, 0.5, 8)  # flake / substrate: inverts half way
+    shifts = [(0, 0), (2, -1), (3, 1), (-2, 2), (1, 3), (-3, -2), (2, 2), (-1, -3)]
+    v = np.stack([np.roll(np.where(flake, 100 * c, 100.0), (dy, dx), (0, 1)) + rng.normal(0, 3, (n, n))
+                  for c, (dx, dy) in zip(contrast, shifts)])
+    roi = {"kind": "rect", "x0": 15, "y0": 15, "x1": 85, "y1": 85}
+    kw = dict(ref_index=0, roi=roi, search_radius=6, smooth_px=3.0)
+    want = [(-dx, -dy) for dx, dy in shifts]
+    edges = drift_correct(_frames(v), edges=True, **kw)
+    assert [(s["dx"], s["dy"]) for s in edges.metadata["drift_shifts"]] == want and edges.metadata["drift_edges"]
+    plain = drift_correct(_frames(v), **kw).metadata["drift_shifts"]
+    assert [(s["dx"], s["dy"]) for s in plain] != want
